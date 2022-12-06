@@ -98,6 +98,7 @@ pub enum Error {
 }
 
 /// An [EventLog] implementation based on [NATS](https://nats.io/).
+#[derive(Clone)]
 pub struct NatsEvtLog {
     jetstream: Jetstream,
     stream_name: String,
