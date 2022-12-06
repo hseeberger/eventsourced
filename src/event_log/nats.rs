@@ -21,6 +21,7 @@ use uuid::Uuid;
 const SEQ_NO: &str = "seq_no";
 const LEN: &str = "len";
 
+/// Configuration for the [NatsEvtLog].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     server_addr: String,
@@ -48,67 +49,52 @@ impl Default for Config {
     }
 }
 
+/// Errors for the [NatsEvtLog].
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Cannot connect to NATS server at '{server_addr}'")]
-    Connect {
-        server_addr: String,
-        source: std::io::Error,
-    },
+    /// The connection to the NATS server cannot be established.
+    #[error("Cannot connect to NATS server")]
+    Connect(std::io::Error),
 
-    #[error("Cannot serialize events for entity ID '{id}'")]
-    Serialize { id: Uuid, source: serde_json::Error },
+    /// Events cannot be serialized.
+    #[error("Cannot serialize events")]
+    SerializeEvts(serde_json::Error),
 
-    #[error("Cannot publish event for entity ID '{id}'")]
-    Publish { id: Uuid, source: async_nats::Error },
+    /// Events cannot be published.
+    #[error("Cannot publish events")]
+    PublishEvts(async_nats::Error),
 
-    #[error("Cannot get ACK for publishing event for entity ID '{id}'")]
-    PublishAck { id: Uuid, source: async_nats::Error },
+    /// An ACK for publishing events cannot be received.
+    #[error("Cannot get ACK for publishing events")]
+    PublishEvtsAck(async_nats::Error),
 
-    #[error("Cannot get NATS stream with name '{stream_name}'")]
-    Stream {
-        stream_name: String,
-        source: async_nats::Error,
-    },
+    /// A NATS stream cannot be obtained.
+    #[error("Cannot get NATS stream")]
+    GetStream(async_nats::Error),
 
-    #[error("Cannot create consumer for NATS stream with name '{stream_name}'")]
-    Consumer {
-        stream_name: String,
-        source: async_nats::Error,
-    },
+    /// A NATS consumer cannot be created.
+    #[error("Cannot create NATS consumer")]
+    CreateConsumer(async_nats::Error),
 
-    #[error("Cannot get messages from consumer for NATS stream with name '{stream_name}'")]
-    Messages {
-        stream_name: String,
-        source: async_nats::Error,
-    },
+    /// The message stream from a NATS consumer cannot be obtained.
+    #[error("Cannot get message stream from NATS consumer")]
+    GetMessages(async_nats::Error),
 
-    #[error("Cannot get message from consumer for NATS stream with name '{stream_name}'")]
-    Message {
-        stream_name: String,
-        source: async_nats::Error,
-    },
+    /// A message cannot be obtained from the NATS message stream.
+    #[error("Cannot get message from NATS message stream")]
+    GetMessage(async_nats::Error),
 
-    #[error("Cannot deserialize message from consumer for NATS stream with name '{stream_name}'")]
-    DeserializeMessage {
-        stream_name: String,
-        source: serde_json::Error,
-    },
+    /// A NATS message cannot be deserialized.
+    #[error("Cannot deserialize NATS message")]
+    DeserializeMessage(serde_json::Error),
 
-    #[error(
-        "Cannot get last message for NATS stream with name '{stream_name}' and subject '{subject}'"
-    )]
-    GetLastMessage {
-        stream_name: String,
-        subject: String,
-        source: async_nats::Error,
-    },
+    /// The last message for a NATS stream cannot be obtained.
+    #[error("Cannot get last message for NATS stream")]
+    GetLastMessage(async_nats::Error),
 
-    #[error("Cannot convert raw message into message")]
-    FromRawMessage { source: async_nats::Error },
-
-    #[error("Dummy")]
-    Dummy,
+    /// A raw NATS message cannot be converted into a NATS message.
+    #[error("Cannot convert raw NATS message into NATS message")]
+    FromRawMessage(async_nats::Error),
 }
 
 /// An [EventLog] implementation based on [NATS](https://nats.io/).
@@ -131,12 +117,7 @@ impl NatsEvtLog {
         debug!(?config, "Creating NatsEvtLog");
 
         let server_addr = config.server_addr;
-        let client = connect(&server_addr)
-            .await
-            .map_err(|source| Error::Connect {
-                server_addr,
-                source,
-            })?;
+        let client = connect(&server_addr).await.map_err(Error::Connect)?;
         let jetstream = jetstream::new(client);
 
         Ok(Self {
@@ -145,14 +126,11 @@ impl NatsEvtLog {
         })
     }
 
-    async fn get_stream(&self, stream_name: &str) -> Result<JetstreamStream, Error> {
+    async fn get_stream(&self) -> Result<JetstreamStream, Error> {
         self.jetstream
-            .get_stream(stream_name)
+            .get_stream(&self.stream_name)
             .await
-            .map_err(|source| Error::Stream {
-                stream_name: stream_name.to_string(),
-                source,
-            })
+            .map_err(Error::GetStream)
     }
 }
 
@@ -175,8 +153,7 @@ impl EvtLog for NatsEvtLog {
         }
 
         // Serialize events.
-        let evts_json =
-            serde_json::to_value(evts).map_err(|source| Error::Serialize { id, source })?;
+        let evts_json = serde_json::to_value(evts).map_err(Error::SerializeEvts)?;
 
         // Determine NATS subject.
         let stream_name = &self.stream_name;
@@ -190,9 +167,9 @@ impl EvtLog for NatsEvtLog {
         self.jetstream
             .publish_with_headers(subject, headers, evts_json.to_string().into())
             .await
-            .map_err(|source| Error::Publish { id, source })?
+            .map_err(Error::PublishEvts)?
             .await
-            .map_err(|source| Error::PublishAck { id, source })?;
+            .map_err(Error::PublishEvtsAck)?;
         debug!(%id, ?evts_json, "Successfully published to NATS");
 
         Ok(())
@@ -201,7 +178,7 @@ impl EvtLog for NatsEvtLog {
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error> {
         let stream_name = self.stream_name.as_str();
         let subject = format!("{stream_name}.{id}");
-        let stream = self.get_stream(stream_name).await?;
+        let stream = self.get_stream().await?;
         stream
             .get_last_raw_message_by_subject(&subject)
             .await
@@ -218,16 +195,11 @@ impl EvtLog for NatsEvtLog {
                     if source.code == 10037 {
                         Ok(0)
                     } else {
-                        Err(Error::GetLastMessage {
-                            stream_name: stream_name.to_owned(),
-                            subject,
-                            source: Box::new(source),
-                        })
+                        Err(Error::GetLastMessage(Box::new(source)))
                     }
                 },
                 |msg| {
-                    let msg =
-                        Message::try_from(msg).map_err(|source| Error::FromRawMessage { source });
+                    let msg = Message::try_from(msg).map_err(Error::FromRawMessage);
                     msg.map(|ref msg| {
                         let (seq_no, len) = seq_no_and_len(msg);
                         seq_no + len - 1
@@ -245,41 +217,35 @@ impl EvtLog for NatsEvtLog {
     where
         E: Debug + DeserializeOwned + Send,
     {
-        let stream_name = self.stream_name.clone();
-        let subject = format!("{stream_name}.{id}");
+        assert!(from_seq_no > 0, "from_seq_no must be positive");
+        assert!(
+            from_seq_no <= to_seq_no,
+            "from_seq_no must be less than or equal to to_seq_no"
+        );
 
-        let stream = self.get_stream(&stream_name).await?;
-
-        let consumer = stream
+        // Get message stream
+        let msgs = self
+            .get_stream()
+            .await?
             .create_consumer(pull::Config {
-                filter_subject: subject,
+                filter_subject: format!("{}.{id}", self.stream_name),
                 ..Default::default()
             })
             .await
-            .map_err(|source| Error::Consumer {
-                stream_name: stream_name.clone(),
-                source,
-            })?;
-
-        let msgs = consumer
+            .map_err(Error::CreateConsumer)?
             .messages()
             .await
-            .map_err(|source| Error::Messages {
-                stream_name: stream_name.clone(),
-                source,
-            })?;
+            .map_err(Error::GetMessages)?;
 
+        // Transfor message stream into event stream
         let evts = msgs
             .map(move |msg| match msg {
                 Ok(msg) => {
                     let (seq_no, len) = seq_no_and_len(&msg);
-                    // Only deserialize if current message has relevant sequence numbers
+                    // Only deserialize if current message has relevant sequence number range.
                     if from_seq_no < seq_no + len {
                         serde_json::from_slice::<Vec<E>>(&msg.payload)
-                            .map_err(|source| Error::DeserializeMessage {
-                                stream_name: stream_name.clone(),
-                                source,
-                            })
+                            .map_err(Error::DeserializeMessage)
                             .map(|evts| {
                                 evts.into_iter()
                                     .enumerate()
@@ -290,16 +256,14 @@ impl EvtLog for NatsEvtLog {
                         Ok(vec![])
                     }
                 }
-                Err(source) => Err(Error::Message {
-                    stream_name: stream_name.clone(),
-                    source,
-                }),
+                Err(source) => Err(Error::GetMessage(source)),
             })
             .flat_map(|evts| match evts {
                 Ok(evts) => stream::iter(evts.into_iter().map(Ok).collect::<Vec<_>>()),
                 Err(error) => stream::iter(vec![Err(error)]),
             });
 
+        // Respect sequence number range, in particular stop at `to_seq_no`.
         let evts = stream! {
             for await evt in evts {
                 match evt {
@@ -330,6 +294,7 @@ where
     T: FromStr,
     <T as FromStr>::Err: Debug,
 {
+    // Unwrapping should always be successful, hence panicing is valid.
     msg.headers
         .as_ref()
         .expect("No headers")
@@ -346,6 +311,7 @@ where
 mod tests {
     use super::*;
     use crate::*;
+    use anyhow::anyhow;
     use futures::StreamExt;
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage, Container};
 
@@ -356,28 +322,27 @@ mod tests {
         container
     }
 
-    async fn setup_jetstream(server_addr: &str) {
-        let client = connect(server_addr).await;
-        let client = client.unwrap();
+    async fn setup_jetstream(server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let client = connect(server_addr).await?;
         let jetstream = jetstream::new(client);
-        jetstream
+        let _ = jetstream
             .create_stream(jetstream::stream::Config {
                 name: "evts".to_string(),
                 subjects: vec!["evts.>".to_string()],
                 ..Default::default()
             })
             .await
-            .unwrap();
+            .map_err(|error| anyhow!(error))?;
+        Ok(())
     }
 
-    async fn create_evt_log(server_addr: String) -> NatsEvtLog {
+    async fn create_evt_log(server_addr: String) -> Result<NatsEvtLog, Box<dyn std::error::Error>> {
         let config = Config {
             server_addr,
             stream_name: "evts".to_string(),
         };
-        let event_log = NatsEvtLog::new(config).await;
-        assert!(event_log.is_ok());
-        event_log.unwrap()
+        let nats_event_log = NatsEvtLog::new(config).await?;
+        Ok(nats_event_log)
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,58 +410,51 @@ mod tests {
 
     /// Directly testing the [NatsEvtLog] with trivial events (`u64`).
     #[tokio::test]
-    async fn test_evt_log() {
+    async fn test_evt_log() -> Result<(), Box<dyn std::error::Error>> {
         let client = Cli::default();
         let container = setup_testcontainers(&client);
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
-        setup_jetstream(&server_addr).await;
-        let mut evt_log = create_evt_log(server_addr).await;
+        setup_jetstream(&server_addr).await?;
+        let mut evt_log = create_evt_log(server_addr).await?;
         let id = Uuid::now_v7();
 
         // Verify `last_seq_no` for empty log.
-        let last_seq_no = evt_log.last_seq_no(id).await;
-        assert!(last_seq_no.is_ok());
-        let last_seq_no = last_seq_no.unwrap();
+        let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 0);
 
         // Verify `persist`.
-        let result = evt_log.persist(id, &[1, 2, 3, 4], 1000).await;
-        assert!(result.is_ok());
-        let result = evt_log.persist(id, &[5, 6, 7], 1004).await;
-        assert!(result.is_ok());
-        let result = evt_log.persist(id, &[8, 9], 1007).await;
-        assert!(result.is_ok());
+        evt_log.persist(id, &[1, 2, 3, 4], 1000).await?;
+        evt_log.persist(id, &[5, 6, 7], 1004).await?;
+        evt_log.persist(id, &[8, 9], 1007).await?;
 
         // Verify `last_seq_no` for non-empty log.
-        let last_seq_no = evt_log.last_seq_no(id).await;
-        assert!(last_seq_no.is_ok());
-        let last_seq_no = last_seq_no.unwrap();
+        let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 1009);
 
         // Verify `evts_by_id`.
-        let evts = evt_log.evts_by_id::<u32>(id, 1002, 1008).await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap();
+        let evts = evt_log.evts_by_id::<u32>(id, 1002, 1008).await?;
         let evts = evts.collect::<Vec<_>>().await;
         let evts = evts
             .into_iter()
             .filter_map(|evt| evt.ok())
             .collect::<Vec<_>>();
         assert_eq!(evts, (2..=8).collect::<Vec<_>>());
+
+        Ok(())
     }
 
     /// Testing the [NatsEvtLog] via a "proper" [Entity].
     #[tokio::test]
-    async fn test_entity() {
+    async fn test_entity() -> Result<(), Box<dyn std::error::Error>> {
         let client = Cli::default();
         let container = setup_testcontainers(&client);
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
-        setup_jetstream(&server_addr).await;
-        let mut evt_log = create_evt_log(server_addr).await;
+        setup_jetstream(&server_addr).await?;
+        let mut evt_log = create_evt_log(server_addr).await?;
         let id = Uuid::now_v7();
 
         // Populate the event log with some events.
-        let result = evt_log
+        evt_log
             .persist(
                 id,
                 &[
@@ -511,18 +469,13 @@ mod tests {
                 ],
                 1,
             )
-            .await;
-        assert!(result.is_ok());
+            .await?;
 
-        // Create the entity.
-        let entity = Entity::spawn(id, Counter(0), evt_log).await;
-        assert!(entity.is_ok());
-        let counter = entity.unwrap();
+        // Create an entity.
+        let counter = Entity::spawn(id, Counter(0), evt_log).await?;
 
         // Handle a valid command.
-        let evts = counter.handle_cmd(Cmd::Inc(1)).await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap();
+        let evts = counter.handle_cmd(Cmd::Inc(1)).await?;
         assert_eq!(
             evts,
             vec![Evt::Increased {
@@ -532,9 +485,7 @@ mod tests {
         );
 
         // Handle another valid command.
-        let evts = counter.handle_cmd(Cmd::Dec(101)).await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap();
+        let evts = counter.handle_cmd(Cmd::Dec(101)).await?;
         assert_eq!(
             evts,
             vec![Evt::Decreased {
@@ -544,7 +495,9 @@ mod tests {
         );
 
         // Handle an invalid command (underflow).
-        let evts = counter.handle_cmd(Cmd::Dec(1)).await;
-        assert!(evts.is_err());
+        let result = counter.handle_cmd(Cmd::Dec(1)).await;
+        assert!(result.is_err());
+
+        Ok(())
     }
 }

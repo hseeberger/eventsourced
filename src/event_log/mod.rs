@@ -5,6 +5,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::{fmt::Debug, future::Future};
 use uuid::Uuid;
 
+/// Persistence for events.
 pub trait EvtLog {
     type Error: std::error::Error;
 
@@ -22,8 +23,8 @@ pub trait EvtLog {
     /// Get the last sequence number for the given entity ID.
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error>;
 
-    /// Get the events for the entity with the given ID starting from the given to (including) the
-    /// given sequence number.
+    /// Get the events for the entity with the given ID in the given closed range of sequence
+    /// numbers.
     async fn evts_by_id<E>(
         &mut self,
         id: Uuid,

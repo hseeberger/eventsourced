@@ -27,25 +27,23 @@ where
     L: EvtLog + 'static,
 {
     /// A command cannot be sent from an [EntityRef] to its [Entity].
-    #[error("Cannot send command to entity with ID {id}")]
-    Send {
-        id: Uuid,
-        source: mpsc::error::SendError<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
-    },
+    #[error("Cannot send command from EntityRef to Entity")]
+    SendCmd(
+        #[from] mpsc::error::SendError<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
+    ),
 
-    /// Events or an [EventLog] error cannot be sent from an [Entity] to the invoking [EntityRef].
-    #[error("Cannot receive command handling result from entity with ID {id}")]
-    Rcv {
-        id: Uuid,
-        source: oneshot::error::RecvError,
-    },
+    /// An [EntityRef] cannot receive the command handler result, because its entity has
+    /// terminated.
+    #[error("Cannot receive command handler result, because entity has terminated")]
+    EntityTerminated(#[from] oneshot::error::RecvError),
 
-    /// A command handler of an [Entity] has rejected a command.
-    #[error("Command handler error for entity with ID {id}")]
-    CmdHandler { id: Uuid, source: E::Error },
+    /// An invalid command has been rejected by a command hander.
+    #[error("Invalid command rejected by command handler")]
+    InvalidCommand(E::Error),
 
-    #[error("Cannot restore entity with ID {id}")]
-    Restore { id: Uuid, source: L::Error },
+    /// An entity cannot be created from its event log.
+    #[error("Cannot create entity from event log")]
+    CreateEntity(L::Error),
 }
 
 /// Command and event handling for an [Entity].
@@ -90,44 +88,43 @@ where
         mut event_sourced: E,
         mut evt_log: L,
     ) -> Result<EntityRef<E, L>, Error<E, L>> {
-        debug!(%id, "Restoring entity");
-        let to_seq_no = evt_log
-            .last_seq_no(id)
-            .await
-            .map_err(|source| Error::Restore { id, source })?;
-        if to_seq_no > 0 {
+        // Create entity, possibly by replaying existing events.
+        let last_seq_no = evt_log.last_seq_no(id).await.map_err(Error::CreateEntity)?;
+        if last_seq_no > 0 {
             let evts = evt_log
-                .evts_by_id::<E::Evt>(id, 1, to_seq_no)
+                .evts_by_id::<E::Evt>(id, 1, last_seq_no)
                 .await
-                .map_err(|source| Error::Restore { id, source })?;
+                .map_err(Error::CreateEntity)?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
-                let evt = evt.map_err(|source| Error::Restore { id, source })?;
+                let evt = evt.map_err(Error::CreateEntity)?;
                 event_sourced.handle_evt(&evt);
             }
         }
-
         let mut entity = Entity {
             id,
             event_sourced,
             evt_log,
-            seq_no: 0,
+            seq_no: last_seq_no,
         };
+        debug!(%id, %last_seq_no, "Created entity");
 
+        // TODO Make EntityRef channel buffer size configurable!
         let (cmd_in, mut cmd_out) =
             mpsc::channel::<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>(42);
 
+        // Spawn handler loop.
         task::spawn(async move {
             while let Some((cmd, result_sender)) = cmd_out.recv().await {
                 match entity.handle_cmd(cmd).await {
                     Ok((next_entity, result)) => {
                         entity = next_entity;
-                        if let Err(error) = result_sender.send(result) {
-                            error!(%id, ?error, "Entity cannot send command handler result to client");
+                        if result_sender.send(result).is_err() {
+                            error!(%id, "Cannot send command handler result");
                         };
                     }
                     Err(error) => {
-                        error!(%id, %error, "Entity cannot persist events");
+                        error!(%id, %error, "Cannot persist events");
                         break;
                     }
                 }
@@ -147,7 +144,7 @@ where
         cmd: E::Cmd,
     ) -> Result<(Self, Result<Vec<E::Evt>, E::Error>), L::Error> {
         // TODO Remove this helper once the async in trait story is complete, also see below!
-        fn send_fut<T>(
+        fn make_send<T>(
             f: impl std::future::Future<Output = Result<(), T>> + Send,
         ) -> impl std::future::Future<Output = Result<(), T>> + Send {
             f
@@ -163,7 +160,7 @@ where
             // Persist events
             // self.evt_log.persist(self.id, &evts, self.seq_no).await?;
             // TODO Remove this helper once the async in trait story is complete, also see above!
-            let send_fut = send_fut(self.evt_log.persist(self.id, &evts, self.seq_no));
+            let send_fut = make_send(self.evt_log.persist(self.id, &evts, self.seq_no));
             send_fut.await?;
             self.seq_no += evts.len() as u64;
 
@@ -194,38 +191,24 @@ where
     E: EventSourced + 'static,
     L: EvtLog + 'static,
 {
+    /// Get the ID of the proxied [Entity].
+    pub fn id(&self) -> Uuid {
+        self.id
+    }
+
     /// Invoke the command handler of the proxied [Entity].
     pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Vec<E::Evt>, Error<E, L>> {
         let (result_in, result_out) = oneshot::channel();
-
-        self.cmd_in
-            .send((cmd, result_in))
-            .await
-            .map_err(|source| Error::Send {
-                id: self.id,
-                source,
-            })?;
-
-        result_out
-            .await
-            .map_err(|source| Error::Rcv {
-                id: self.id,
-                source,
-            })?
-            .map_err(|source| Error::CmdHandler {
-                id: self.id,
-                source,
-            })
+        self.cmd_in.send((cmd, result_in)).await?;
+        result_out.await?.map_err(Error::InvalidCommand)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use futures::{stream, Stream};
     use serde::Deserialize;
-
     use thiserror::Error;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,9 +320,7 @@ mod tests {
 
         let entity = Entity::spawn(Uuid::now_v7(), Counter(0), event_log.clone()).await?;
 
-        let evts = entity.handle_cmd(Cmd::Inc(42)).await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap();
+        let evts = entity.handle_cmd(Cmd::Inc(42)).await?;
         assert_eq!(
             evts,
             vec![Evt::Increased {
