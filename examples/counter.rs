@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use eventsourced::{
     nats::{Config, NatsEvtLog},
     Entity, EventSourced,
@@ -25,9 +25,18 @@ async fn main() -> Result<()> {
                 let evt_log = (&evt_log).clone();
                 let counter = Entity::spawn(Uuid::now_v7(), Counter(0), evt_log)
                     .await
+                    .context("Cannot spawn entity")
                     .unwrap();
-                let _ = counter.handle_cmd(Cmd::Inc(n as u64)).await.unwrap();
-                let _ = counter.handle_cmd(Cmd::Dec(n as u64)).await.unwrap();
+                let _ = counter
+                    .handle_cmd(Cmd::Inc(n as u64))
+                    .await
+                    .context("Cannot handle Inc command")
+                    .unwrap();
+                let _ = counter
+                    .handle_cmd(Cmd::Dec(n as u64))
+                    .await
+                    .context("Cannot handle Dec command")
+                    .unwrap();
             }
         });
     }

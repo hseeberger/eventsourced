@@ -39,11 +39,11 @@ where
 
     /// An invalid command has been rejected by a command hander.
     #[error("Invalid command rejected by command handler")]
-    InvalidCommand(E::Error),
+    InvalidCommand(#[source] E::Error),
 
     /// An entity cannot be created from its event log.
     #[error("Cannot create entity from event log")]
-    CreateEntity(L::Error),
+    CreateEntity(#[source] L::Error),
 }
 
 /// Command and event handling for an [Entity].

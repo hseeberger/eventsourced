@@ -54,47 +54,47 @@ impl Default for Config {
 pub enum Error {
     /// The connection to the NATS server cannot be established.
     #[error("Cannot connect to NATS server")]
-    Connect(std::io::Error),
+    Connect(#[from] std::io::Error),
 
     /// Events cannot be serialized.
     #[error("Cannot serialize events")]
-    SerializeEvts(serde_json::Error),
+    SerializeEvts(#[from] serde_json::Error),
 
     /// Events cannot be published.
     #[error("Cannot publish events")]
-    PublishEvts(async_nats::Error),
+    PublishEvts(#[source] async_nats::Error),
 
     /// An ACK for publishing events cannot be received.
     #[error("Cannot get ACK for publishing events")]
-    PublishEvtsAck(async_nats::Error),
+    PublishEvtsAck(#[source] async_nats::Error),
 
     /// A NATS stream cannot be obtained.
     #[error("Cannot get NATS stream")]
-    GetStream(async_nats::Error),
+    GetStream(#[source] async_nats::Error),
 
     /// A NATS consumer cannot be created.
     #[error("Cannot create NATS consumer")]
-    CreateConsumer(async_nats::Error),
+    CreateConsumer(#[source] async_nats::Error),
 
     /// The message stream from a NATS consumer cannot be obtained.
     #[error("Cannot get message stream from NATS consumer")]
-    GetMessages(async_nats::Error),
+    GetMessages(#[source] async_nats::Error),
 
     /// A message cannot be obtained from the NATS message stream.
     #[error("Cannot get message from NATS message stream")]
-    GetMessage(async_nats::Error),
+    GetMessage(#[source] async_nats::Error),
 
     /// A NATS message cannot be deserialized.
     #[error("Cannot deserialize NATS message")]
-    DeserializeMessage(serde_json::Error),
+    DeserializeMessage(#[source] serde_json::Error),
 
     /// The last message for a NATS stream cannot be obtained.
     #[error("Cannot get last message for NATS stream")]
-    GetLastMessage(async_nats::Error),
+    GetLastMessage(#[source] async_nats::Error),
 
     /// A raw NATS message cannot be converted into a NATS message.
     #[error("Cannot convert raw NATS message into NATS message")]
-    FromRawMessage(async_nats::Error),
+    FromRawMessage(#[source] async_nats::Error),
 }
 
 /// An [EventLog] implementation based on [NATS](https://nats.io/).
@@ -118,7 +118,7 @@ impl NatsEvtLog {
         debug!(?config, "Creating NatsEvtLog");
 
         let server_addr = config.server_addr;
-        let client = connect(&server_addr).await.map_err(Error::Connect)?;
+        let client = connect(&server_addr).await?;
         let jetstream = jetstream::new(client);
 
         Ok(Self {
@@ -154,7 +154,7 @@ impl EvtLog for NatsEvtLog {
         }
 
         // Serialize events.
-        let evts_json = serde_json::to_value(evts).map_err(Error::SerializeEvts)?;
+        let evts_json = serde_json::to_value(evts)?;
 
         // Determine NATS subject.
         let stream_name = &self.stream_name;
