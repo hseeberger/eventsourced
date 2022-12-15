@@ -317,7 +317,7 @@ mod tests {
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage, Container};
 
     fn setup_testcontainers(client: &Cli) -> Container<'_, GenericImage> {
-        let nats_image = GenericImage::new("nats", "2.9.8")
+        let nats_image = GenericImage::new("nats", "2.9.9")
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
         let container = client.run((nats_image, vec!["-js".to_string()]));
         container
