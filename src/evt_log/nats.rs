@@ -1,4 +1,7 @@
+//! An [EvtLog] implementation based on [NATS](https://nats.io/).
+
 use super::EvtLog;
+use crate::binarize::{Binarize, Debinarize};
 use async_nats::{
     connect,
     jetstream::{
@@ -8,7 +11,7 @@ use async_nats::{
 };
 use async_stream::stream;
 use futures::{stream, Stream, StreamExt};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Debug, Formatter},
     io,
@@ -21,83 +24,7 @@ use uuid::Uuid;
 const SEQ_NO: &str = "seq_no";
 const LEN: &str = "len";
 
-/// Configuration for the [NatsEvtLog].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    server_addr: String,
-    stream_name: String,
-}
-
-impl Config {
-    #[allow(missing_docs)]
-    pub fn new<S, T>(server_addr: S, stream_name: T) -> Self
-    where
-        S: Into<String>,
-        T: Into<String>,
-    {
-        Self {
-            server_addr: server_addr.into(),
-            stream_name: stream_name.into(),
-        }
-    }
-}
-
-impl Default for Config {
-    /// Use "localhost:4222" for `server_addr` and "evts" for `subject_prefix`.
-    fn default() -> Self {
-        Self::new("localhost:4222", "evts")
-    }
-}
-
-/// Errors for the [NatsEvtLog].
-#[derive(Debug, Error)]
-pub enum Error {
-    /// The connection to the NATS server cannot be established.
-    #[error("Cannot connect to NATS server")]
-    Connect(#[from] std::io::Error),
-
-    /// Events cannot be serialized.
-    #[error("Cannot serialize events")]
-    SerializeEvts(#[from] serde_json::Error),
-
-    /// Events cannot be published.
-    #[error("Cannot publish events")]
-    PublishEvts(#[source] async_nats::Error),
-
-    /// An ACK for publishing events cannot be received.
-    #[error("Cannot get ACK for publishing events")]
-    PublishEvtsAck(#[source] async_nats::Error),
-
-    /// A NATS stream cannot be obtained.
-    #[error("Cannot get NATS stream")]
-    GetStream(#[source] async_nats::Error),
-
-    /// A NATS consumer cannot be created.
-    #[error("Cannot create NATS consumer")]
-    CreateConsumer(#[source] async_nats::Error),
-
-    /// The message stream from a NATS consumer cannot be obtained.
-    #[error("Cannot get message stream from NATS consumer")]
-    GetMessages(#[source] async_nats::Error),
-
-    /// A message cannot be obtained from the NATS message stream.
-    #[error("Cannot get message from NATS message stream")]
-    GetMessage(#[source] async_nats::Error),
-
-    /// A NATS message cannot be deserialized.
-    #[error("Cannot deserialize NATS message")]
-    DeserializeMessage(#[source] serde_json::Error),
-
-    /// The last message for a NATS stream cannot be obtained.
-    #[error("Cannot get last message for NATS stream")]
-    GetLastMessage(#[source] async_nats::Error),
-
-    /// A raw NATS message cannot be converted into a NATS message.
-    #[error("Cannot convert raw NATS message into NATS message")]
-    FromRawMessage(#[source] async_nats::Error),
-}
-
-/// An [EventLog] implementation based on [NATS](https://nats.io/).
+/// An [EvtLog] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
 pub struct NatsEvtLog {
     jetstream: Jetstream,
@@ -146,7 +73,8 @@ impl EvtLog for NatsEvtLog {
     ) -> Result<(), Self::Error>
     where
         'b: 'a,
-        E: Debug + Serialize + Send + Sync + 'a,
+        E: Send + Sync + 'a,
+        [E]: Binarize,
     {
         if evts.is_empty() {
             debug!(%id, "Not publishing to NATS, because no events given");
@@ -154,24 +82,26 @@ impl EvtLog for NatsEvtLog {
         }
 
         // Serialize events.
-        let evts_json = serde_json::to_value(evts)?;
+        let bytes = evts
+            .to_bytes()
+            .map_err(|source| Error::BinarizeEvts(Box::new(source)))?;
 
         // Determine NATS subject.
         let stream_name = &self.stream_name;
         let subject = format!("{stream_name}.{id}");
-        debug!(%id, ?subject, ?evts_json, "Publishing to NATS");
+        debug!(%id, ?subject, "Publishing to NATS");
 
         // Publish events to NATS subject and await ACK.
         let mut headers = HeaderMap::new();
         headers.insert(SEQ_NO, (seq_no + 1).to_string().as_ref());
         headers.insert(LEN, (evts.len()).to_string().as_ref());
         self.jetstream
-            .publish_with_headers(subject, headers, evts_json.to_string().into())
+            .publish_with_headers(subject, headers, bytes)
             .await
             .map_err(Error::PublishEvts)?
             .await
             .map_err(Error::PublishEvtsAck)?;
-        debug!(%id, ?evts_json, "Successfully published to NATS");
+        debug!(%id, "Successfully published to NATS");
 
         Ok(())
     }
@@ -216,7 +146,8 @@ impl EvtLog for NatsEvtLog {
         to_seq_no: u64,
     ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
     where
-        E: Debug + DeserializeOwned + Send,
+        E: Send,
+        Vec<E>: Debinarize<Ok = Vec<E>>,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(
@@ -238,15 +169,15 @@ impl EvtLog for NatsEvtLog {
             .await
             .map_err(Error::GetMessages)?;
 
-        // Transfor message stream into event stream
+        // Transform message stream into event stream
         let evts = msgs
             .map(move |msg| match msg {
                 Ok(msg) => {
                     let (seq_no, len) = seq_no_and_len(&msg);
                     // Only deserialize if current message has relevant sequence number range.
                     if from_seq_no < seq_no + len {
-                        serde_json::from_slice::<Vec<E>>(&msg.payload)
-                            .map_err(Error::DeserializeMessage)
+                        <Vec<E> as Debinarize>::from_bytes(msg.message.payload)
+                            .map_err(|source| Error::DebinarizeEvts(Box::new(source)))
                             .map(|evts| {
                                 evts.into_iter()
                                     .enumerate()
@@ -282,6 +213,82 @@ impl EvtLog for NatsEvtLog {
 
         Ok(evts)
     }
+}
+
+/// Configuration for the [NatsEvtLog].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    server_addr: String,
+    stream_name: String,
+}
+
+impl Config {
+    #[allow(missing_docs)]
+    pub fn new<S, T>(server_addr: S, stream_name: T) -> Self
+    where
+        S: Into<String>,
+        T: Into<String>,
+    {
+        Self {
+            server_addr: server_addr.into(),
+            stream_name: stream_name.into(),
+        }
+    }
+}
+
+impl Default for Config {
+    /// Use "localhost:4222" for `server_addr` and "evts" for `subject_prefix`.
+    fn default() -> Self {
+        Self::new("localhost:4222", "evts")
+    }
+}
+
+/// Errors from the [NatsEvtLog].
+#[derive(Debug, Error)]
+pub enum Error {
+    /// The connection to the NATS server cannot be established.
+    #[error("Cannot connect to NATS server")]
+    Connect(#[from] std::io::Error),
+
+    /// Events cannot be published.
+    #[error("Cannot publish events")]
+    PublishEvts(#[source] async_nats::Error),
+
+    /// An ACK for publishing events cannot be received.
+    #[error("Cannot get ACK for publishing events")]
+    PublishEvtsAck(#[source] async_nats::Error),
+
+    /// A NATS stream cannot be obtained.
+    #[error("Cannot get NATS stream")]
+    GetStream(#[source] async_nats::Error),
+
+    /// A NATS consumer cannot be created.
+    #[error("Cannot create NATS consumer")]
+    CreateConsumer(#[source] async_nats::Error),
+
+    /// The message stream from a NATS consumer cannot be obtained.
+    #[error("Cannot get message stream from NATS consumer")]
+    GetMessages(#[source] async_nats::Error),
+
+    /// A message cannot be obtained from the NATS message stream.
+    #[error("Cannot get message from NATS message stream")]
+    GetMessage(#[source] async_nats::Error),
+
+    /// The last message for a NATS stream cannot be obtained.
+    #[error("Cannot get last message for NATS stream")]
+    GetLastMessage(#[source] async_nats::Error),
+
+    /// A raw NATS message cannot be converted into a NATS message.
+    #[error("Cannot convert raw NATS message into NATS message")]
+    FromRawMessage(#[source] async_nats::Error),
+
+    /// Events cannot be binarized.
+    #[error("Cannot binarize events")]
+    BinarizeEvts(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+
+    /// Events cannot be debinarized from a NATS message.
+    #[error("Cannot debinarize events from NATS message")]
+    DebinarizeEvts(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 fn seq_no_and_len(msg: &Message) -> (u64, u64) {

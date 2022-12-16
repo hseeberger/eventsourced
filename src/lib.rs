@@ -1,15 +1,17 @@
+//! Event sourced entities.
+
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
 #![feature(return_position_impl_trait_in_trait)]
 #![allow(clippy::type_complexity)]
 
-mod event_log;
+pub mod binarize;
+pub mod evt_log;
 
-pub use event_log::*;
-
+use binarize::{Binarize, Debinarize};
+use evt_log::EvtLog;
 use futures::StreamExt;
-use serde::{de::DeserializeOwned, Serialize};
-use std::{fmt::Debug, marker::PhantomData};
+use std::fmt::Debug;
 use thiserror::Error;
 use tokio::{
     pin,
@@ -18,33 +20,6 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 use uuid::Uuid;
-
-/// EventSourced errors.
-#[derive(Debug, Error)]
-pub enum Error<E, L>
-where
-    E: EventSourced + 'static,
-    L: EvtLog + 'static,
-{
-    /// A command cannot be sent from an [EntityRef] to its [Entity].
-    #[error("Cannot send command from EntityRef to Entity")]
-    SendCmd(
-        #[from] mpsc::error::SendError<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
-    ),
-
-    /// An [EntityRef] cannot receive the command handler result, because its entity has
-    /// terminated.
-    #[error("Cannot receive command handler result, because entity has terminated")]
-    EntityTerminated(#[from] oneshot::error::RecvError),
-
-    /// An invalid command has been rejected by a command hander.
-    #[error("Invalid command rejected by command handler")]
-    InvalidCommand(#[source] E::Error),
-
-    /// An entity cannot be created from its event log.
-    #[error("Cannot create entity from event log")]
-    CreateEntity(#[source] L::Error),
-}
 
 /// Command and event handling for an [Entity].
 pub trait EventSourced {
@@ -77,28 +52,26 @@ impl<E, L> Entity<E, L>
 where
     E: EventSourced + Send + 'static,
     E::Cmd: Send + 'static,
-    E::Evt: Serialize + DeserializeOwned + Send + Sync,
+    E::Evt: Send + Sync,
+    [E::Evt]: Binarize,
+    Vec<E::Evt>: Debinarize<Ok = Vec<E::Evt>>,
     E::Error: Send,
     L: EvtLog + Send + 'static,
 {
-    /// Create an [Entity] with the given ID, [EventSourced] command/event handling and [EventLog].
+    /// Create an [Entity] with the given ID, [EventSourced] command/event handling and [EvtLog].
     /// Commands can be sent by invoking `handle_cmd` on the returned [EntityRef].
     pub async fn spawn(
         id: Uuid,
         mut event_sourced: E,
         mut evt_log: L,
-    ) -> Result<EntityRef<E, L>, Error<E, L>> {
+    ) -> Result<EntityRef<E>, L::Error> {
         // Create entity, possibly by replaying existing events.
-        let last_seq_no = evt_log.last_seq_no(id).await.map_err(Error::CreateEntity)?;
+        let last_seq_no = evt_log.last_seq_no(id).await?;
         if last_seq_no > 0 {
-            let evts = evt_log
-                .evts_by_id::<E::Evt>(id, 1, last_seq_no)
-                .await
-                .map_err(Error::CreateEntity)?;
+            let evts = evt_log.evts_by_id::<E::Evt>(id, 1, last_seq_no).await?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
-                let evt = evt.map_err(Error::CreateEntity)?;
-                event_sourced.handle_evt(&evt);
+                event_sourced.handle_evt(&evt?);
             }
         }
         let mut entity = Entity {
@@ -132,11 +105,7 @@ where
             info!(%id, "Entity terminated");
         });
 
-        Ok(EntityRef {
-            id,
-            cmd_in,
-            _l: PhantomData,
-        })
+        Ok(EntityRef { id, cmd_in })
     }
 
     async fn handle_cmd(
@@ -176,20 +145,17 @@ where
 
 /// A proxy to a spawned [Entity] which can be used to invoke its command handler.
 #[derive(Debug, Clone)]
-pub struct EntityRef<E, L>
+pub struct EntityRef<E>
 where
     E: EventSourced,
-    L: EvtLog,
 {
     id: Uuid,
     cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
-    _l: PhantomData<L>,
 }
 
-impl<E, L> EntityRef<E, L>
+impl<E> EntityRef<E>
 where
     E: EventSourced + 'static,
-    L: EvtLog + 'static,
 {
     /// Get the ID of the proxied [Entity].
     pub fn id(&self) -> Uuid {
@@ -197,18 +163,40 @@ where
     }
 
     /// Invoke the command handler of the proxied [Entity].
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Vec<E::Evt>, Error<E, L>> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Vec<E::Evt>, Error<E>> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in.send((cmd, result_in)).await?;
         result_out.await?.map_err(Error::InvalidCommand)
     }
 }
 
+/// Errors from an [EntityRef].
+#[derive(Debug, Error)]
+pub enum Error<E>
+where
+    E: EventSourced + 'static,
+{
+    /// A command cannot be sent from an [EntityRef] to its [Entity].
+    #[error("Cannot send command from EntityRef to Entity")]
+    SendCmd(
+        #[from] mpsc::error::SendError<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
+    ),
+
+    /// An [EntityRef] cannot receive the command handler result, because its entity has
+    /// terminated.
+    #[error("Cannot receive command handler result, because entity has terminated")]
+    EntityTerminated(#[from] oneshot::error::RecvError),
+
+    /// An invalid command has been rejected by a command hander.
+    #[error("Invalid command rejected by command handler")]
+    InvalidCommand(#[source] E::Error),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::{stream, Stream};
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use thiserror::Error;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -292,7 +280,8 @@ mod tests {
         ) -> Result<(), Self::Error>
         where
             'b: 'a,
-            E: Serialize + Send + Sync + 'a,
+            E: Send + Sync + 'a,
+            [E]: Binarize,
         {
             Ok(())
         }
@@ -308,7 +297,8 @@ mod tests {
             _to_seq_no: u64,
         ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
         where
-            E: DeserializeOwned,
+            E: Send,
+            Vec<E>: Debinarize<Ok = Vec<E>>,
         {
             Ok(stream::empty())
         }

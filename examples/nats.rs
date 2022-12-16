@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use eventsourced::{
+use eventsourced::evt_log::{
     nats::{Config, NatsEvtLog},
     EvtLog,
 };

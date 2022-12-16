@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use eventsourced::{
-    nats::{Config, NatsEvtLog},
+    evt_log::nats::{Config, NatsEvtLog},
     Entity, EventSourced,
 };
 use serde::{Deserialize, Serialize};
