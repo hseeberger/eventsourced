@@ -11,13 +11,14 @@ repository    = "https://github.com/hseeberger/eventsourced"
 documentation = "https://github.com/hseeberger/eventsourced"
 
 [dependencies]
-async-nats       = { version = "0" }
+async-nats       = { version = "0", optional = true }
 async-stream     = { version = "0" }
 async-trait      = { version = "0" }
+bytes            = { version = "1" }
 futures          = { version = "0" }
 pin-project-lite = { version = "0" }
 serde            = { version = "1", features = [ "derive" ] }
-serde_json       = { version = "1" }
+serde_json       = { version = "1", optional = true }
 thiserror        = { version = "1" }
 tokio            = { version = "1", features = [ "full" ] }
 tracing          = { version = "0", default-features = false }
@@ -27,3 +28,8 @@ uuid             = { version = "1", features = [ "serde", "v7" ] }
 anyhow             = { version = "1" }
 testcontainers     = { version = "0" }
 tracing-subscriber = { version = "0", default-features = false, features = [ "fmt", "env-filter" ] }
+
+[features]
+default    = [ "nats", "serde-json" ]
+nats       = [ "dep:async-nats" ]
+serde-json = [ "dep:serde_json" ]

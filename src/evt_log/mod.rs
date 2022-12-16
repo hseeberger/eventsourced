@@ -1,8 +1,11 @@
+//! Persistence for events.
+
+#[cfg(feature = "nats")]
 pub mod nats;
 
+use crate::binarize::{Binarize, Debinarize};
 use futures::Stream;
-use serde::{de::DeserializeOwned, Serialize};
-use std::{fmt::Debug, future::Future};
+use std::future::Future;
 use uuid::Uuid;
 
 /// Persistence for events.
@@ -18,7 +21,8 @@ pub trait EvtLog {
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'a
     where
         'b: 'a,
-        E: Debug + Serialize + Send + Sync + 'a;
+        E: Send + Sync + 'a,
+        [E]: Binarize;
 
     /// Get the last sequence number for the given entity ID.
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error>;
@@ -32,5 +36,6 @@ pub trait EvtLog {
         to_seq_no: u64,
     ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
     where
-        E: Debug + DeserializeOwned + Send;
+        E: Send,
+        Vec<E>: Debinarize<Ok = Vec<E>>;
 }
