@@ -1,5 +1,6 @@
 //! [Binarize] implementation for any type that implements [Serialize] and [Debinarize]
-//! implementation for any type that implements [DeserializeOwned].
+//! implementation for any type that implements [DeserializeOwned] based upon
+//! [serde_json](https://docs.rs/serde_json/latest/serde_json).
 
 use super::{Binarize, Debinarize};
 use bytes::Bytes;
