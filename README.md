@@ -1,9 +1,29 @@
 # EventSourced
 
-Event Sourcing in Rust.
+Event sourced entities in Rust.
+
+TBC ...
+
+## NatsEvtLog
+
+To locally run tests or examples, create an "evts" stream like this:
 
 ```
-nats stream create evts --subjects='evts.*' --storage=file --replicas=1 --retention=limits --discard=old --max-msgs=-1 --max-msgs-per-subject=-1 --max-bytes=-1 --max-age=-1 --max-msg-size=-1 --dupe-window='2m' --no-allow-rollup --no-deny-delete --no-deny-purge
+nats stream create evts \
+  --subjects='evts.*' \
+  --storage=file \
+  --replicas=1 \
+  --retention=limits \
+  --discard=old \
+  --max-msgs=-1 \
+  --max-msgs-per-subject=-1 \
+  --max-bytes=-1 \
+  --max-age=-1 \
+  --max-msg-size=-1 \
+  --dupe-window='2m' \
+  --no-allow-rollup \
+  --no-deny-delete \
+  --no-deny-purge
 ```
 
 ## License ##

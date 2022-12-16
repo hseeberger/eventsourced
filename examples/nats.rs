@@ -8,7 +8,7 @@ use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
-/// Not a real example, but rather a integration test, because the event log is not supposed to be
+/// Not a real example, but rather an integration test, because the event log is not supposed to be
 /// used directly.
 #[tokio::main]
 async fn main() -> Result<()> {
