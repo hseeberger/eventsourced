@@ -1,6 +1,9 @@
 //! Serialization to and deserialization from bytes.
 
+#[cfg(feature = "flexbuffers")]
+pub mod flexbuffers;
 #[cfg(feature = "serde-json")]
+#[cfg(not(feature = "flexbuffers"))]
 pub mod serde_json;
 
 use bytes::Bytes;
