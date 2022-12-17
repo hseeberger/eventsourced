@@ -7,57 +7,27 @@ use bytes::Bytes;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{to_value, Error};
 
-trait SerdeJsonBinarize {
-    fn to_bytes_serde_json(&self) -> Result<Bytes, Error>;
-}
-
-impl<T> SerdeJsonBinarize for T
-where
-    T: Serialize + ?Sized,
-{
-    fn to_bytes_serde_json(&self) -> Result<Bytes, Error> {
-        to_value(self).map(|value| value.to_string().into())
-    }
-}
-
 impl<T> Binarize for T
 where
-    T: SerdeJsonBinarize + ?Sized,
+    T: Serialize + ?Sized,
 {
     type Error = Error;
 
     fn to_bytes(&self) -> Result<Bytes, Self::Error> {
-        self.to_bytes_serde_json()
-    }
-}
-
-pub trait SerdeJsonDebinarize {
-    type Ok;
-
-    fn from_bytes_serde_json(bytes: Bytes) -> Result<Self::Ok, Error>;
-}
-
-impl<T> SerdeJsonDebinarize for T
-where
-    T: DeserializeOwned,
-{
-    type Ok = T;
-
-    fn from_bytes_serde_json(bytes: Bytes) -> Result<Self::Ok, Error> {
-        serde_json::from_slice::<Self::Ok>(&bytes)
+        to_value(self).map(|value| value.to_string().into())
     }
 }
 
 impl<T> Debinarize for T
 where
-    T: SerdeJsonDebinarize,
+    T: DeserializeOwned,
 {
-    type Ok = T::Ok;
+    type Ok = T;
 
     type Error = Error;
 
     fn from_bytes(bytes: Bytes) -> Result<Self::Ok, Self::Error> {
-        <T as SerdeJsonDebinarize>::from_bytes_serde_json(bytes)
+        serde_json::from_slice::<Self::Ok>(&bytes)
     }
 }
 
