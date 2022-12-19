@@ -66,6 +66,7 @@ where
         // Create entity, possibly by replaying existing events.
         let last_seq_no = evt_log.last_seq_no(id).await?;
         if last_seq_no > 0 {
+            debug!(%id, last_seq_no, "Replaying existing evts");
             let evts = evt_log.evts_by_id::<E::Evt>(id, 1, last_seq_no).await?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
@@ -78,7 +79,7 @@ where
             evt_log,
             seq_no: last_seq_no,
         };
-        debug!(%id, %last_seq_no, "Created entity");
+        debug!(%id, "Entity created");
 
         // TODO Make EntityRef channel buffer size configurable!
         let (cmd_in, mut cmd_out) =

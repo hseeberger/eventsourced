@@ -5,30 +5,41 @@ use eventsourced::{
 };
 #[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
 use serde::{Deserialize, Serialize};
-use std::time::Instant;
+use std::{iter, time::Instant};
 use thiserror::Error;
 use tokio::task::JoinSet;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use uuid::Uuid;
 
-const ENTITY_COUNT: usize = 100;
+const ENTITY_COUNT: usize = 200;
 const EVT_COUNT: usize = 5000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Started ...");
+    tracing_subscriber::registry()
+        .with(EnvFilter::from_default_env())
+        .with(tracing_subscriber::fmt::layer())
+        .try_init()
+        .context("Cannot initialize tracing")?;
 
     let evt_log = NatsEvtLog::new(Config::default()).await?;
 
+    let ids = iter::repeat(())
+        .take(ENTITY_COUNT)
+        .map(|_| Uuid::now_v7())
+        .collect::<Vec<_>>();
+
+    println!("Writing ...");
     let mut tasks = JoinSet::new();
     let start_time = Instant::now();
-    for _ in 1..=ENTITY_COUNT {
+    for id in &ids {
         let evt_log = evt_log.clone();
-        let counter = Entity::spawn(Uuid::now_v7(), Counter(0), evt_log)
+        let counter = Entity::spawn(*id, Counter(0), evt_log)
             .await
             .context("Cannot spawn entity")
             .unwrap();
         tasks.spawn(async move {
-            for n in 1..=EVT_COUNT / 2 {
+            for n in 0..EVT_COUNT / 2 {
                 let _ = counter
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
@@ -44,9 +55,26 @@ async fn main() -> Result<()> {
     }
     while let Some(_) = tasks.join_next().await {}
     let end_time = Instant::now();
+    println!(
+        "Duration for writing {} entities with {} events each: {:?}",
+        ENTITY_COUNT,
+        EVT_COUNT,
+        end_time - start_time
+    );
+
+    println!("Reading ...");
+    let start_time = Instant::now();
+    for id in ids {
+        let evt_log = evt_log.clone();
+        let _counter = Entity::spawn(id, Counter(0), evt_log)
+            .await
+            .context("Cannot spawn entity")
+            .unwrap();
+    }
+    let end_time = Instant::now();
 
     println!(
-        "Duration for {} entities with {} events each: {:?}",
+        "Duration for reading {} entities with {} events each: {:?}",
         ENTITY_COUNT,
         EVT_COUNT,
         end_time - start_time
