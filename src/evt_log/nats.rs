@@ -82,13 +82,13 @@ impl EvtLog for NatsEvtLog {
             return Ok(());
         }
 
-        // Serialize events.
+        // Convert events into bytes.
         let len = evts.len();
         let evts = evts
             .iter()
-            .map(|evt| evt.try_into_bytes().map(|bytes| bytes))
+            .map(|evt| evt.try_into_bytes())
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|source| Error::BinarizeEvts(Box::new(source)))?;
+            .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
         let evts = proto::Evts { evts };
         let mut bytes = BytesMut::new();
         evts.encode(&mut bytes)?;
@@ -180,14 +180,14 @@ impl EvtLog for NatsEvtLog {
             .map(move |msg| match msg {
                 Ok(msg) => {
                     let (seq_no, len) = seq_no_and_len(&msg);
-                    // Only deserialize if current message has relevant sequence number range.
+                    // Only convert if current message has relevant sequence number range.
                     if from_seq_no < seq_no + len {
                         let proto::Evts { evts } = proto::Evts::decode(msg.message.payload)?;
                         evts.into_iter()
                             .enumerate()
                             .map(|(n, evt)| {
                                 E::try_from_bytes(evt)
-                                    .map_err(|source| Error::DebinarizeEvts(Box::new(source)))
+                                    .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
                                     .map(|evt| (seq_no + n as u64, evt))
                             })
                             .collect()
@@ -289,13 +289,13 @@ pub enum Error {
     #[error("Cannot convert raw NATS message into NATS message")]
     FromRawMessage(#[source] async_nats::Error),
 
-    /// Events cannot be binarized.
-    #[error("Cannot binarize events")]
-    BinarizeEvts(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Events cannot be converted into bytes.
+    #[error("Cannot convert events to bytes")]
+    EvtsIntoBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 
-    /// Events cannot be debinarized from a NATS message.
-    #[error("Cannot debinarize events from NATS message")]
-    DebinarizeEvts(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+    /// Bytes cannot be converted to events.
+    #[error("Cannot convert bytes to events")]
+    EvtsFromBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 
     /// Events cannot be encoded as Protocol Buffers.
     #[error("Cannot encode events as Protocol Buffers")]
