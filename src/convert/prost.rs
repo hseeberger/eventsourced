@@ -22,6 +22,6 @@ where
     type Error = DecodeError;
 
     fn try_from_bytes(bytes: Bytes) -> Result<Self, Self::Error> {
-        T::decode(Bytes::from(bytes))
+        T::decode(bytes)
     }
 }

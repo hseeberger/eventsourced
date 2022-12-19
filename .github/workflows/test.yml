@@ -35,8 +35,14 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
       - name: Check code formatting
-        run: cargo +nightly fmt --all --check
+        run: cargo +nightly fmt --check
       - name: Lint
-        run: cargo clippy --no-deps --all-features -- -D warnings
+        run: |
+          cargo clippy --no-deps -- -D warnings
+          cargo clippy --no-deps --no-default-features --features flexbuffers -- -D warnings
+          cargo clippy --no-deps --no-default-features --features prost -- -D warnings
       - name: Test
-        run: cargo test --all-features
+        run: |
+          cargo test
+          cargo clippy --no-default-features --features flexbuffers
+          cargo clippy --no-default-features --features prost
