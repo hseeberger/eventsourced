@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
             }
         });
     }
-    while let Some(_) = tasks.join_next().await {}
+    while tasks.join_next().await.is_some() {}
     let end_time = Instant::now();
     println!(
         "Duration for writing {} entities with {} events each: {:?}",

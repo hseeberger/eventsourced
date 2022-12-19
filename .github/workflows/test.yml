@@ -38,11 +38,11 @@ jobs:
         run: cargo +nightly fmt --check
       - name: Lint
         run: |
-          cargo clippy --no-deps -- -D warnings
-          cargo clippy --no-deps --no-default-features --features flexbuffers -- -D warnings
-          cargo clippy --no-deps --no-default-features --features prost -- -D warnings
+          cargo clippy --no-deps --examples -- -D warnings
+          cargo clippy --no-deps --no-default-features --features nats,flexbuffers --examples -- -D warnings
+          cargo clippy --no-deps --no-default-features --features nats,prost --examples -- -D warnings
       - name: Test
         run: |
           cargo test
-          cargo clippy --no-default-features --features flexbuffers
-          cargo clippy --no-default-features --features prost
+          cargo test --no-default-features --features nats,flexbuffers
+          cargo test --no-default-features --features nats,prost
