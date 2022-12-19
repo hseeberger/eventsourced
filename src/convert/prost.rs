@@ -8,7 +8,7 @@ where
 {
     type Error = EncodeError;
 
-    fn try_into_bytes(&self) -> Result<Vec<u8>, Self::Error> {
+    fn try_into_bytes(&self) -> Result<Bytes, Self::Error> {
         let mut bytes = BytesMut::new();
         self.encode(&mut bytes)?;
         Ok(bytes.into())
@@ -21,7 +21,7 @@ where
 {
     type Error = DecodeError;
 
-    fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+    fn try_from_bytes(bytes: Bytes) -> Result<Self, Self::Error> {
         T::decode(Bytes::from(bytes))
     }
 }

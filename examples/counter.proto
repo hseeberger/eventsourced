@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package example.counter;
+
+message Evt {
+  oneof evt {
+    Increased increased = 1;
+    Decreased decreased = 2;
+  }
+}
+
+message Increased {
+  uint64 old_value = 1;
+  uint64 inc = 2;
+}
+
+message Decreased {
+  uint64 old_value = 1;
+  uint64 dec = 2;
+}

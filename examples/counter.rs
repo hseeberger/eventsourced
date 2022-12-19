@@ -3,17 +3,20 @@ use eventsourced::{
     evt_log::nats::{Config, NatsEvtLog},
     Entity, EventSourced,
 };
+#[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
 use serde::{Deserialize, Serialize};
 use std::time::Instant;
 use thiserror::Error;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-const ENTITY_COUNT: usize = 200;
-const EVT_COUNT: usize = 500;
+const ENTITY_COUNT: usize = 100;
+const EVT_COUNT: usize = 5000;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    println!("Started ...");
+
     let evt_log = NatsEvtLog::new(Config::default()).await?;
 
     let mut tasks = JoinSet::new();
@@ -58,11 +61,15 @@ enum Cmd {
     Dec(u64),
 }
 
+#[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum Evt {
     Increased { old_value: u64, inc: u64 },
     Decreased { old_value: u64, dec: u64 },
 }
+
+#[cfg(feature = "prost")]
+include!(concat!(env!("OUT_DIR"), "/example.counter.rs"));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 enum Error {
@@ -88,9 +95,19 @@ impl EventSourced for Counter {
                 if inc > u64::MAX - self.0 {
                     Err(Error::Overflow { value: self.0, inc })
                 } else {
-                    Ok(vec![Evt::Increased {
-                        old_value: self.0,
-                        inc,
+                    #[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
+                    {
+                        Ok(vec![Evt::Increased {
+                            old_value: self.0,
+                            inc,
+                        }])
+                    }
+                    #[cfg(feature = "prost")]
+                    Ok(vec![Evt {
+                        evt: Some(evt::Evt::Increased(Increased {
+                            old_value: self.0,
+                            inc,
+                        })),
                     }])
                 }
             }
@@ -98,19 +115,39 @@ impl EventSourced for Counter {
                 if dec > self.0 {
                     Err(Error::Underflow { value: self.0, dec })
                 } else {
-                    Ok(vec![Evt::Decreased {
-                        old_value: self.0,
-                        dec,
+                    #[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
+                    {
+                        Ok(vec![Evt::Decreased {
+                            old_value: self.0,
+                            dec,
+                        }])
+                    }
+                    #[cfg(feature = "prost")]
+                    Ok(vec![Evt {
+                        evt: Some(evt::Evt::Decreased(Decreased {
+                            old_value: self.0,
+                            dec,
+                        })),
                     }])
                 }
             }
         }
     }
 
+    #[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
     fn handle_evt(&mut self, evt: &Self::Evt) {
         match evt {
             Evt::Increased { old_value: _, inc } => self.0 += inc,
             Evt::Decreased { old_value: _, dec } => self.0 -= dec,
+        }
+    }
+
+    #[cfg(feature = "prost")]
+    fn handle_evt(&mut self, evt: &Self::Evt) {
+        match evt.evt {
+            Some(evt::Evt::Increased(Increased { old_value: _, inc })) => self.0 += inc,
+            Some(evt::Evt::Decreased(Decreased { old_value: _, dec })) => self.0 -= dec,
+            None => panic!("evt is a mandatory field"),
         }
     }
 }

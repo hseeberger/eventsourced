@@ -331,7 +331,6 @@ where
 }
 
 mod proto {
-    #![allow(clippy::derive_partial_eq_without_eq)]
     include!(concat!(env!("OUT_DIR"), "/evt_log.nats.rs"));
 }
 
