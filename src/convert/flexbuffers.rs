@@ -15,7 +15,7 @@ where
     fn try_into_bytes(&self) -> Result<Vec<u8>, Self::Error> {
         let mut serializer = FlexbufferSerializer::new();
         self.serialize(&mut serializer)?;
-        Ok(serializer.take_buffer().into())
+        Ok(serializer.take_buffer())
     }
 }
 

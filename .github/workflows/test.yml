@@ -33,6 +33,6 @@ jobs:
       - name: Check code formatting
         run: cargo +nightly fmt --all --check
       - name: Lint
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --no-deps --all-features -- -D warnings
       - name: Test
         run: cargo test
