@@ -12,12 +12,14 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v3
-      - name: Update Rust
+      - name: Install Rust toolchain
         run: |
           rustup update
           rustup toolchain install nightly
           rustup component add rustfmt --toolchain nightly
           rustup component add clippy --toolchain nightly
+      - name: Install protoc
+        uses: arduino/setup-protoc@v1
       - name: Set up cargo cache
         uses: actions/cache@v3
         continue-on-error: false
@@ -35,4 +37,4 @@ jobs:
       - name: Lint
         run: cargo clippy --no-deps --all-features -- -D warnings
       - name: Test
-        run: cargo test
+        run: cargo test --all-features
