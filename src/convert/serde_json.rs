@@ -3,6 +3,7 @@
 //! [serde_json](https://docs.rs/serde_json/latest/serde_json).
 
 use super::{TryFromBytes, TryIntoBytes};
+use bytes::Bytes;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{to_value, Error};
 
@@ -12,7 +13,7 @@ where
 {
     type Error = Error;
 
-    fn try_into_bytes(&self) -> Result<Vec<u8>, Self::Error> {
+    fn try_into_bytes(&self) -> Result<Bytes, Self::Error> {
         to_value(self).map(|value| value.to_string().into())
     }
 }
@@ -23,7 +24,7 @@ where
 {
     type Error = Error;
 
-    fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+    fn try_from_bytes(bytes: Bytes) -> Result<Self, Self::Error> {
         serde_json::from_slice::<Self>(&bytes)
     }
 }
