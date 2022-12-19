@@ -16,10 +16,8 @@ pub trait Binarize {
 }
 
 /// Fallibly construct a value from bytes.
-pub trait Debinarize {
-    type Ok;
-
+pub trait Debinarize: Sized {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    fn from_bytes(bytes: Bytes) -> Result<Self::Ok, Self::Error>;
+    fn from_bytes(bytes: Bytes) -> Result<Self, Self::Error>;
 }
