@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package snapshot_store.nats;
+
+// A sequence of events.
+message Snapshot {
+  uint64 seq_no = 1;
+  bytes state = 2;
+}
