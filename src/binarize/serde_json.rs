@@ -22,12 +22,10 @@ impl<T> Debinarize for T
 where
     T: DeserializeOwned,
 {
-    type Ok = T;
-
     type Error = Error;
 
-    fn from_bytes(bytes: Bytes) -> Result<Self::Ok, Self::Error> {
-        serde_json::from_slice::<Self::Ok>(&bytes)
+    fn from_bytes(bytes: Bytes) -> Result<Self, Self::Error> {
+        serde_json::from_slice::<Self>(&bytes)
     }
 }
 

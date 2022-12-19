@@ -147,7 +147,7 @@ impl EvtLog for NatsEvtLog {
     ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
     where
         E: Send,
-        Vec<E>: Debinarize<Ok = Vec<E>>,
+        Vec<E>: Debinarize,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(

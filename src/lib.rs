@@ -54,7 +54,7 @@ where
     E::Cmd: Send + 'static,
     E::Evt: Send + Sync,
     [E::Evt]: Binarize,
-    Vec<E::Evt>: Debinarize<Ok = Vec<E::Evt>>,
+    Vec<E::Evt>: Debinarize,
     E::Error: Send,
     L: EvtLog + Send + 'static,
 {
@@ -298,7 +298,7 @@ mod tests {
         ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
         where
             E: Send,
-            Vec<E>: Debinarize<Ok = Vec<E>>,
+            Vec<E>: Debinarize,
         {
             Ok(stream::empty())
         }

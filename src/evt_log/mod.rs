@@ -37,5 +37,5 @@ pub trait EvtLog {
     ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
     where
         E: Send,
-        Vec<E>: Debinarize<Ok = Vec<E>>;
+        Vec<E>: Debinarize;
 }
