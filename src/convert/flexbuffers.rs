@@ -3,6 +3,7 @@
 //! [Flexbuffers](https://docs.rs/flexbuffers/latest/flexbuffers/index.html).
 
 use super::{TryFromBytes, TryIntoBytes};
+use bytes::Bytes;
 use flexbuffers::{DeserializationError, FlexbufferSerializer, Reader, SerializationError};
 use serde::{de::DeserializeOwned, Serialize};
 
@@ -12,10 +13,10 @@ where
 {
     type Error = SerializationError;
 
-    fn try_into_bytes(&self) -> Result<Vec<u8>, Self::Error> {
+    fn try_into_bytes(&self) -> Result<Bytes, Self::Error> {
         let mut serializer = FlexbufferSerializer::new();
         self.serialize(&mut serializer)?;
-        Ok(serializer.take_buffer())
+        Ok(serializer.take_buffer().into())
     }
 }
 
@@ -25,7 +26,7 @@ where
 {
     type Error = DeserializationError;
 
-    fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, Self::Error> {
+    fn try_from_bytes(bytes: Bytes) -> Result<Self, Self::Error> {
         let reader = Reader::get_root(bytes.as_ref())?;
         Self::deserialize(reader)
     }

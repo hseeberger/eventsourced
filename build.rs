@@ -22,8 +22,14 @@ fn main() -> Result<()> {
 
 #[cfg(feature = "nats")]
 fn compile_protos() -> Result<()> {
-    let protos = list_protos(Path::new(PROTOS))?;
-    prost_build::compile_protos(&protos, &[PROTOS]).context("Cannot compile protos")
+    let mut protos = list_protos(Path::new(PROTOS))?;
+    let mut example_protos = list_protos(Path::new("examples"))?;
+    protos.append(&mut example_protos);
+    let mut config = prost_build::Config::new();
+    config.bytes(["."]); // Use `Bytes` instead of `Vec<u8>` for PB type `bytes`.
+    config
+        .compile_protos(&protos, &[PROTOS, "examples"])
+        .context("Cannot compile protos")
 }
 
 #[cfg(feature = "nats")]
