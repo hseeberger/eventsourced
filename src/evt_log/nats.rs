@@ -5,7 +5,11 @@ use crate::convert::{TryFromBytes, TryIntoBytes};
 use async_nats::{
     connect,
     jetstream::{
-        self, consumer::pull, response, stream::Stream as JetstreamStream, Context as Jetstream,
+        self,
+        consumer::{pull, AckPolicy},
+        response,
+        stream::Stream as JetstreamStream,
+        Context as Jetstream,
     },
     HeaderMap, Message,
 };
@@ -131,6 +135,7 @@ impl EvtLog for NatsEvtLog {
                         .downcast::<response::Error>()
                         .expect("Cannot convert to async_nats response error");
                     if source.code == 10037 {
+                        debug!(%id, "No last msg found");
                         Ok(0)
                     } else {
                         Err(Error::GetLastMessage(Box::new(source)))
@@ -140,6 +145,7 @@ impl EvtLog for NatsEvtLog {
                     let msg = Message::try_from(msg).map_err(Error::FromRawMessage);
                     msg.map(|ref msg| {
                         let (seq_no, len) = seq_no_and_len(msg);
+                        debug!(%id, seq_no, len, "Last msg found");
                         seq_no + len - 1
                     })
                 },
@@ -167,6 +173,7 @@ impl EvtLog for NatsEvtLog {
             .await?
             .create_consumer(pull::Config {
                 filter_subject: format!("{}.{id}", self.stream_name),
+                ack_policy: AckPolicy::None, // Important!
                 ..Default::default()
             })
             .await
@@ -183,6 +190,7 @@ impl EvtLog for NatsEvtLog {
                     // Only convert if current message has relevant sequence number range.
                     if from_seq_no < seq_no + len {
                         let proto::Evts { evts } = proto::Evts::decode(msg.message.payload)?;
+                        debug!(len = evts.len(), "Events decoded");
                         evts.into_iter()
                             .enumerate()
                             .map(|(n, evt)| {
@@ -334,7 +342,7 @@ mod proto {
     include!(concat!(env!("OUT_DIR"), "/evt_log.nats.rs"));
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
     use crate::*;
