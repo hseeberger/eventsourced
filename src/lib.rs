@@ -5,10 +5,10 @@
 #![feature(return_position_impl_trait_in_trait)]
 #![allow(clippy::type_complexity)]
 
-pub mod binarize;
+pub mod convert;
 pub mod evt_log;
 
-use binarize::{Binarize, Debinarize};
+use convert::{TryFromBytes, TryIntoBytes};
 use evt_log::EvtLog;
 use futures::StreamExt;
 use std::fmt::Debug;
@@ -52,9 +52,7 @@ impl<E, L> Entity<E, L>
 where
     E: EventSourced + Send + 'static,
     E::Cmd: Send + 'static,
-    E::Evt: Send + Sync,
-    [E::Evt]: Binarize,
-    Vec<E::Evt>: Debinarize,
+    E::Evt: TryIntoBytes + TryFromBytes + Send + Sync,
     E::Error: Send,
     L: EvtLog + Send + 'static,
 {
@@ -280,8 +278,7 @@ mod tests {
         ) -> Result<(), Self::Error>
         where
             'b: 'a,
-            E: Send + Sync + 'a,
-            [E]: Binarize,
+            E: TryIntoBytes + Send + Sync + 'a,
         {
             Ok(())
         }
@@ -297,8 +294,7 @@ mod tests {
             _to_seq_no: u64,
         ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
         where
-            E: Send,
-            Vec<E>: Debinarize,
+            E: TryFromBytes + Send,
         {
             Ok(stream::empty())
         }

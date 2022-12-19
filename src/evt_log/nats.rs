@@ -1,7 +1,7 @@
 //! An [EvtLog] implementation based on [NATS](https://nats.io/).
 
 use super::EvtLog;
-use crate::binarize::{Binarize, Debinarize};
+use crate::convert::{TryFromBytes, TryIntoBytes};
 use async_nats::{
     connect,
     jetstream::{
@@ -10,7 +10,9 @@ use async_nats::{
     HeaderMap, Message,
 };
 use async_stream::stream;
+use bytes::BytesMut;
 use futures::{stream, Stream, StreamExt};
+use prost::{DecodeError, EncodeError, Message as ProstMessage};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Debug, Formatter},
@@ -73,8 +75,7 @@ impl EvtLog for NatsEvtLog {
     ) -> Result<(), Self::Error>
     where
         'b: 'a,
-        E: Send + Sync + 'a,
-        [E]: Binarize,
+        E: TryIntoBytes + Send + Sync + 'a,
     {
         if evts.is_empty() {
             debug!(%id, "Not publishing to NATS, because no events given");
@@ -82,9 +83,15 @@ impl EvtLog for NatsEvtLog {
         }
 
         // Serialize events.
-        let bytes = evts
-            .to_bytes()
+        let len = evts.len();
+        let evts = evts
+            .iter()
+            .map(|evt| evt.try_into_bytes().map(|bytes| bytes))
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|source| Error::BinarizeEvts(Box::new(source)))?;
+        let evts = proto::Evts { evts };
+        let mut bytes = BytesMut::new();
+        evts.encode(&mut bytes)?;
 
         // Determine NATS subject.
         let stream_name = &self.stream_name;
@@ -94,9 +101,9 @@ impl EvtLog for NatsEvtLog {
         // Publish events to NATS subject and await ACK.
         let mut headers = HeaderMap::new();
         headers.insert(SEQ_NO, (seq_no + 1).to_string().as_ref());
-        headers.insert(LEN, (evts.len()).to_string().as_ref());
+        headers.insert(LEN, (len).to_string().as_ref());
         self.jetstream
-            .publish_with_headers(subject, headers, bytes)
+            .publish_with_headers(subject, headers, bytes.into())
             .await
             .map_err(Error::PublishEvts)?
             .await
@@ -146,8 +153,7 @@ impl EvtLog for NatsEvtLog {
         to_seq_no: u64,
     ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
     where
-        E: Send,
-        Vec<E>: Debinarize,
+        E: TryFromBytes + Send,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(
@@ -176,14 +182,15 @@ impl EvtLog for NatsEvtLog {
                     let (seq_no, len) = seq_no_and_len(&msg);
                     // Only deserialize if current message has relevant sequence number range.
                     if from_seq_no < seq_no + len {
-                        <Vec<E> as Debinarize>::from_bytes(msg.message.payload)
-                            .map_err(|source| Error::DebinarizeEvts(Box::new(source)))
-                            .map(|evts| {
-                                evts.into_iter()
-                                    .enumerate()
-                                    .map(|(n, evt)| (seq_no + n as u64, evt))
-                                    .collect::<Vec<_>>()
+                        let proto::Evts { evts } = proto::Evts::decode(msg.message.payload)?;
+                        evts.into_iter()
+                            .enumerate()
+                            .map(|(n, evt)| {
+                                E::try_from_bytes(evt)
+                                    .map_err(|source| Error::DebinarizeEvts(Box::new(source)))
+                                    .map(|evt| (seq_no + n as u64, evt))
                             })
+                            .collect()
                     } else {
                         Ok(vec![])
                     }
@@ -289,6 +296,14 @@ pub enum Error {
     /// Events cannot be debinarized from a NATS message.
     #[error("Cannot debinarize events from NATS message")]
     DebinarizeEvts(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+
+    /// Events cannot be encoded as Protocol Buffers.
+    #[error("Cannot encode events as Protocol Buffers")]
+    EncodeEvts(#[from] EncodeError),
+
+    /// Events cannot be decoded from Protocol Buffers.
+    #[error("Cannot decode events from Protocol Buffers")]
+    DecodeEvts(#[from] DecodeError),
 }
 
 fn seq_no_and_len(msg: &Message) -> (u64, u64) {
@@ -313,6 +328,11 @@ where
         .unwrap_or_else(|| panic!("Missing value for {name} header"))
         .parse::<T>()
         .unwrap_or_else(|_| panic!("{name} header cannot be parsed"))
+}
+
+mod proto {
+    #![allow(clippy::derive_partial_eq_without_eq)]
+    include!(concat!(env!("OUT_DIR"), "/evt_log.nats.rs"));
 }
 
 #[cfg(test)]

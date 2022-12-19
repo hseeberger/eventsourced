@@ -9,7 +9,7 @@ use thiserror::Error;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-const ENTITY_COUNT: usize = 1000;
+const ENTITY_COUNT: usize = 200;
 const EVT_COUNT: usize = 500;
 
 #[tokio::main]
@@ -20,13 +20,12 @@ async fn main() -> Result<()> {
     let start_time = Instant::now();
     for _ in 1..=ENTITY_COUNT {
         let evt_log = evt_log.clone();
+        let counter = Entity::spawn(Uuid::now_v7(), Counter(0), evt_log)
+            .await
+            .context("Cannot spawn entity")
+            .unwrap();
         tasks.spawn(async move {
-            for n in 1..=EVT_COUNT {
-                let evt_log = (&evt_log).clone();
-                let counter = Entity::spawn(Uuid::now_v7(), Counter(0), evt_log)
-                    .await
-                    .context("Cannot spawn entity")
-                    .unwrap();
+            for n in 1..=EVT_COUNT / 2 {
                 let _ = counter
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
@@ -46,7 +45,7 @@ async fn main() -> Result<()> {
     println!(
         "Duration for {} entities with {} events each: {:?}",
         ENTITY_COUNT,
-        EVT_COUNT * 2,
+        EVT_COUNT,
         end_time - start_time
     );
 
