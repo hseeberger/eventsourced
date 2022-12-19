@@ -14,10 +14,11 @@ documentation = "https://github.com/hseeberger/eventsourced"
 async-nats       = { version = "0", optional = true }
 async-stream     = { version = "0" }
 async-trait      = { version = "0" }
-bytes            = { version = "1" }
+bytes            = { version = "1", optional = true }
 flexbuffers      = { version = "2", optional = true }
 futures          = { version = "0" }
 pin-project-lite = { version = "0" }
+prost            = { version = "0" }
 serde            = { version = "1", features = [ "derive" ] }
 serde_json       = { version = "1", optional = true }
 thiserror        = { version = "1" }
@@ -30,7 +31,11 @@ anyhow             = { version = "1" }
 testcontainers     = { version = "0" }
 tracing-subscriber = { version = "0", default-features = false, features = [ "fmt", "env-filter" ] }
 
+[build-dependencies]
+anyhow      = { version = "1" }
+prost-build = { version = "0" }
+walkdir     = { version = "2" }
+
 [features]
-default    = [ "nats", "serde-json" ]
-nats       = [ "dep:async-nats" ]
-serde-json = [ "dep:serde_json" ]
+default = [ "nats", "serde_json" ]
+nats    = [ "dep:async-nats", "dep:bytes" ]
