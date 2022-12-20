@@ -112,7 +112,7 @@ impl EvtLog for NatsEvtLog {
             .map_err(Error::PublishEvts)?
             .await
             .map_err(Error::PublishEvtsAck)?;
-        debug!(%id, "Successfully published to NATS");
+        debug!(%id, "Published to NATS");
 
         Ok(())
     }

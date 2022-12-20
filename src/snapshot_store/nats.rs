@@ -24,7 +24,7 @@ pub struct NatsSnapshotStore {
 impl NatsSnapshotStore {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "Creating NatsEvtLog");
+        debug!(?config, "Creating NatsSnapshotStore");
 
         let server_addr = config.server_addr;
         let client = connect(&server_addr).await?;
@@ -77,6 +77,8 @@ impl SnapshotStore for NatsSnapshotStore {
             .put(id.to_string(), bytes.into())
             .await
             .map_err(Error::SaveSnapshot)?;
+        debug!(%id, %seq_no, "Saved snapshot");
+
         Ok(())
     }
 
@@ -84,7 +86,8 @@ impl SnapshotStore for NatsSnapshotStore {
     where
         S: TryFromBytes,
     {
-        self.get_bucket(&self.bucket)
+        let snapshot = self
+            .get_bucket(&self.bucket)
             .await?
             .get(id.to_string())
             .await
@@ -98,7 +101,15 @@ impl SnapshotStore for NatsSnapshotStore {
                             .map(|state| Snapshot { seq_no, state })
                     })
             })
-            .transpose()
+            .transpose()?;
+
+        if snapshot.is_some() {
+            debug!(%id, "Loaded snapshot");
+        } else {
+            debug!(%id, "No snapshot to load");
+        }
+
+        Ok(snapshot)
     }
 }
 

@@ -21,7 +21,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     task,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use uuid::Uuid;
 
 /// Command and event handling for an [Entity].
@@ -142,7 +142,7 @@ where
                     }
                 }
             }
-            info!(%id, "Entity terminated");
+            debug!(%id, "Entity terminated");
         });
 
         Ok(EntityRef { id, cmd_in })
