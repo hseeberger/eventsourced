@@ -10,9 +10,9 @@ use tokio::task::JoinSet;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use uuid::Uuid;
 
-const ENTITY_COUNT: usize = 20;
-const EVT_COUNT: usize = 50000;
-const SNAPSHOT_AFTER: u64 = 20000;
+const ENTITY_COUNT: usize = 5;
+const EVT_COUNT: usize = 200000;
+const SNAPSHOT_AFTER: u64 = 1999900;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,14 +30,14 @@ async fn main() -> Result<()> {
         .map(|_| Uuid::now_v7())
         .collect::<Vec<_>>();
 
-    println!("Writing ...");
+    println!("Spawning and sending a lot of commands ...");
     let mut tasks = JoinSet::new();
     let start_time = Instant::now();
     for id in &ids {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default().with_snapshot_after(SNAPSHOT_AFTER);
-        let counter = Entity::spawn(*id, counter, evt_log, snapshot_store)
+        let counter = Entity::spawn(*id, counter, 42, evt_log, snapshot_store)
             .await
             .context("Cannot spawn entity")?;
         tasks.spawn(async move {
@@ -58,20 +58,20 @@ async fn main() -> Result<()> {
     while tasks.join_next().await.is_some() {}
     let end_time = Instant::now();
     println!(
-        "Duration for writing {} entities with {} events each: {:?}",
+        "Duration for spawning {} entities and sending {} commands to each: {:?}",
         ENTITY_COUNT,
         EVT_COUNT,
         end_time - start_time
     );
 
-    println!("Reading ...");
+    println!("Spawning the above entities again ...");
     let mut tasks = JoinSet::new();
     let start_time = Instant::now();
     for id in ids {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
-            let _counter = Entity::spawn(id, Counter::default(), evt_log, snapshot_store)
+            let _counter = Entity::spawn(id, Counter::default(), 42, evt_log, snapshot_store)
                 .await
                 .context("Cannot spawn entity")
                 .unwrap();
@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
     let end_time = Instant::now();
 
     println!(
-        "Duration for reading {} entities with {} events each: {:?}",
+        "Duration for spawning {} entities with {} events each: {:?}",
         ENTITY_COUNT,
         EVT_COUNT,
         end_time - start_time

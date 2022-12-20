@@ -32,24 +32,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
+    use serde::Deserialize;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    struct Foo(u64);
 
     #[test]
-    fn test_string() {
-        let s = "test".to_string();
+    fn test() {
+        let foo = Foo(42);
 
-        let bytes = s.try_into_bytes();
+        let bytes = foo.try_into_bytes();
         assert!(bytes.is_ok());
         let bytes = bytes.unwrap();
 
-        let value = serde_json::from_slice::<Value>(&bytes);
-        assert!(value.is_ok());
-        let value = value.unwrap();
-        assert_eq!(value, Value::String("test".to_string()));
-
-        let s_2 = <String as TryFromBytes>::try_from_bytes(bytes);
-        assert!(s_2.is_ok());
-        let s_2 = s_2.unwrap();
-        assert_eq!(s_2, s);
+        let bar = <Foo as TryFromBytes>::try_from_bytes(bytes);
+        assert!(bar.is_ok());
+        let bar = bar.unwrap();
+        assert_eq!(bar, foo);
     }
 }
