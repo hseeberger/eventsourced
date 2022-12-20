@@ -17,7 +17,7 @@ pub trait EvtLog {
         &'a mut self,
         id: Uuid,
         evts: &'b [E],
-        seq_no: u64,
+        last_seq_no: u64,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'a
     where
         'b: 'a,
@@ -29,11 +29,11 @@ pub trait EvtLog {
     /// Get the events for the entity with the given ID in the given closed range of sequence
     /// numbers.
     async fn evts_by_id<E>(
-        &mut self,
+        &self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
-    ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
     where
         E: TryFromBytes + Send;
 }

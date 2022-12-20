@@ -40,3 +40,7 @@ walkdir     = { version = "2", optional = true }
 default = [ "nats", "serde_json" ]
 nats    = [ "dep:async-nats", "dep:prost", "dep:prost-build", "dep:walkdir" ]
 prost   = [ "dep:prost" ]
+
+[[example]]
+name       = "counter"
+crate-type = [ "lib" ]

@@ -37,14 +37,6 @@ pub struct NatsEvtLog {
     stream_name: String,
 }
 
-impl Debug for NatsEvtLog {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NatsEvtLog")
-            .field("stream_name", &self.stream_name)
-            .finish()
-    }
-}
-
 impl NatsEvtLog {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
@@ -68,6 +60,14 @@ impl NatsEvtLog {
     }
 }
 
+impl Debug for NatsEvtLog {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NatsEvtLog")
+            .field("stream_name", &self.stream_name)
+            .finish()
+    }
+}
+
 impl EvtLog for NatsEvtLog {
     type Error = Error;
 
@@ -75,7 +75,7 @@ impl EvtLog for NatsEvtLog {
         &'a mut self,
         id: Uuid,
         evts: &'b [E],
-        seq_no: u64,
+        last_seq_no: u64,
     ) -> Result<(), Self::Error>
     where
         'b: 'a,
@@ -104,7 +104,7 @@ impl EvtLog for NatsEvtLog {
 
         // Publish events to NATS subject and await ACK.
         let mut headers = HeaderMap::new();
-        headers.insert(SEQ_NO, (seq_no + 1).to_string().as_ref());
+        headers.insert(SEQ_NO, (last_seq_no + 1).to_string().as_ref());
         headers.insert(LEN, (len).to_string().as_ref());
         self.jetstream
             .publish_with_headers(subject, headers, bytes.into())
@@ -153,11 +153,11 @@ impl EvtLog for NatsEvtLog {
     }
 
     async fn evts_by_id<E>(
-        &mut self,
+        &self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
-    ) -> Result<impl Stream<Item = Result<E, Self::Error>>, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
     where
         E: TryFromBytes + Send,
     {
@@ -215,9 +215,9 @@ impl EvtLog for NatsEvtLog {
             for await evt in evts {
                 match evt {
                     Ok((n, _ev)) if n < from_seq_no => continue,
-                    Ok((n, evt)) if from_seq_no <= n && n < to_seq_no => yield Ok(evt),
+                    Ok((n, evt)) if from_seq_no <= n && n < to_seq_no => yield Ok((n, evt)),
                     Ok((n, evt)) if n == to_seq_no => {
-                        yield Ok(evt);
+                        yield Ok((n, evt));
                         break;
                     }
                     Ok(_) => break, // to_seq_no < seq_no
@@ -252,7 +252,7 @@ impl Config {
 }
 
 impl Default for Config {
-    /// Use "localhost:4222" for `server_addr` and "evts" for `subject_prefix`.
+    /// Use "localhost:4222" for `server_addr` and "evts" for `stream_name`.
     fn default() -> Self {
         Self::new("localhost:4222", "evts")
     }
@@ -345,7 +345,10 @@ mod proto {
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
-    use crate::*;
+    use crate::{
+        snapshot_store::nats::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore},
+        Entity, EventSourced,
+    };
     use anyhow::anyhow;
     use futures::StreamExt;
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage, Container};
@@ -368,16 +371,34 @@ mod tests {
             })
             .await
             .map_err(|error| anyhow!(error))?;
+        let _ = jetstream
+            .create_key_value(jetstream::kv::Config {
+                bucket: "snapshots".to_string(),
+                ..Default::default()
+            })
+            .await
+            .map_err(|error| anyhow!(error))?;
         Ok(())
     }
 
     async fn create_evt_log(server_addr: String) -> Result<NatsEvtLog, Box<dyn std::error::Error>> {
         let config = Config {
             server_addr,
-            stream_name: "evts".to_string(),
+            ..Default::default()
         };
         let nats_event_log = NatsEvtLog::new(config).await?;
         Ok(nats_event_log)
+    }
+
+    async fn create_snapshot_store(
+        server_addr: String,
+    ) -> Result<NatsSnapshotStore, Box<dyn std::error::Error>> {
+        let config = NatsSnapshotStoreConfig {
+            server_addr,
+            ..Default::default()
+        };
+        let nats_snapshot_store = NatsSnapshotStore::new(config).await?;
+        Ok(nats_snapshot_store)
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -408,6 +429,8 @@ mod tests {
 
         type Evt = Evt;
 
+        type State = u64;
+
         type Error = Error;
 
         fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error> {
@@ -435,11 +458,21 @@ mod tests {
             }
         }
 
-        fn handle_evt(&mut self, evt: &Self::Evt) {
+        fn handle_evt(&mut self, _seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
             match evt {
-                Evt::Increased { old_value: _, inc } => self.0 += inc,
-                Evt::Decreased { old_value: _, dec } => self.0 -= dec,
+                Evt::Increased { old_value: _, inc } => {
+                    self.0 += inc;
+                    None
+                }
+                Evt::Decreased { old_value: _, dec } => {
+                    self.0 -= dec;
+                    None
+                }
             }
+        }
+
+        fn set_state(&mut self, state: Self::State) {
+            self.0 = state;
         }
     }
 
@@ -471,7 +504,7 @@ mod tests {
         let evts = evts.collect::<Vec<_>>().await;
         let evts = evts
             .into_iter()
-            .filter_map(|evt| evt.ok())
+            .filter_map(|evt| evt.ok().map(|(_, evt)| evt))
             .collect::<Vec<_>>();
         assert_eq!(evts, (2..=8).collect::<Vec<_>>());
 
@@ -485,7 +518,8 @@ mod tests {
         let container = setup_testcontainers(&client);
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
         setup_jetstream(&server_addr).await?;
-        let mut evt_log = create_evt_log(server_addr).await?;
+        let mut evt_log = create_evt_log(server_addr.clone()).await?;
+        let snapshot_store = create_snapshot_store(server_addr).await?;
         let id = Uuid::now_v7();
 
         // Populate the event log with some events.
@@ -507,7 +541,7 @@ mod tests {
             .await?;
 
         // Create an entity.
-        let counter = Entity::spawn(id, Counter(0), evt_log).await?;
+        let counter = Entity::spawn(id, Counter(0), evt_log, snapshot_store).await?;
 
         // Handle a valid command.
         let evts = counter.handle_cmd(Cmd::Inc(1)).await?;
