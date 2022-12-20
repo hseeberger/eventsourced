@@ -100,7 +100,6 @@ impl EvtLog for NatsEvtLog {
         // Determine NATS subject.
         let stream_name = &self.stream_name;
         let subject = format!("{stream_name}.{id}");
-        debug!(%id, ?subject, "Publishing to NATS");
 
         // Publish events to NATS subject and await ACK.
         let mut headers = HeaderMap::new();
@@ -112,7 +111,6 @@ impl EvtLog for NatsEvtLog {
             .map_err(Error::PublishEvts)?
             .await
             .map_err(Error::PublishEvtsAck)?;
-        debug!(%id, "Published to NATS");
 
         Ok(())
     }
@@ -167,6 +165,8 @@ impl EvtLog for NatsEvtLog {
             "from_seq_no must be less than or equal to to_seq_no"
         );
 
+        debug!(%id, from_seq_no, to_seq_no, "Building event stream");
+
         // Get message stream
         let msgs = self
             .get_stream()
@@ -190,7 +190,6 @@ impl EvtLog for NatsEvtLog {
                     // Only convert if current message has relevant sequence number range.
                     if from_seq_no < seq_no + len {
                         let proto::Evts { evts } = proto::Evts::decode(msg.message.payload)?;
-                        debug!(len = evts.len(), "Events decoded");
                         evts.into_iter()
                             .enumerate()
                             .map(|(n, evt)| {
@@ -541,7 +540,7 @@ mod tests {
             .await?;
 
         // Create an entity.
-        let counter = Entity::spawn(id, Counter(0), evt_log, snapshot_store).await?;
+        let counter = Entity::spawn(id, Counter(0), 42, evt_log, snapshot_store).await?;
 
         // Handle a valid command.
         let evts = counter.handle_cmd(Cmd::Inc(1)).await?;

@@ -25,3 +25,23 @@ where
         T::decode(bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_string() {
+        // Prost comes with `Message` implementations for basic types like `String`.
+        let s = "test".to_string();
+
+        let bytes = s.try_into_bytes();
+        assert!(bytes.is_ok());
+        let bytes = bytes.unwrap();
+
+        let s_2 = <String as TryFromBytes>::try_from_bytes(bytes);
+        assert!(s_2.is_ok());
+        let s_2 = s_2.unwrap();
+        assert_eq!(s_2, s);
+    }
+}

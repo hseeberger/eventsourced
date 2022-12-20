@@ -12,7 +12,7 @@ use uuid::Uuid;
 pub trait EvtLog {
     type Error: std::error::Error;
 
-    /// Persist the given events for the given entity ID.
+    /// Persist the given events for the given entity ID and the given last sequence number.
     fn persist<'a, 'b, E>(
         &'a mut self,
         id: Uuid,
@@ -26,8 +26,7 @@ pub trait EvtLog {
     /// Get the last sequence number for the given entity ID.
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error>;
 
-    /// Get the events for the entity with the given ID in the given closed range of sequence
-    /// numbers.
+    /// Get the events for the given ID in the given closed range of sequence numbers.
     async fn evts_by_id<E>(
         &self,
         id: Uuid,

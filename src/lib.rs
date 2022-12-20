@@ -9,11 +9,12 @@ pub mod convert;
 pub mod evt_log;
 pub mod snapshot_store;
 
-use crate::snapshot_store::Snapshot;
-use convert::{TryFromBytes, TryIntoBytes};
-use evt_log::EvtLog;
+use crate::{
+    convert::{TryFromBytes, TryIntoBytes},
+    evt_log::EvtLog,
+    snapshot_store::{Snapshot, SnapshotStore},
+};
 use futures::StreamExt;
-use snapshot_store::SnapshotStore;
 use std::fmt::Debug;
 use thiserror::Error;
 use tokio::{
@@ -24,7 +25,7 @@ use tokio::{
 use tracing::{debug, error};
 use uuid::Uuid;
 
-/// Command and event handling for an [Entity].
+/// Command and event handling for an event sourced [Entity].
 pub trait EventSourced {
     /// Command type.
     type Cmd: Debug;
@@ -32,7 +33,7 @@ pub trait EventSourced {
     /// Event type.
     type Evt: Debug;
 
-    /// (Snapshot) state type.
+    /// Snapshot state type.
     type State;
 
     /// Error type for the command handler.
@@ -44,12 +45,16 @@ pub trait EventSourced {
     /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, seq_no: u64, evt: &Self::Evt) -> Option<Self::State>;
 
-    /// (Snapshot) state handler.
+    /// Snapshot state handler.
     fn set_state(&mut self, state: Self::State);
 }
 
-/// An entity, uniquely identifiable by its ID, able to handle commands via its [EventSourced]
-/// value. If a command successfully produces events, these get persisted to its [EvtLog].
+/// An event sourced entity, uniquely identified by its ID.
+///
+/// Commands are handled by the command handler of its [EventSourced] value. Valid commands may
+/// produce events which get persisted along with an increasing sequence number to its [EvtLog] and
+/// then applied to the event handler of its [EventSourced] value. The event handler may decide to
+/// save a snapshot at the current sequence number which is used to speed up spawning.
 pub struct Entity<E, L, S> {
     id: Uuid,
     seq_no: u64,
@@ -68,20 +73,28 @@ where
     L: EvtLog + Send + 'static,
     S: SnapshotStore + Send + 'static,
 {
-    /// Create an [Entity] with the given ID, [EventSourced] command/event handling and [EvtLog].
-    /// Commands can be sent by invoking `handle_cmd` on the returned [EntityRef].
+    /// Spawns an event sourced [Entity] with the given ID and creates an [EntityRef] for it.
+    ///
+    /// Commands can be sent by invoking `handle_cmd` on the returned [EntityRef] which uses a
+    /// buffered channel with the given size.
+    ///
+    /// First the given [SnapshotStore] is used to find and possibly load a snapshot. Then the
+    /// [EvtLog] is used to find the last sequence number and then to load any remaining events.
     pub async fn spawn(
         id: Uuid,
         mut event_sourced: E,
+        buffer: usize,
         evt_log: L,
         snapshot_store: S,
-    ) -> Result<EntityRef<E>, EntityError<L, S>> {
+    ) -> Result<EntityRef<E>, SpawnEntityError<L, S>> {
+        assert!(buffer >= 1, "buffer must be positive");
+
         // Restore snapshot.
         let mut snapshot_seq_no = None;
         if let Some(Snapshot { seq_no, state }) = snapshot_store
             .load::<E::State>(id)
             .await
-            .map_err(EntityError::LoadSnapshot)?
+            .map_err(SpawnEntityError::LoadSnapshot)?
         {
             debug!(%id, seq_no, "Restoring snapshot");
             event_sourced.set_state(state);
@@ -93,7 +106,7 @@ where
         let last_seq_no = evt_log
             .last_seq_no(id)
             .await
-            .map_err(EntityError::LastSeqNo)?;
+            .map_err(SpawnEntityError::LastSeqNo)?;
         assert!(
             snapshot_seq_no <= last_seq_no,
             "snapshot_seq_no must be less than or equal to last_seq_no"
@@ -104,10 +117,10 @@ where
             let evts = evt_log
                 .evts_by_id::<E::Evt>(id, from_seq_no, last_seq_no)
                 .await
-                .map_err(EntityError::EvtsById)?;
+                .map_err(SpawnEntityError::EvtsById)?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
-                let (seq_no, evt) = evt.map_err(EntityError::NextEvt)?;
+                let (seq_no, evt) = evt.map_err(SpawnEntityError::NextEvt)?;
                 event_sourced.handle_evt(seq_no, &evt);
             }
         }
@@ -122,9 +135,8 @@ where
         };
         debug!(%id, "Entity created");
 
-        // TODO Make EntityRef channel buffer size configurable!
         let (cmd_in, mut cmd_out) =
-            mpsc::channel::<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>(42);
+            mpsc::channel::<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>(buffer);
 
         // Spawn handler loop.
         task::spawn(async move {
@@ -188,13 +200,17 @@ where
     }
 }
 
-/// Errors from an [Entity].
+/// Errors from spawning an event sourced [Entity].
 #[derive(Debug, Error)]
-pub enum EntityError<L, S>
+pub enum SpawnEntityError<L, S>
 where
     L: EvtLog + 'static,
     S: SnapshotStore + 'static,
 {
+    /// A snapshot cannot be loaded from the snapshot store.
+    #[error("Cannot load snapshot from snapshot store")]
+    LoadSnapshot(#[source] S::Error),
+
     /// The last seqence number cannot be obtained from the event log.
     #[error("Cannot get last seqence number from event log")]
     LastSeqNo(#[source] L::Error),
@@ -206,13 +222,9 @@ where
     /// The next event cannot be obtained from the event log.
     #[error("Cannot get next event from event log")]
     NextEvt(#[source] L::Error),
-
-    /// A snapshot cannot be loaded from the snapshot store.
-    #[error("Cannot load snapshot from snapshot store")]
-    LoadSnapshot(#[source] S::Error),
 }
 
-/// A proxy to a spawned [Entity] which can be used to invoke its command handler.
+/// A proxy to a spawned event sourced [Entity] which can be used to invoke its command handler.
 #[derive(Debug, Clone)]
 pub struct EntityRef<E>
 where
@@ -226,12 +238,12 @@ impl<E> EntityRef<E>
 where
     E: EventSourced + 'static,
 {
-    /// Get the ID of the proxied [Entity].
+    /// Get the ID of the proxied event sourced [Entity].
     pub fn id(&self) -> Uuid {
         self.id
     }
 
-    /// Invoke the command handler of the proxied [Entity].
+    /// Invoke the command handler of the proxied event sourced [Entity].
     pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Vec<E::Evt>, EntityRefError<E>> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in.send((cmd, result_in)).await?;
@@ -245,20 +257,25 @@ pub enum EntityRefError<E>
 where
     E: EventSourced + 'static,
 {
-    /// A command cannot be sent from an [EntityRef] to its [Entity].
-    #[error("Cannot send command from EntityRef to Entity")]
+    /// An invalid command has been rejected by a command hander. This is considered a client
+    /// error, like 400 Bad Request, i.e. normal behavior of the event sourced [Entity] and its
+    /// [EntityRef].
+    #[error("Invalid command rejected by command handler")]
+    InvalidCommand(#[source] E::Error),
+
+    /// A command cannot be sent from an [EntityRef] to its [Entity]. This is considered an
+    /// internal error, like 500 Internal Server Error, i.e. erroneous behavior of the event
+    /// sourced [Entity] and its [EntityRef].
+    #[error("Cannot send command to Entity")]
     SendCmd(
         #[from] mpsc::error::SendError<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
     ),
 
-    /// An [EntityRef] cannot receive the command handler result, because its entity has
-    /// terminated.
-    #[error("Cannot receive command handler result, because entity has terminated")]
+    /// An [EntityRef] cannot receive the command handler result from its [Entity], potentially
+    /// because its entity has terminated. This is considered an internal error, like 500 Internal
+    /// Server Error, i.e. erroneous behavior of the event sourced [Entity] and its [EntityRef].
+    #[error("Cannot receive command handler result from Entity")]
     EntityTerminated(#[from] oneshot::error::RecvError),
-
-    /// An invalid command has been rejected by a command hander.
-    #[error("Invalid command rejected by command handler")]
-    InvalidCommand(#[source] E::Error),
 }
 
 #[cfg(all(test, feature = "serde_json"))]
@@ -429,7 +446,8 @@ mod tests {
         let event_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity = Entity::spawn(Uuid::now_v7(), Counter(0), event_log, snapshot_store).await?;
+        let entity =
+            Entity::spawn(Uuid::now_v7(), Counter(0), 42, event_log, snapshot_store).await?;
 
         let evts = entity.handle_cmd(Cmd::Inc(1)).await?;
         assert_eq!(
