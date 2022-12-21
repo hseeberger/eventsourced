@@ -10,9 +10,9 @@ use tokio::task::JoinSet;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use uuid::Uuid;
 
-const ENTITY_COUNT: usize = 5;
-const EVT_COUNT: usize = 200000;
-const SNAPSHOT_AFTER: u64 = 1999900;
+const ENTITY_COUNT: usize = 20;
+const EVT_COUNT: usize = 50000;
+const SNAPSHOT_AFTER: u64 = 49000;
 
 #[tokio::main]
 async fn main() -> Result<()> {

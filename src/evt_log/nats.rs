@@ -1,12 +1,15 @@
 //! An [EvtLog] implementation based on [NATS](https://nats.io/).
 
 use super::EvtLog;
-use crate::convert::{TryFromBytes, TryIntoBytes};
+use crate::{
+    convert::{TryFromBytes, TryIntoBytes},
+    Meta,
+};
 use async_nats::{
     connect,
     jetstream::{
         self,
-        consumer::{pull, AckPolicy},
+        consumer::{pull, AckPolicy, DeliverPolicy},
         response,
         stream::Stream as JetstreamStream,
         Context as Jetstream,
@@ -76,15 +79,12 @@ impl EvtLog for NatsEvtLog {
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
-    ) -> Result<(), Self::Error>
+    ) -> Result<Meta, Self::Error>
     where
         'b: 'a,
         E: TryIntoBytes + Send + Sync + 'a,
     {
-        if evts.is_empty() {
-            debug!(%id, "Not publishing to NATS, because no events given");
-            return Ok(());
-        }
+        assert!(!evts.is_empty(), "evts must not be empty");
 
         // Convert events into bytes.
         let len = evts.len();
@@ -105,14 +105,16 @@ impl EvtLog for NatsEvtLog {
         let mut headers = HeaderMap::new();
         headers.insert(SEQ_NO, (last_seq_no + 1).to_string().as_ref());
         headers.insert(LEN, (len).to_string().as_ref());
-        self.jetstream
+        let ack = self
+            .jetstream
             .publish_with_headers(subject, headers, bytes.into())
             .await
             .map_err(Error::PublishEvts)?
             .await
             .map_err(Error::PublishEvtsAck)?;
+        let meta = Box::new(ack.sequence);
 
-        Ok(())
+        Ok(Some(meta))
     }
 
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error> {
@@ -155,6 +157,7 @@ impl EvtLog for NatsEvtLog {
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
+        meta: Meta,
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
     where
         E: TryFromBytes + Send,
@@ -168,12 +171,17 @@ impl EvtLog for NatsEvtLog {
         debug!(%id, from_seq_no, to_seq_no, "Building event stream");
 
         // Get message stream
+        let deliver_policy = match meta.and_then(|meta| meta.downcast_ref::<u64>().copied()) {
+            Some(start_sequence) => DeliverPolicy::ByStartSequence { start_sequence },
+            None => DeliverPolicy::All,
+        };
         let msgs = self
             .get_stream()
             .await?
             .create_consumer(pull::Config {
                 filter_subject: format!("{}.{id}", self.stream_name),
                 ack_policy: AckPolicy::None, // Important!
+                deliver_policy,
                 ..Default::default()
             })
             .await
@@ -499,7 +507,7 @@ mod tests {
         assert_eq!(last_seq_no, 1009);
 
         // Verify `evts_by_id`.
-        let evts = evt_log.evts_by_id::<u32>(id, 1002, 1008).await?;
+        let evts = evt_log.evts_by_id::<u32>(id, 1002, 1008, None).await?;
         let evts = evts.collect::<Vec<_>>().await;
         let evts = evts
             .into_iter()

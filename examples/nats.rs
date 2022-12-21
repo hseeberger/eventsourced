@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
 
     // Get events
     let evts = evt_log
-        .evts_by_id::<u32>(id, 1002, 1008)
+        .evts_by_id::<u32>(id, 1002, 1008, None)
         .await
         .context("Cannot get events")?;
     info!("Got events");

@@ -3,7 +3,10 @@
 #[cfg(feature = "nats")]
 pub mod nats;
 
-use crate::convert::{TryFromBytes, TryIntoBytes};
+use crate::{
+    convert::{TryFromBytes, TryIntoBytes},
+    Meta,
+};
 use std::future::Future;
 use uuid::Uuid;
 
@@ -17,6 +20,7 @@ pub trait SnapshotStore {
         id: Uuid,
         seq_no: u64,
         state: &'b S,
+        meta: Meta,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'a
     where
         'b: 'a,
@@ -32,4 +36,5 @@ pub trait SnapshotStore {
 pub struct Snapshot<S> {
     pub(crate) seq_no: u64,
     pub(crate) state: S,
+    pub(crate) meta: Meta,
 }
