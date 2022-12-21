@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package snapshot_store.nats;
+
+// A snapshot of an event sourced entity with its sequence number, state and
+// optional NATS stream sequence number.
+message Snapshot {
+  // The sequence number of the event sourced entity.
+  uint64 seq_no = 1;
+
+  // The state of the event sourced entity.
+  bytes state = 2;
+
+  // The optional sequence of the NATS stream.
+  optional uint64 sequence = 3;
+}

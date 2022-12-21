@@ -2,5 +2,8 @@ syntax = "proto3";
 
 package evt_log.nats;
 
-// A sequence of events.
-message Evts { repeated bytes evts = 1; }
+// A sequence of binarized events.
+message Evts {
+  // A sequence of binarized events.
+  repeated bytes evts = 1;
+}

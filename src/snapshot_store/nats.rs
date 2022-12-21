@@ -1,7 +1,10 @@
 //! A [SnapshotStore] implementation based on [NATS](https://nats.io/).
 
 use super::{Snapshot, SnapshotStore};
-use crate::convert::{TryFromBytes, TryIntoBytes};
+use crate::{
+    convert::{TryFromBytes, TryIntoBytes},
+    Meta,
+};
 use async_nats::{
     connect,
     jetstream::{self, kv::Store, Context as Jetstream},
@@ -9,7 +12,10 @@ use async_nats::{
 use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 use serde::{Deserialize, Serialize};
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    any::Any,
+    fmt::{self, Debug, Formatter},
+};
 use thiserror::Error;
 use tracing::debug;
 use uuid::Uuid;
@@ -60,6 +66,7 @@ impl SnapshotStore for NatsSnapshotStore {
         id: Uuid,
         seq_no: u64,
         state: &'b S,
+        meta: Meta,
     ) -> Result<(), Self::Error>
     where
         'b: 'a,
@@ -69,7 +76,12 @@ impl SnapshotStore for NatsSnapshotStore {
         let state = state
             .try_into_bytes()
             .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
-        let snapshot = proto::Snapshot { seq_no, state };
+        let sequence = meta.and_then(|meta| meta.downcast_ref::<u64>().copied());
+        let snapshot = proto::Snapshot {
+            seq_no,
+            state,
+            sequence,
+        };
         snapshot.encode(&mut bytes)?;
 
         self.get_bucket(&self.bucket)
@@ -95,11 +107,27 @@ impl SnapshotStore for NatsSnapshotStore {
             .map(|bytes| {
                 proto::Snapshot::decode(Bytes::from(bytes))
                     .map_err(Error::DecodeEvts)
-                    .and_then(|proto::Snapshot { seq_no, state }| {
-                        S::try_from_bytes(state)
-                            .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
-                            .map(|state| Snapshot { seq_no, state })
-                    })
+                    .and_then(
+                        |proto::Snapshot {
+                             seq_no,
+                             state,
+                             sequence,
+                         }| {
+                            S::try_from_bytes(state)
+                                .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                                .map(|state| {
+                                    let meta = sequence.map(|s| {
+                                        let b: Box<dyn Any + Send> = Box::new(s);
+                                        b
+                                    });
+                                    Snapshot {
+                                        seq_no,
+                                        state,
+                                        meta,
+                                    }
+                                })
+                        },
+                    )
             })
             .transpose()?;
 

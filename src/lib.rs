@@ -15,7 +15,7 @@ use crate::{
     snapshot_store::{Snapshot, SnapshotStore},
 };
 use futures::StreamExt;
-use std::fmt::Debug;
+use std::{any::Any, fmt::Debug};
 use thiserror::Error;
 use tokio::{
     pin,
@@ -90,17 +90,22 @@ where
         assert!(buffer >= 1, "buffer must be positive");
 
         // Restore snapshot.
-        let mut snapshot_seq_no = None;
-        if let Some(Snapshot { seq_no, state }) = snapshot_store
+        let (snapshot_seq_no, meta) = snapshot_store
             .load::<E::State>(id)
             .await
             .map_err(SpawnEntityError::LoadSnapshot)?
-        {
-            debug!(%id, seq_no, "Restoring snapshot");
-            event_sourced.set_state(state);
-            snapshot_seq_no = Some(seq_no);
-        }
-        let snapshot_seq_no = snapshot_seq_no.unwrap_or(0);
+            .map(
+                |Snapshot {
+                     seq_no,
+                     state,
+                     meta,
+                 }| {
+                    debug!(%id, seq_no, "Restoring snapshot");
+                    event_sourced.set_state(state);
+                    (seq_no, meta)
+                },
+            )
+            .unwrap_or((0, None));
 
         // Replay latest events.
         let last_seq_no = evt_log
@@ -115,7 +120,7 @@ where
             let from_seq_no = snapshot_seq_no + 1;
             debug!(%id, from_seq_no, last_seq_no , "Replaying evts");
             let evts = evt_log
-                .evts_by_id::<E::Evt>(id, from_seq_no, last_seq_no)
+                .evts_by_id::<E::Evt>(id, from_seq_no, last_seq_no, meta)
                 .await
                 .map_err(SpawnEntityError::EvtsById)?;
             pin!(evts);
@@ -181,18 +186,21 @@ where
             // Persist events
             // TODO Remove this helper once async fn in trait is stable!
             let send_fut = make_send(self.evt_log.persist(self.id, &evts, self.seq_no));
-            send_fut.await?;
+            let meta = send_fut.await?;
 
             // Handle persisted events
-            for evt in &evts {
+            let state = evts.iter().fold(None, |state, evt| {
                 self.seq_no += 1;
-                if let Some(state) = self.event_sourced.handle_evt(self.seq_no, evt) {
-                    debug!(id = %self.id, seq_no = self.seq_no, "Saving snapshot");
-                    // TODO Remove this helper once async fn in trait is stable!
-                    let send_fut =
-                        make_send(self.snapshot_store.save(self.id, self.seq_no, &state));
-                    send_fut.await?;
-                }
+                self.event_sourced.handle_evt(self.seq_no, evt).or(state)
+            });
+
+            // Persist latest snapshot if any
+            if let Some(state) = state {
+                debug!(id = %self.id, seq_no = self.seq_no, "Saving snapshot");
+                // TODO Remove this helper once async fn in trait is stable!
+                let send_fut =
+                    make_send(self.snapshot_store.save(self.id, self.seq_no, &state, meta));
+                send_fut.await?;
             }
         }
 
@@ -277,6 +285,8 @@ where
     #[error("Cannot receive command handler result from Entity")]
     EntityTerminated(#[from] oneshot::error::RecvError),
 }
+
+pub type Meta = Option<Box<dyn Any + Send>>;
 
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
@@ -371,12 +381,12 @@ mod tests {
             _entity_id: Uuid,
             _evts: &'b [E],
             _seq_no: u64,
-        ) -> Result<(), Self::Error>
+        ) -> Result<Meta, Self::Error>
         where
             'b: 'a,
             E: TryIntoBytes + Send + Sync + 'a,
         {
-            Ok(())
+            Ok(None)
         }
 
         async fn last_seq_no(&self, _entity_id: Uuid) -> Result<u64, Self::Error> {
@@ -388,6 +398,7 @@ mod tests {
             _entity_id: Uuid,
             _from_seq_no: u64,
             _to_seq_no: u64,
+            _meta: Meta,
         ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
         where
             E: TryFromBytes + Send,
@@ -419,6 +430,7 @@ mod tests {
             _id: Uuid,
             _seq_no: u64,
             _state: &'b S,
+            _meta: Meta,
         ) -> Result<(), Self::Error>
         where
             'b: 'a,
@@ -433,7 +445,11 @@ mod tests {
         {
             let bytes = serde_json::to_value(42).unwrap().to_string().into();
             let state = S::try_from_bytes(bytes).unwrap();
-            Ok(Some(Snapshot { seq_no: 42, state }))
+            Ok(Some(Snapshot {
+                seq_no: 42,
+                state,
+                meta: None,
+            }))
         }
     }
 
