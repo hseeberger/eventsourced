@@ -1,9 +1,4 @@
-// This is a library example to be included into default (binary) examples!
-
 use anyhow::Result;
-use eventsourced::EventSourced;
-#[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::debug;
 
@@ -28,15 +23,40 @@ pub enum Cmd {
     Dec(u64),
 }
 
-#[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Evt {
-    Increased { old_value: u64, inc: u64 },
-    Decreased { old_value: u64, dec: u64 },
+//include!(concat!(env!("OUT_DIR"), "/counter.rs"));
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Evt {
+    #[prost(oneof = "evt::Evt", tags = "1, 2")]
+    pub evt: ::core::option::Option<evt::Evt>,
 }
-
-#[cfg(feature = "prost")]
-include!(concat!(env!("OUT_DIR"), "/example.counter.rs"));
+/// Nested message and enum types in `Evt`.
+pub mod evt {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Evt {
+        #[prost(message, tag = "1")]
+        Increased(super::Increased),
+        #[prost(message, tag = "2")]
+        Decreased(super::Decreased),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Increased {
+    #[prost(uint64, tag = "1")]
+    pub old_value: u64,
+    #[prost(uint64, tag = "2")]
+    pub inc: u64,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Decreased {
+    #[prost(uint64, tag = "1")]
+    pub old_value: u64,
+    #[prost(uint64, tag = "2")]
+    pub dec: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum Error {
@@ -64,14 +84,6 @@ impl EventSourced for Counter {
                         inc,
                     })
                 } else {
-                    #[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
-                    {
-                        Ok(vec![Evt::Increased {
-                            old_value: self.value,
-                            inc,
-                        }])
-                    }
-                    #[cfg(feature = "prost")]
                     Ok(vec![Evt {
                         evt: Some(evt::Evt::Increased(Increased {
                             old_value: self.value,
@@ -87,14 +99,6 @@ impl EventSourced for Counter {
                         dec,
                     })
                 } else {
-                    #[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
-                    {
-                        Ok(vec![Evt::Decreased {
-                            old_value: self.value,
-                            dec,
-                        }])
-                    }
-                    #[cfg(feature = "prost")]
                     Ok(vec![Evt {
                         evt: Some(evt::Evt::Decreased(Decreased {
                             old_value: self.value,
@@ -106,38 +110,15 @@ impl EventSourced for Counter {
         }
     }
 
-    #[cfg(any(feature = "serde_json", feature = "flexbuffers"))]
-    fn handle_evt(&mut self, seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
-        match evt {
-            Evt::Increased { old_value, inc } => {
-                self.value += inc;
-                debug!(old_value, inc, value = self.value, "Increased")
-            }
-            Evt::Decreased { old_value, dec } => {
-                self.value -= dec;
-                debug!(old_value, dec, value = self.value, "Decreased")
-            }
-        }
-
-        self.snapshot_after.and_then(|snapshot_after| {
-            if seq_no % snapshot_after == 0 {
-                Some(self.value)
-            } else {
-                None
-            }
-        })
-    }
-
-    #[cfg(feature = "prost")]
     fn handle_evt(&mut self, seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
         match evt.evt {
             Some(evt::Evt::Increased(Increased { old_value, inc })) => {
                 self.value += inc;
-                debug!(seq_no, old_value, inc, value = self.value, "Increased")
+                debug!(seq_no, old_value, inc, value = self.value, "Increased");
             }
             Some(evt::Evt::Decreased(Decreased { old_value, dec })) => {
                 self.value -= dec;
-                debug!(seq_no, old_value, dec, value = self.value, "Decreased")
+                debug!(seq_no, old_value, dec, value = self.value, "Decreased");
             }
             None => panic!("evt is a mandatory field"),
         }

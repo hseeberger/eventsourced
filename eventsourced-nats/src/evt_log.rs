@@ -1,10 +1,5 @@
 //! An [EvtLog] implementation based on [NATS](https://nats.io/).
 
-use super::EvtLog;
-use crate::{
-    convert::{TryFromBytes, TryIntoBytes},
-    Meta,
-};
 use async_nats::{
     connect,
     jetstream::{
@@ -18,6 +13,10 @@ use async_nats::{
 };
 use async_stream::stream;
 use bytes::BytesMut;
+use eventsourced::{
+    convert::{TryFromBytes, TryIntoBytes},
+    EvtLog, Metadata,
+};
 use futures::{stream, Stream, StreamExt};
 use prost::{DecodeError, EncodeError, Message as ProstMessage};
 use serde::{Deserialize, Serialize};
@@ -61,6 +60,19 @@ impl NatsEvtLog {
             .await
             .map_err(Error::GetStream)
     }
+
+    #[cfg(test)]
+    pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _ = self
+            .jetstream
+            .create_stream(jetstream::stream::Config {
+                name: "evts".to_string(),
+                subjects: vec!["evts.>".to_string()],
+                ..Default::default()
+            })
+            .await?;
+        Ok(())
+    }
 }
 
 impl Debug for NatsEvtLog {
@@ -79,7 +91,7 @@ impl EvtLog for NatsEvtLog {
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
-    ) -> Result<Meta, Self::Error>
+    ) -> Result<Metadata, Self::Error>
     where
         'b: 'a,
         E: TryIntoBytes + Send + Sync + 'a,
@@ -112,9 +124,9 @@ impl EvtLog for NatsEvtLog {
             .map_err(Error::PublishEvts)?
             .await
             .map_err(Error::PublishEvtsAck)?;
-        let meta = Box::new(ack.sequence);
+        let metadata = Box::new(ack.sequence);
 
-        Ok(Some(meta))
+        Ok(Some(metadata))
     }
 
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error> {
@@ -157,7 +169,7 @@ impl EvtLog for NatsEvtLog {
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
-        meta: Meta,
+        metadata: Metadata,
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
     where
         E: TryFromBytes + Send,
@@ -171,10 +183,11 @@ impl EvtLog for NatsEvtLog {
         debug!(%id, from_seq_no, to_seq_no, "Building event stream");
 
         // Get message stream
-        let deliver_policy = match meta.and_then(|meta| meta.downcast_ref::<u64>().copied()) {
-            Some(start_sequence) => DeliverPolicy::ByStartSequence { start_sequence },
-            None => DeliverPolicy::All,
-        };
+        let deliver_policy =
+            match metadata.and_then(|metadata| metadata.downcast_ref::<u64>().copied()) {
+                Some(start_sequence) => DeliverPolicy::ByStartSequence { start_sequence },
+                None => DeliverPolicy::All,
+            };
         let msgs = self
             .get_stream()
             .await?
@@ -221,7 +234,7 @@ impl EvtLog for NatsEvtLog {
         let evts = stream! {
             for await evt in evts {
                 match evt {
-                    Ok((n, _ev)) if n < from_seq_no => continue,
+                    Ok((n, _evt)) if n < from_seq_no => continue,
                     Ok((n, evt)) if from_seq_no <= n && n < to_seq_no => yield Ok((n, evt)),
                     Ok((n, evt)) if n == to_seq_no => {
                         yield Ok((n, evt));
@@ -245,15 +258,25 @@ pub struct Config {
 }
 
 impl Config {
-    #[allow(missing_docs)]
-    pub fn new<S, T>(server_addr: S, stream_name: T) -> Self
+    pub fn with_server_addr<T>(self, server_addr: T) -> Self
     where
-        S: Into<String>,
         T: Into<String>,
     {
+        let server_addr = server_addr.into();
         Self {
-            server_addr: server_addr.into(),
-            stream_name: stream_name.into(),
+            server_addr,
+            ..self
+        }
+    }
+
+    pub fn with_stream_name<T>(self, stream_name: T) -> Self
+    where
+        T: Into<String>,
+    {
+        let stream_name = stream_name.into();
+        Self {
+            stream_name,
+            ..self
         }
     }
 }
@@ -261,7 +284,12 @@ impl Config {
 impl Default for Config {
     /// Use "localhost:4222" for `server_addr` and "evts" for `stream_name`.
     fn default() -> Self {
-        Self::new("localhost:4222", "evts")
+        let server_addr = "localhost:4222".into();
+        let stream_name = "evts".into();
+        Self {
+            server_addr,
+            stream_name,
+        }
     }
 }
 
@@ -346,151 +374,27 @@ where
 }
 
 mod proto {
-    include!(concat!(env!("OUT_DIR"), "/evt_log.nats.rs"));
+    include!(concat!(env!("OUT_DIR"), "/evt_log.rs"));
 }
 
-#[cfg(all(test, feature = "serde_json"))]
+#[cfg(all(test))]
 mod tests {
     use super::*;
-    use crate::{
-        snapshot_store::nats::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore},
-        Entity, EventSourced,
-    };
-    use anyhow::anyhow;
     use futures::StreamExt;
-    use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage, Container};
-
-    fn setup_testcontainers(client: &Cli) -> Container<'_, GenericImage> {
-        let nats_image = GenericImage::new("nats", "2.9.9")
-            .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
-        let container = client.run((nats_image, vec!["-js".to_string()]));
-        container
-    }
-
-    async fn setup_jetstream(server_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let client = connect(server_addr).await?;
-        let jetstream = jetstream::new(client);
-        let _ = jetstream
-            .create_stream(jetstream::stream::Config {
-                name: "evts".to_string(),
-                subjects: vec!["evts.>".to_string()],
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| anyhow!(error))?;
-        let _ = jetstream
-            .create_key_value(jetstream::kv::Config {
-                bucket: "snapshots".to_string(),
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| anyhow!(error))?;
-        Ok(())
-    }
-
-    async fn create_evt_log(server_addr: String) -> Result<NatsEvtLog, Box<dyn std::error::Error>> {
-        let config = Config {
-            server_addr,
-            ..Default::default()
-        };
-        let nats_event_log = NatsEvtLog::new(config).await?;
-        Ok(nats_event_log)
-    }
-
-    async fn create_snapshot_store(
-        server_addr: String,
-    ) -> Result<NatsSnapshotStore, Box<dyn std::error::Error>> {
-        let config = NatsSnapshotStoreConfig {
-            server_addr,
-            ..Default::default()
-        };
-        let nats_snapshot_store = NatsSnapshotStore::new(config).await?;
-        Ok(nats_snapshot_store)
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Cmd {
-        Inc(u64),
-        Dec(u64),
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    enum Evt {
-        Increased { old_value: u64, inc: u64 },
-        Decreased { old_value: u64, dec: u64 },
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-    enum Error {
-        #[error("Overflow: value={value}, increment={inc}")]
-        Overflow { value: u64, inc: u64 },
-        #[error("Underflow: value={value}, decrement={dec}")]
-        Underflow { value: u64, dec: u64 },
-    }
-
-    #[derive(Debug)]
-    struct Counter(u64);
-
-    impl EventSourced for Counter {
-        type Cmd = Cmd;
-
-        type Evt = Evt;
-
-        type State = u64;
-
-        type Error = Error;
-
-        fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error> {
-            match cmd {
-                Cmd::Inc(inc) => {
-                    if inc > u64::MAX - self.0 {
-                        Err(Error::Overflow { value: self.0, inc })
-                    } else {
-                        Ok(vec![Evt::Increased {
-                            old_value: self.0,
-                            inc,
-                        }])
-                    }
-                }
-                Cmd::Dec(dec) => {
-                    if dec > self.0 {
-                        Err(Error::Underflow { value: self.0, dec })
-                    } else {
-                        Ok(vec![Evt::Decreased {
-                            old_value: self.0,
-                            dec,
-                        }])
-                    }
-                }
-            }
-        }
-
-        fn handle_evt(&mut self, _seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
-            match evt {
-                Evt::Increased { old_value: _, inc } => {
-                    self.0 += inc;
-                    None
-                }
-                Evt::Decreased { old_value: _, dec } => {
-                    self.0 -= dec;
-                    None
-                }
-            }
-        }
-
-        fn set_state(&mut self, state: Self::State) {
-            self.0 = state;
-        }
-    }
+    use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
 
     /// Directly testing the [NatsEvtLog] with trivial events (`u64`).
     #[tokio::test]
-    async fn test_evt_log() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test_evt_log() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let client = Cli::default();
-        let container = setup_testcontainers(&client);
+        let nats_image = GenericImage::new("nats", "2.9.9")
+            .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
+        let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
-        setup_jetstream(&server_addr).await?;
-        let mut evt_log = create_evt_log(server_addr).await?;
+
+        let config = Config::default().with_server_addr(server_addr);
+        let mut evt_log = NatsEvtLog::new(config).await?;
+        evt_log.setup().await?;
         let id = Uuid::now_v7();
 
         // Verify `last_seq_no` for empty log.
@@ -514,65 +418,6 @@ mod tests {
             .filter_map(|evt| evt.ok().map(|(_, evt)| evt))
             .collect::<Vec<_>>();
         assert_eq!(evts, (2..=8).collect::<Vec<_>>());
-
-        Ok(())
-    }
-
-    /// Testing the [NatsEvtLog] via a "proper" [Entity].
-    #[tokio::test]
-    async fn test_entity() -> Result<(), Box<dyn std::error::Error>> {
-        let client = Cli::default();
-        let container = setup_testcontainers(&client);
-        let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
-        setup_jetstream(&server_addr).await?;
-        let mut evt_log = create_evt_log(server_addr.clone()).await?;
-        let snapshot_store = create_snapshot_store(server_addr).await?;
-        let id = Uuid::now_v7();
-
-        // Populate the event log with some events.
-        evt_log
-            .persist(
-                id,
-                &[
-                    Evt::Increased {
-                        old_value: 0,
-                        inc: 10,
-                    },
-                    Evt::Increased {
-                        old_value: 10,
-                        inc: 90,
-                    },
-                ],
-                1,
-            )
-            .await?;
-
-        // Create an entity.
-        let counter = Entity::spawn(id, Counter(0), 42, evt_log, snapshot_store).await?;
-
-        // Handle a valid command.
-        let evts = counter.handle_cmd(Cmd::Inc(1)).await?;
-        assert_eq!(
-            evts,
-            vec![Evt::Increased {
-                old_value: 100,
-                inc: 1
-            }]
-        );
-
-        // Handle another valid command.
-        let evts = counter.handle_cmd(Cmd::Dec(101)).await?;
-        assert_eq!(
-            evts,
-            vec![Evt::Decreased {
-                old_value: 101,
-                dec: 101
-            }]
-        );
-
-        // Handle an invalid command (underflow).
-        let result = counter.handle_cmd(Cmd::Dec(1)).await;
-        assert!(result.is_err());
 
         Ok(())
     }

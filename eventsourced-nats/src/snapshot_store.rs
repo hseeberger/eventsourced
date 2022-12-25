@@ -1,15 +1,14 @@
 //! A [SnapshotStore] implementation based on [NATS](https://nats.io/).
 
-use super::{Snapshot, SnapshotStore};
-use crate::{
-    convert::{TryFromBytes, TryIntoBytes},
-    Meta,
-};
 use async_nats::{
     connect,
     jetstream::{self, kv::Store, Context as Jetstream},
 };
 use bytes::{Bytes, BytesMut};
+use eventsourced::{
+    convert::{TryFromBytes, TryIntoBytes},
+    Metadata, Snapshot, SnapshotStore,
+};
 use prost::{DecodeError, EncodeError, Message};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -66,7 +65,7 @@ impl SnapshotStore for NatsSnapshotStore {
         id: Uuid,
         seq_no: u64,
         state: &'b S,
-        meta: Meta,
+        metadata: Metadata,
     ) -> Result<(), Self::Error>
     where
         'b: 'a,
@@ -76,7 +75,7 @@ impl SnapshotStore for NatsSnapshotStore {
         let state = state
             .try_into_bytes()
             .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
-        let sequence = meta.and_then(|meta| meta.downcast_ref::<u64>().copied());
+        let sequence = metadata.and_then(|metadata| metadata.downcast_ref::<u64>().copied());
         let snapshot = proto::Snapshot {
             seq_no,
             state,
@@ -116,15 +115,11 @@ impl SnapshotStore for NatsSnapshotStore {
                             S::try_from_bytes(state)
                                 .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
                                 .map(|state| {
-                                    let meta = sequence.map(|s| {
+                                    let metadata = sequence.map(|s| {
                                         let b: Box<dyn Any + Send> = Box::new(s);
                                         b
                                     });
-                                    Snapshot {
-                                        seq_no,
-                                        state,
-                                        meta,
-                                    }
+                                    Snapshot::new(seq_no, state, metadata)
                                 })
                         },
                     )
@@ -206,5 +201,5 @@ pub enum Error {
 }
 
 mod proto {
-    include!(concat!(env!("OUT_DIR"), "/snapshot_store.nats.rs"));
+    include!(concat!(env!("OUT_DIR"), "/snapshot_store.rs"));
 }

@@ -1,3 +1,6 @@
+//! [TryIntoBytes] and [TryFromBytes] implementations for any type that implements [prost::Message]
+//! based upon [prost](https://github.com/tokio-rs/prost).
+
 use super::{TryFromBytes, TryIntoBytes};
 use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};

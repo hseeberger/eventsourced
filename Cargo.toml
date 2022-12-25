@@ -1,7 +1,7 @@
-[package]
-name          = "eventsourced"
-description   = "Persistent event sourcing"
-version       = "0.1.0"
+[workspace]
+members = [ "eventsourced", "eventsourced-nats", "eventsourced-postgres" ]
+
+[workspace.package]
 edition       = "2021"
 authors       = [ "Heiko Seeberger <git@heikoseeberger.de>" ]
 license       = "Apache-2.0"
@@ -10,37 +10,23 @@ homepage      = "https://github.com/hseeberger/eventsourced"
 repository    = "https://github.com/hseeberger/eventsourced"
 documentation = "https://github.com/hseeberger/eventsourced"
 
-[dependencies]
-async-nats       = { version = "0", optional = true }
-async-stream     = { version = "0" }
-async-trait      = { version = "0" }
-bytes            = { version = "1" }
-flexbuffers      = { version = "2", optional = true }
-futures          = { version = "0" }
-pin-project-lite = { version = "0" }
-prost            = { version = "0", optional = true }
-serde            = { version = "1", features = [ "derive" ] }
-serde_json       = { version = "1", optional = true }
-thiserror        = { version = "1" }
-tokio            = { version = "1", features = [ "full" ] }
-tracing          = { version = "0", default-features = false }
-uuid             = { version = "1", features = [ "serde", "v7" ] }
-
-[dev-dependencies]
+[workspace.dependencies]
 anyhow             = { version = "1" }
+async-nats         = { version = "0" }
+async-stream       = { version = "0" }
+bb8-postgres       = { version = "0" }
+bytes              = { version = "1" }
+futures            = { version = "0" }
+pin-project-lite   = { version = "0" }
+prost              = { version = "0" }
+prost-build        = { version = "0" }
+serde              = { version = "1", features = [ "derive" ] }
+serde_json         = { version = "1" }
 testcontainers     = { version = "0" }
+thiserror          = { version = "1" }
+tokio              = { version = "1", features = [ "sync" ] }
+tokio-postgres     = { version = "0", features = [ "with-uuid-1" ] }
+tracing            = { version = "0", default-features = false }
 tracing-subscriber = { version = "0", default-features = false, features = [ "fmt", "env-filter" ] }
-
-[build-dependencies]
-anyhow      = { version = "1" }
-prost-build = { version = "0", optional = true }
-walkdir     = { version = "2", optional = true }
-
-[features]
-default = [ "nats", "serde_json" ]
-nats    = [ "dep:async-nats", "dep:prost", "dep:prost-build", "dep:walkdir" ]
-prost   = [ "dep:prost" ]
-
-[[example]]
-name       = "counter"
-crate-type = [ "lib" ]
+uuid               = { version = "1", features = [ "serde", "v7" ] }
+walkdir            = { version = "2" }

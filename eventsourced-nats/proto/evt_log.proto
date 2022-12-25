@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package evt_log.nats;
+package evt_log;
 
 // A sequence of binarized events.
 message Evts {
