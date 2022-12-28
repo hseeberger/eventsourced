@@ -1,4 +1,4 @@
-//! An [EvtLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
+//! An [EvtLog](eventsourced::EvtLog) implementation based on [PostgreSQL](https://www.postgresql.org/).
 
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]

@@ -1,4 +1,4 @@
-//! [EvtLog] and [SnapshotStore] implementations based on [NATS](https://nats.io/).
+//! [EvtLog](eventsourced::EvtLog) and [SnapshotStore](eventsourced::SnapshotStore) implementations based on [NATS](https://nats.io/).
 
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
