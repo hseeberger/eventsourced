@@ -1,4 +1,4 @@
-//! [Binarize] implementation for any type that implements [Serialize] and [Debinarize]
+//! [TryIntoBytes] implementation for any type that implements [Serialize] and [TryFromBytes]
 //! implementation for any type that implements [DeserializeOwned] based upon
 //! [serde_json](https://docs.rs/serde_json/latest/serde_json).
 

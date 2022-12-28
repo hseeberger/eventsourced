@@ -6,14 +6,13 @@
 #![allow(clippy::type_complexity)]
 
 pub mod convert;
-pub mod evt_log;
-pub mod snapshot_store;
+mod evt_log;
+mod snapshot_store;
 
-use crate::{
-    convert::{TryFromBytes, TryIntoBytes},
-    evt_log::EvtLog,
-    snapshot_store::{Snapshot, SnapshotStore},
-};
+pub use evt_log::*;
+pub use snapshot_store::*;
+
+use crate::convert::{TryFromBytes, TryIntoBytes};
 use futures::StreamExt;
 use std::{any::Any, fmt::Debug};
 use thiserror::Error;
@@ -90,7 +89,7 @@ where
         assert!(buffer >= 1, "buffer must be positive");
 
         // Restore snapshot.
-        let (snapshot_seq_no, meta) = snapshot_store
+        let (snapshot_seq_no, metadata) = snapshot_store
             .load::<E::State>(id)
             .await
             .map_err(SpawnEntityError::LoadSnapshot)?
@@ -98,11 +97,11 @@ where
                 |Snapshot {
                      seq_no,
                      state,
-                     meta,
+                     metadata,
                  }| {
                     debug!(%id, seq_no, "Restoring snapshot");
                     event_sourced.set_state(state);
-                    (seq_no, meta)
+                    (seq_no, metadata)
                 },
             )
             .unwrap_or((0, None));
@@ -120,7 +119,7 @@ where
             let from_seq_no = snapshot_seq_no + 1;
             debug!(%id, from_seq_no, last_seq_no , "Replaying evts");
             let evts = evt_log
-                .evts_by_id::<E::Evt>(id, from_seq_no, last_seq_no, meta)
+                .evts_by_id::<E::Evt>(id, from_seq_no, last_seq_no, metadata)
                 .await
                 .map_err(SpawnEntityError::EvtsById)?;
             pin!(evts);
@@ -186,7 +185,7 @@ where
             // Persist events
             // TODO Remove this helper once async fn in trait is stable!
             let send_fut = make_send(self.evt_log.persist(self.id, &evts, self.seq_no));
-            let meta = send_fut.await?;
+            let metadata = send_fut.await?;
 
             // Handle persisted events
             let state = evts.iter().fold(None, |state, evt| {
@@ -199,7 +198,10 @@ where
                 debug!(id = %self.id, seq_no = self.seq_no, "Saving snapshot");
                 // TODO Remove this helper once async fn in trait is stable!
                 let send_fut =
-                    make_send(self.snapshot_store.save(self.id, self.seq_no, &state, meta));
+                    make_send(
+                        self.snapshot_store
+                            .save(self.id, self.seq_no, &state, metadata),
+                    );
                 send_fut.await?;
             }
         }
@@ -286,89 +288,25 @@ where
     EntityTerminated(#[from] oneshot::error::RecvError),
 }
 
-pub type Meta = Option<Box<dyn Any + Send>>;
+pub type Metadata = Option<Box<dyn Any + Send>>;
 
-#[cfg(all(test, feature = "serde_json"))]
+#[cfg(all(test, feature = "prost"))]
 mod tests {
     use super::*;
     use futures::{stream, Stream};
-    use serde::{Deserialize, Serialize};
-    use thiserror::Error;
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum Cmd {
-        Inc(u64),
-        Dec(u64),
+    mod counter {
+        #![allow(unused)]
+        use crate::EventSourced;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../include/counter.rs"
+        ));
     }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    enum Evt {
-        Increased { old_value: u64, inc: u64 },
-        Decreased { old_value: u64, dec: u64 },
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-    enum Error {
-        #[error("Overflow: value={value}, increment={inc}")]
-        Overflow { value: u64, inc: u64 },
-        #[error("Underflow: value={value}, decrement={dec}")]
-        Underflow { value: u64, dec: u64 },
-    }
-
-    #[derive(Debug)]
-    struct Counter(u64);
-
-    impl EventSourced for Counter {
-        type Cmd = Cmd;
-
-        type Evt = Evt;
-
-        type State = u64;
-
-        type Error = Error;
-
-        fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error> {
-            match cmd {
-                Cmd::Inc(inc) => {
-                    if inc > u64::MAX - self.0 {
-                        Err(Error::Overflow { value: self.0, inc })
-                    } else {
-                        Ok(vec![Evt::Increased {
-                            old_value: self.0,
-                            inc,
-                        }])
-                    }
-                }
-                Cmd::Dec(dec) => {
-                    if dec > self.0 {
-                        Err(Error::Underflow { value: self.0, dec })
-                    } else {
-                        Ok(vec![Evt::Decreased {
-                            old_value: self.0,
-                            dec,
-                        }])
-                    }
-                }
-            }
-        }
-
-        fn handle_evt(&mut self, _seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
-            match evt {
-                Evt::Increased { old_value: _, inc } => {
-                    self.0 += inc;
-                    None
-                }
-                Evt::Decreased { old_value: _, dec } => {
-                    self.0 -= dec;
-                    None
-                }
-            }
-        }
-
-        fn set_state(&mut self, state: Self::State) {
-            self.0 = state;
-        }
-    }
+    use bytes::BytesMut;
+    use counter::*;
+    use prost::Message;
+    use std::future::ready;
 
     #[derive(Debug)]
     struct TestEvtLog;
@@ -381,7 +319,7 @@ mod tests {
             _entity_id: Uuid,
             _evts: &'b [E],
             _seq_no: u64,
-        ) -> Result<Meta, Self::Error>
+        ) -> Result<Metadata, Self::Error>
         where
             'b: 'a,
             E: TryIntoBytes + Send + Sync + 'a,
@@ -390,28 +328,34 @@ mod tests {
         }
 
         async fn last_seq_no(&self, _entity_id: Uuid) -> Result<u64, Self::Error> {
-            Ok(42)
+            Ok(43)
         }
 
         async fn evts_by_id<E>(
             &self,
             _entity_id: Uuid,
-            _from_seq_no: u64,
-            _to_seq_no: u64,
-            _meta: Meta,
+            from_seq_no: u64,
+            to_seq_no: u64,
+            _metadata: Metadata,
         ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
         where
             E: TryFromBytes + Send,
         {
-            Ok(stream::iter(0..42).map(|n| {
-                let evt = Evt::Increased {
-                    old_value: n,
-                    inc: 1,
-                };
-                let bytes = serde_json::to_value(evt).unwrap().to_string().into();
-                let evt = E::try_from_bytes(bytes).unwrap();
-                Ok((n + 1, evt))
-            }))
+            Ok(stream::iter(0..666)
+                .skip_while(move |n| ready(*n < from_seq_no))
+                .take_while(move |n| ready(*n <= to_seq_no))
+                .map(|n| {
+                    let evt = Evt {
+                        evt: Some(evt::Evt::Increased(Increased {
+                            old_value: n,
+                            inc: 1,
+                        })),
+                    };
+                    let mut bytes = BytesMut::new();
+                    evt.encode(&mut bytes).unwrap();
+                    let evt = E::try_from_bytes(bytes.into()).unwrap();
+                    Ok((n + 1, evt))
+                }))
         }
     }
 
@@ -430,7 +374,7 @@ mod tests {
             _id: Uuid,
             _seq_no: u64,
             _state: &'b S,
-            _meta: Meta,
+            _metadata: Metadata,
         ) -> Result<(), Self::Error>
         where
             'b: 'a,
@@ -443,12 +387,13 @@ mod tests {
         where
             S: TryFromBytes,
         {
-            let bytes = serde_json::to_value(42).unwrap().to_string().into();
-            let state = S::try_from_bytes(bytes).unwrap();
+            let mut bytes = BytesMut::new();
+            42.encode(&mut bytes).unwrap();
+            let state = S::try_from_bytes(bytes.into()).unwrap();
             Ok(Some(Snapshot {
                 seq_no: 42,
                 state,
-                meta: None,
+                metadata: None,
             }))
         }
     }
@@ -462,15 +407,23 @@ mod tests {
         let event_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity =
-            Entity::spawn(Uuid::now_v7(), Counter(0), 42, event_log, snapshot_store).await?;
+        let entity = Entity::spawn(
+            Uuid::now_v7(),
+            Counter::default(),
+            666,
+            event_log,
+            snapshot_store,
+        )
+        .await?;
 
         let evts = entity.handle_cmd(Cmd::Inc(1)).await?;
         assert_eq!(
             evts,
-            vec![Evt::Increased {
-                old_value: 42,
-                inc: 1,
+            vec![Evt {
+                evt: Some(evt::Evt::Increased(Increased {
+                    old_value: 43,
+                    inc: 1,
+                }))
             }]
         );
 

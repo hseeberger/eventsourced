@@ -1,11 +1,12 @@
 //! Persistence for snapshots.
 
-#[cfg(feature = "nats")]
-pub mod nats;
+mod noop;
+
+pub use noop::*;
 
 use crate::{
     convert::{TryFromBytes, TryIntoBytes},
-    Meta,
+    Metadata,
 };
 use std::future::Future;
 use uuid::Uuid;
@@ -20,7 +21,7 @@ pub trait SnapshotStore {
         id: Uuid,
         seq_no: u64,
         state: &'b S,
-        meta: Meta,
+        meta: Metadata,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'a
     where
         'b: 'a,
@@ -32,9 +33,20 @@ pub trait SnapshotStore {
         S: TryFromBytes;
 }
 
-/// Snapshot state along with its sequence number.
+/// Snapshot state along with its sequence number and optional metadata.
 pub struct Snapshot<S> {
     pub(crate) seq_no: u64,
     pub(crate) state: S,
-    pub(crate) meta: Meta,
+    pub(crate) metadata: Metadata,
+}
+
+impl<S> Snapshot<S> {
+    #[allow(missing_docs)]
+    pub fn new(seq_no: u64, state: S, metadata: Metadata) -> Self {
+        Self {
+            seq_no,
+            state,
+            metadata,
+        }
+    }
 }

@@ -2,8 +2,6 @@
 
 use bytes::Bytes;
 
-#[cfg(feature = "flexbuffers")]
-pub mod flexbuffers;
 #[cfg(feature = "prost")]
 pub mod prost;
 #[cfg(feature = "serde_json")]

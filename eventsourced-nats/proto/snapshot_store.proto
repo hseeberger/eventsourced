@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package snapshot_store.nats;
+package snapshot_store;
 
 // A snapshot of an event sourced entity with its sequence number, state and
 // optional NATS stream sequence number.

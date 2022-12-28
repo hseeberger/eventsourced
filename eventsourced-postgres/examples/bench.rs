@@ -1,10 +1,7 @@
 use crate::counter::{Cmd, Counter};
-use anyhow::{Context, Result};
-use eventsourced::{
-    evt_log::nats::{Config as NatsEvtLogConfig, NatsEvtLog},
-    snapshot_store::nats::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore},
-    Entity,
-};
+use anyhow::{anyhow, Context, Result};
+use eventsourced::{Entity, NoopSnapshotStore};
+use eventsourced_postgres::{Config, PostgresEvtLog};
 use std::{iter, time::Instant};
 use tokio::task::JoinSet;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -12,7 +9,7 @@ use uuid::Uuid;
 
 const ENTITY_COUNT: usize = 20;
 const EVT_COUNT: usize = 50000;
-const SNAPSHOT_AFTER: u64 = 49000;
+const SNAPSHOT_AFTER: u64 = u64::MAX;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,8 +19,19 @@ async fn main() -> Result<()> {
         .try_init()
         .context("Cannot initialize tracing")?;
 
-    let evt_log = NatsEvtLog::new(NatsEvtLogConfig::default()).await?;
-    let snapshot_store = NatsSnapshotStore::new(NatsSnapshotStoreConfig::default()).await?;
+    let evt_log = PostgresEvtLog::new(
+        Config::default()
+            .with_user("test")
+            .with_password("test")
+            .with_dbname("test"),
+    )
+    .await?;
+    evt_log
+        .setup()
+        .await
+        .map_err(|error| anyhow!(error))
+        .context("Cannot setup PostgresEvtLog")?;
+    let snapshot_store = NoopSnapshotStore;
 
     let ids = iter::repeat(())
         .take(ENTITY_COUNT)
@@ -91,5 +99,9 @@ async fn main() -> Result<()> {
 }
 
 mod counter {
-    include!("counter.rs");
+    use eventsourced::EventSourced;
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../include/counter.rs"
+    ));
 }
