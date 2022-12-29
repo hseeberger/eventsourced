@@ -5,10 +5,7 @@ use async_nats::{
     jetstream::{self, kv::Store, Context as Jetstream},
 };
 use bytes::{Bytes, BytesMut};
-use eventsourced::{
-    convert::{TryFromBytes, TryIntoBytes},
-    Metadata, Snapshot, SnapshotStore,
-};
+use eventsourced::{Metadata, Snapshot, SnapshotStore};
 use prost::{DecodeError, EncodeError, Message};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -60,21 +57,24 @@ impl Debug for NatsSnapshotStore {
 impl SnapshotStore for NatsSnapshotStore {
     type Error = Error;
 
-    async fn save<'a, 'b, S>(
+    async fn save<'a, 'b, 'c, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
         seq_no: u64,
         state: &'b S,
         metadata: Metadata,
+        state_to_bytes: &'c StateToBytes,
     ) -> Result<(), Self::Error>
     where
         'b: 'a,
-        S: TryIntoBytes + Send + Sync + 'a,
+        'c: 'a,
+        S: Send + Sync + 'a,
+        StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
+        StateToBytesError: std::error::Error + Send + Sync + 'static,
     {
         let mut bytes = BytesMut::new();
-        let state = state
-            .try_into_bytes()
-            .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
+        let state =
+            state_to_bytes(state).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
         let sequence = metadata.and_then(|metadata| metadata.downcast_ref::<u64>().copied());
         let snapshot = proto::Snapshot {
             seq_no,
@@ -93,9 +93,14 @@ impl SnapshotStore for NatsSnapshotStore {
         Ok(())
     }
 
-    async fn load<S>(&self, id: Uuid) -> Result<Option<Snapshot<S>>, Self::Error>
+    async fn load<S, StateFromBytes, StateFromBytesError>(
+        &self,
+        id: Uuid,
+        state_from_bytes: &StateFromBytes,
+    ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
-        S: TryFromBytes,
+        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
+        StateFromBytesError: std::error::Error + Send + Sync + 'static,
     {
         let snapshot = self
             .get_bucket(&self.bucket)
@@ -112,7 +117,7 @@ impl SnapshotStore for NatsSnapshotStore {
                              state,
                              sequence,
                          }| {
-                            S::try_from_bytes(state)
+                            state_from_bytes(state)
                                 .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
                                 .map(|state| {
                                     let metadata = sequence.map(|s| {

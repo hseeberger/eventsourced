@@ -1,10 +1,8 @@
 //! A [SnapshotStore] implementation that does nothing.
 
 use super::{Snapshot, SnapshotStore};
-use crate::{
-    convert::{TryFromBytes, TryIntoBytes},
-    Metadata,
-};
+use crate::Metadata;
+use bytes::Bytes;
 use std::{convert::Infallible, fmt::Debug};
 use uuid::Uuid;
 
@@ -15,23 +13,32 @@ pub struct NoopSnapshotStore;
 impl SnapshotStore for NoopSnapshotStore {
     type Error = Infallible;
 
-    async fn save<'a, 'b, S>(
+    async fn save<'a, 'b, 'c, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         _id: Uuid,
         _seq_no: u64,
         _state: &'b S,
         _metadata: Metadata,
+        _state_to_bytes: &'c StateToBytes,
     ) -> Result<(), Self::Error>
     where
         'b: 'a,
-        S: TryIntoBytes + Send + Sync + 'a,
+        'c: 'a,
+        S: Send + Sync + 'a,
+        StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
+        StateToBytesError: std::error::Error + Send + Sync + 'static,
     {
         Ok(())
     }
 
-    async fn load<S>(&self, _id: Uuid) -> Result<Option<Snapshot<S>>, Self::Error>
+    async fn load<S, StateFromBytes, StateFromBytesError>(
+        &self,
+        _id: Uuid,
+        _state_from_bytes: &StateFromBytes,
+    ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
-        S: TryFromBytes,
+        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
+        StateFromBytesError: std::error::Error + Send + Sync + 'static,
     {
         Ok(None)
     }

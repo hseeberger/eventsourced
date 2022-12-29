@@ -12,7 +12,7 @@ mod snapshot_store;
 pub use evt_log::*;
 pub use snapshot_store::*;
 
-use crate::convert::{TryFromBytes, TryIntoBytes};
+use bytes::Bytes;
 use futures::StreamExt;
 use std::{any::Any, fmt::Debug};
 use thiserror::Error;
@@ -54,23 +54,30 @@ pub trait EventSourced {
 /// produce events which get persisted along with an increasing sequence number to its [EvtLog] and
 /// then applied to the event handler of its [EventSourced] value. The event handler may decide to
 /// save a snapshot at the current sequence number which is used to speed up spawning.
-pub struct Entity<E, L, S> {
+pub struct Entity<E, L, S, EvtToBytes, StateToBytes> {
     id: Uuid,
     seq_no: u64,
     event_sourced: E,
     evt_log: L,
     snapshot_store: S,
+    evt_to_bytes: EvtToBytes,
+    state_to_bytes: StateToBytes,
 }
 
-impl<E, L, S> Entity<E, L, S>
+impl<E, L, S, EvtToBytes, EvtToBytesError, StateToBytes, StateToBytesError>
+    Entity<E, L, S, EvtToBytes, StateToBytes>
 where
     E: EventSourced + Send + 'static,
     E::Cmd: Send + 'static,
-    E::Evt: TryIntoBytes + TryFromBytes + Send + Sync,
-    E::State: TryIntoBytes + TryFromBytes + Send + Sync,
+    E::Evt: Send + Sync,
+    E::State: Send + Sync,
     E::Error: Send,
     L: EvtLog + Send + 'static,
     S: SnapshotStore + Send + 'static,
+    EvtToBytes: Fn(&E::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
+    EvtToBytesError: std::error::Error + Send + Sync + 'static,
+    StateToBytes: Fn(&E::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
+    StateToBytesError: std::error::Error + Send + Sync + 'static,
 {
     /// Spawns an event sourced [Entity] with the given ID and creates an [EntityRef] for it.
     ///
@@ -79,18 +86,32 @@ where
     ///
     /// First the given [SnapshotStore] is used to find and possibly load a snapshot. Then the
     /// [EvtLog] is used to find the last sequence number and then to load any remaining events.
-    pub async fn spawn(
+    pub async fn spawn<EvtFromBytes, EvtFromBytesError, StateFromBytes, StateFromBytesError>(
         id: Uuid,
         mut event_sourced: E,
         buffer: usize,
         evt_log: L,
         snapshot_store: S,
-    ) -> Result<EntityRef<E>, SpawnEntityError<L, S>> {
+        binarizer: Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes>,
+    ) -> Result<EntityRef<E>, SpawnEntityError<L, S>>
+    where
+        EvtFromBytes: Fn(Bytes) -> Result<E::Evt, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
+        StateFromBytes: Fn(Bytes) -> Result<E::State, StateFromBytesError> + Send + Sync + 'static,
+        StateFromBytesError: std::error::Error + Send + Sync + 'static,
+    {
         assert!(buffer >= 1, "buffer must be positive");
+
+        let Binarizer {
+            evt_to_bytes,
+            evt_from_bytes,
+            state_to_bytes,
+            state_from_bytes,
+        } = binarizer;
 
         // Restore snapshot.
         let (snapshot_seq_no, metadata) = snapshot_store
-            .load::<E::State>(id)
+            .load::<E::State, _, _>(id, &state_from_bytes)
             .await
             .map_err(SpawnEntityError::LoadSnapshot)?
             .map(
@@ -119,7 +140,7 @@ where
             let from_seq_no = snapshot_seq_no + 1;
             debug!(%id, from_seq_no, last_seq_no , "Replaying evts");
             let evts = evt_log
-                .evts_by_id::<E::Evt>(id, from_seq_no, last_seq_no, metadata)
+                .evts_by_id::<E::Evt, _, _>(id, from_seq_no, last_seq_no, metadata, evt_from_bytes)
                 .await
                 .map_err(SpawnEntityError::EvtsById)?;
             pin!(evts);
@@ -136,6 +157,8 @@ where
             event_sourced,
             evt_log,
             snapshot_store,
+            evt_to_bytes,
+            state_to_bytes,
         };
         debug!(%id, "Entity created");
 
@@ -184,7 +207,11 @@ where
         if !evts.is_empty() {
             // Persist events
             // TODO Remove this helper once async fn in trait is stable!
-            let send_fut = make_send(self.evt_log.persist(self.id, &evts, self.seq_no));
+            let send_fut =
+                make_send(
+                    self.evt_log
+                        .persist(self.id, &evts, self.seq_no, &self.evt_to_bytes),
+                );
             let metadata = send_fut.await?;
 
             // Handle persisted events
@@ -197,11 +224,13 @@ where
             if let Some(state) = state {
                 debug!(id = %self.id, seq_no = self.seq_no, "Saving snapshot");
                 // TODO Remove this helper once async fn in trait is stable!
-                let send_fut =
-                    make_send(
-                        self.snapshot_store
-                            .save(self.id, self.seq_no, &state, metadata),
-                    );
+                let send_fut = make_send(self.snapshot_store.save(
+                    self.id,
+                    self.seq_no,
+                    &state,
+                    metadata,
+                    &self.state_to_bytes,
+                ));
                 send_fut.await?;
             }
         }
@@ -288,7 +317,16 @@ where
     EntityTerminated(#[from] oneshot::error::RecvError),
 }
 
+/// Optional metadata to optimize sequence number based lookup of events in the [EvtLog].
 pub type Metadata = Option<Box<dyn Any + Send>>;
+
+/// Collection of conversion functions from and to [Bytes](bytes::Bytes) for events and snapshots.
+pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
+    pub evt_to_bytes: EvtToBytes,
+    pub evt_from_bytes: EvtFromBytes,
+    pub state_to_bytes: StateToBytes,
+    pub state_from_bytes: StateFromBytes,
+}
 
 #[cfg(all(test, feature = "prost"))]
 mod tests {
@@ -314,15 +352,19 @@ mod tests {
     impl EvtLog for TestEvtLog {
         type Error = TestEvtLogError;
 
-        async fn persist<'a, 'b, E>(
+        async fn persist<'a, 'b, 'c, E, ToBytes, ToBytesError>(
             &'a mut self,
-            _entity_id: Uuid,
+            _id: Uuid,
             _evts: &'b [E],
-            _seq_no: u64,
+            _last_seq_no: u64,
+            _to_bytes: &'c ToBytes,
         ) -> Result<Metadata, Self::Error>
         where
             'b: 'a,
-            E: TryIntoBytes + Send + Sync + 'a,
+            'c: 'a,
+            E: Send + Sync + 'a,
+            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Send + Sync,
+            ToBytesError: std::error::Error + Send + Sync + 'static,
         {
             Ok(None)
         }
@@ -331,20 +373,23 @@ mod tests {
             Ok(43)
         }
 
-        async fn evts_by_id<E>(
-            &self,
-            _entity_id: Uuid,
+        async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
+            &'a self,
+            _id: Uuid,
             from_seq_no: u64,
             to_seq_no: u64,
             _metadata: Metadata,
-        ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
+            evt_from_bytes: EvtFromBytes,
+        ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
         where
-            E: TryFromBytes + Send,
+            E: Send + 'a,
+            EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+            EvtFromBytesError: std::error::Error + Send + Sync + 'static,
         {
             Ok(stream::iter(0..666)
                 .skip_while(move |n| ready(*n < from_seq_no))
                 .take_while(move |n| ready(*n <= to_seq_no))
-                .map(|n| {
+                .map(move |n| {
                     let evt = Evt {
                         evt: Some(evt::Evt::Increased(Increased {
                             old_value: n,
@@ -353,7 +398,7 @@ mod tests {
                     };
                     let mut bytes = BytesMut::new();
                     evt.encode(&mut bytes).unwrap();
-                    let evt = E::try_from_bytes(bytes.into()).unwrap();
+                    let evt = evt_from_bytes(bytes.into()).unwrap();
                     Ok((n + 1, evt))
                 }))
         }
@@ -369,27 +414,36 @@ mod tests {
     impl SnapshotStore for TestSnapshotStore {
         type Error = TestSnapshotStoreError;
 
-        async fn save<'a, 'b, S>(
+        async fn save<'a, 'b, 'c, S, StateToBytes, StateToBytesError>(
             &'a mut self,
             _id: Uuid,
             _seq_no: u64,
             _state: &'b S,
             _metadata: Metadata,
+            _state_to_bytes: &'c StateToBytes,
         ) -> Result<(), Self::Error>
         where
             'b: 'a,
-            S: TryIntoBytes + Send + Sync + 'a,
+            'c: 'a,
+            S: Send + Sync + 'a,
+            StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
+            StateToBytesError: std::error::Error + Send + Sync + 'static,
         {
             Ok(())
         }
 
-        async fn load<S>(&self, _id: Uuid) -> Result<Option<Snapshot<S>>, Self::Error>
+        async fn load<S, StateFromBytes, StateFromBytesError>(
+            &self,
+            _id: Uuid,
+            state_from_bytes: &StateFromBytes,
+        ) -> Result<Option<Snapshot<S>>, Self::Error>
         where
-            S: TryFromBytes,
+            StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
+            StateFromBytesError: std::error::Error + Send + Sync + 'static,
         {
             let mut bytes = BytesMut::new();
             42.encode(&mut bytes).unwrap();
-            let state = S::try_from_bytes(bytes.into()).unwrap();
+            let state = state_from_bytes(bytes.into()).unwrap();
             Ok(Some(Snapshot {
                 seq_no: 42,
                 state,
@@ -413,6 +467,7 @@ mod tests {
             666,
             event_log,
             snapshot_store,
+            convert::prost::binarizer(),
         )
         .await?;
 

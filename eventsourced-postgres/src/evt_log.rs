@@ -6,10 +6,7 @@ use bb8_postgres::{
     PostgresConnectionManager,
 };
 use bytes::Bytes;
-use eventsourced::{
-    convert::{TryFromBytes, TryIntoBytes},
-    EvtLog, Metadata,
-};
+use eventsourced::{EvtLog, Metadata};
 use futures::{Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -66,15 +63,19 @@ impl Debug for PostgresEvtLog {
 impl EvtLog for PostgresEvtLog {
     type Error = Error;
 
-    async fn persist<'a, 'b, E>(
+    async fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
+        evt_to_bytes: &'c EvtToBytes,
     ) -> Result<Metadata, Self::Error>
     where
         'b: 'a,
-        E: TryIntoBytes + Send + Sync + 'a,
+        'c: 'a,
+        E: Send + Sync + 'a,
+        EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
+        EvtToBytesError: std::error::Error + Send + Sync + 'static,
     {
         assert!(!evts.is_empty(), "evts must not be empty");
 
@@ -87,9 +88,11 @@ impl EvtLog for PostgresEvtLog {
             .map_err(Error::PrepareStmt)?;
         for (n, evt) in evts.iter().enumerate() {
             let seq_no = (last_seq_no + 1 + n as u64) as i64;
-            let bytes = evt
-                .try_into_bytes()
-                .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
+            let bytes =
+                evt_to_bytes(evt).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
+            // let bytes = evt
+            //     .try_into_bytes()
+            //     .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
             tx.execute(&stmt, &[&id, &seq_no, &bytes.as_ref()])
                 .await
                 .map_err(Error::ExecuteStmt)?;
@@ -113,15 +116,18 @@ impl EvtLog for PostgresEvtLog {
         Ok(last_seq_no)
     }
 
-    async fn evts_by_id<E>(
-        &self,
+    async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
         _metadata: Metadata,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
+        evt_from_bytes: EvtFromBytes,
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
     where
-        E: TryFromBytes + Send,
+        E: Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(
@@ -141,12 +147,12 @@ impl EvtLog for PostgresEvtLog {
             .await
             .map_err(Error::ExecuteStmt)?
             .map_err(Error::NextRow)
-            .map_ok(|row| {
+            .map_ok(move |row| {
                 let seq_no = row.get::<_, i64>(0) as u64;
                 let bytes = row.get::<_, &[u8]>(1);
                 // TODO Can we do better?
                 let bytes = Bytes::copy_from_slice(bytes);
-                E::try_from_bytes(bytes)
+                evt_from_bytes(bytes)
                     .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
                     .map(|evt| (seq_no, evt))
             });
@@ -291,8 +297,16 @@ pub enum Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::future;
+    use std::{array::TryFromSliceError, convert::Infallible, future};
     use testcontainers::{clients::Cli, images::postgres::Postgres};
+
+    fn to_bytes(n: &i32) -> Result<Bytes, Infallible> {
+        Ok(Bytes::copy_from_slice(&n.to_ne_bytes()))
+    }
+
+    fn from_bytes(bytes: Bytes) -> Result<i32, TryFromSliceError> {
+        bytes.as_ref().try_into().map(i32::from_ne_bytes)
+    }
 
     #[tokio::test]
     /// Directly testing the [PostgresEvtLog].
@@ -310,20 +324,21 @@ mod tests {
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 0);
 
-        evt_log.persist(id, [1, 2, 3].as_ref(), 0).await?;
+        evt_log
+            .persist(id, [1, 2, 3].as_ref(), 0, &to_bytes)
+            .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
 
-        evt_log.persist(id, [4, 5].as_ref(), 3).await?;
+        evt_log.persist(id, [4, 5].as_ref(), 3, &to_bytes).await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);
 
-        let evts = evt_log.evts_by_id::<u32>(id, 2, 4, None).await?;
+        let evts = evt_log
+            .evts_by_id::<i32, _, _>(id, 2, 4, None, &from_bytes)
+            .await?;
         let sum = evts
-            .try_fold(0u32, |acc, (seq_no, n)| {
-                println!("seq_no={seq_no}");
-                future::ready(Ok(acc + n))
-            })
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 9);
 
