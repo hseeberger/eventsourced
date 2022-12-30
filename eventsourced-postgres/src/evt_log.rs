@@ -157,7 +157,9 @@ impl EvtLog for PostgresEvtLog {
         let evts = stream! {
             for await evt in evts {
                 let evt = evt.and_then(identity);
+                let is_err = evt.is_err();
                 yield evt;
+                if is_err { break; }
             }
         };
 

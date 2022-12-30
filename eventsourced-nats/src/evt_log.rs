@@ -245,7 +245,10 @@ impl EvtLog for NatsEvtLog {
                         break;
                     }
                     Ok(_) => break, // to_seq_no < seq_no
-                    Err(error) => yield Err(error),
+                    Err(error) => {
+                        yield Err(error);
+                        break;
+                    },
                 }
             }
         };
