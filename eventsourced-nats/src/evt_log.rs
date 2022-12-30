@@ -12,11 +12,8 @@ use async_nats::{
     HeaderMap, Message,
 };
 use async_stream::stream;
-use bytes::BytesMut;
-use eventsourced::{
-    convert::{TryFromBytes, TryIntoBytes},
-    EvtLog, Metadata,
-};
+use bytes::{Bytes, BytesMut};
+use eventsourced::{EvtLog, Metadata};
 use futures::{stream, Stream, StreamExt};
 use prost::{DecodeError, EncodeError, Message as ProstMessage};
 use serde::{Deserialize, Serialize};
@@ -86,15 +83,19 @@ impl Debug for NatsEvtLog {
 impl EvtLog for NatsEvtLog {
     type Error = Error;
 
-    async fn persist<'a, 'b, E>(
+    async fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
+        evt_to_bytes: &'c EvtToBytes,
     ) -> Result<Metadata, Self::Error>
     where
         'b: 'a,
-        E: TryIntoBytes + Send + Sync + 'a,
+        'c: 'a,
+        E: Send + Sync + 'a,
+        EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
+        EvtToBytesError: std::error::Error + Send + Sync + 'static,
     {
         assert!(!evts.is_empty(), "evts must not be empty");
 
@@ -102,7 +103,7 @@ impl EvtLog for NatsEvtLog {
         let len = evts.len();
         let evts = evts
             .iter()
-            .map(|evt| evt.try_into_bytes())
+            .map(evt_to_bytes)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
         let evts = proto::Evts { evts };
@@ -164,15 +165,18 @@ impl EvtLog for NatsEvtLog {
             )
     }
 
-    async fn evts_by_id<E>(
-        &self,
+    async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
         metadata: Metadata,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
+        evt_from_bytes: EvtFromBytes,
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
     where
-        E: TryFromBytes + Send,
+        E: Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(
@@ -214,7 +218,7 @@ impl EvtLog for NatsEvtLog {
                         evts.into_iter()
                             .enumerate()
                             .map(|(n, evt)| {
-                                E::try_from_bytes(evt)
+                                evt_from_bytes(evt)
                                     .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
                                     .map(|evt| (seq_no + n as u64, evt))
                             })
@@ -241,7 +245,10 @@ impl EvtLog for NatsEvtLog {
                         break;
                     }
                     Ok(_) => break, // to_seq_no < seq_no
-                    Err(error) => yield Err(error),
+                    Err(error) => {
+                        yield Err(error);
+                        break;
+                    },
                 }
             }
         };
@@ -380,6 +387,7 @@ mod proto {
 #[cfg(all(test))]
 mod tests {
     use super::*;
+    use eventsourced::convert;
     use futures::StreamExt;
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
 
@@ -402,16 +410,24 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         // Verify `persist`.
-        evt_log.persist(id, &[1, 2, 3, 4], 1000).await?;
-        evt_log.persist(id, &[5, 6, 7], 1004).await?;
-        evt_log.persist(id, &[8, 9], 1007).await?;
+        evt_log
+            .persist(id, &[1, 2, 3, 4], 1000, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .persist(id, &[5, 6, 7], 1004, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .persist(id, &[8, 9], 1007, &convert::prost::to_bytes)
+            .await?;
 
         // Verify `last_seq_no` for non-empty log.
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 1009);
 
         // Verify `evts_by_id`.
-        let evts = evt_log.evts_by_id::<u32>(id, 1002, 1008, None).await?;
+        let evts = evt_log
+            .evts_by_id::<u32, _, _>(id, 1002, 1008, None, &convert::prost::from_bytes)
+            .await?;
         let evts = evts.collect::<Vec<_>>().await;
         let evts = evts
             .into_iter()

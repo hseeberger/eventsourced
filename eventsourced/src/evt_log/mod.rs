@@ -1,9 +1,7 @@
 //! Persistence for events.
 
-use crate::{
-    convert::{TryFromBytes, TryIntoBytes},
-    Metadata,
-};
+use crate::Metadata;
+use bytes::Bytes;
 use futures::Stream;
 use std::future::Future;
 use uuid::Uuid;
@@ -13,27 +11,34 @@ pub trait EvtLog {
     type Error: std::error::Error;
 
     /// Persist the given events for the given entity ID and the given last sequence number.
-    fn persist<'a, 'b, E>(
+    fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
+        evt_to_bytes: &'c EvtToBytes,
     ) -> impl Future<Output = Result<Metadata, Self::Error>> + Send + 'a
     where
         'b: 'a,
-        E: TryIntoBytes + Send + Sync + 'a;
+        'c: 'a,
+        E: Send + Sync + 'a,
+        EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
+        EvtToBytesError: std::error::Error + Send + Sync + 'static;
 
     /// Get the last sequence number for the given entity ID.
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error>;
 
     /// Get the events for the given ID in the given closed range of sequence numbers.
-    async fn evts_by_id<E>(
-        &self,
+    async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
         meta: Metadata,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>>, Self::Error>
+        evt_from_bytes: EvtFromBytes,
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
     where
-        E: TryFromBytes + Send;
+        E: Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytesError: std::error::Error + Send + Sync + 'static;
 }

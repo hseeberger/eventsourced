@@ -1,6 +1,6 @@
 use crate::counter::{Cmd, Counter};
 use anyhow::{anyhow, Context, Result};
-use eventsourced::{Entity, NoopSnapshotStore};
+use eventsourced::{convert, Entity, NoopSnapshotStore};
 use eventsourced_postgres::{Config, PostgresEvtLog};
 use std::{iter, time::Instant};
 use tokio::task::JoinSet;
@@ -45,9 +45,16 @@ async fn main() -> Result<()> {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default().with_snapshot_after(SNAPSHOT_AFTER);
-        let counter = Entity::spawn(*id, counter, 42, evt_log, snapshot_store)
-            .await
-            .context("Cannot spawn entity")?;
+        let counter = Entity::spawn(
+            *id,
+            counter,
+            42,
+            evt_log,
+            snapshot_store,
+            convert::prost::binarizer(),
+        )
+        .await
+        .context("Cannot spawn entity")?;
         tasks.spawn(async move {
             for n in 0..EVT_COUNT / 2 {
                 let _ = counter
@@ -79,10 +86,17 @@ async fn main() -> Result<()> {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
-            let _counter = Entity::spawn(id, Counter::default(), 42, evt_log, snapshot_store)
-                .await
-                .context("Cannot spawn entity")
-                .unwrap();
+            let _counter = Entity::spawn(
+                id,
+                Counter::default(),
+                42,
+                evt_log,
+                snapshot_store,
+                convert::prost::binarizer(),
+            )
+            .await
+            .context("Cannot spawn entity")
+            .unwrap();
         });
     }
     while tasks.join_next().await.is_some() {}

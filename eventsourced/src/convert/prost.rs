@@ -1,32 +1,42 @@
-//! [TryIntoBytes] and [TryFromBytes] implementations for any type that implements [prost::Message]
-//! based upon [prost](https://github.com/tokio-rs/prost).
+//! Conversion to and from [Bytes](bytes::Bytes) for any type that implements
+//! [Message](prost::Message) based upon [prost](https://github.com/tokio-rs/prost).
 
-use super::{TryFromBytes, TryIntoBytes};
+use crate::Binarizer;
 use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 
-impl<T> TryIntoBytes for T
+pub fn binarizer<E, S>() -> Binarizer<
+    for<'a> fn(&'a E) -> Result<bytes::Bytes, EncodeError>,
+    fn(bytes::Bytes) -> Result<E, DecodeError>,
+    for<'a> fn(&'a S) -> Result<bytes::Bytes, EncodeError>,
+    fn(bytes::Bytes) -> Result<S, DecodeError>,
+>
 where
-    T: Message,
+    E: Message + Default,
+    S: Message + Default,
 {
-    type Error = EncodeError;
-
-    fn try_into_bytes(&self) -> Result<Bytes, Self::Error> {
-        let mut bytes = BytesMut::new();
-        self.encode(&mut bytes)?;
-        Ok(bytes.into())
+    Binarizer {
+        evt_to_bytes: to_bytes::<E>,
+        evt_from_bytes: from_bytes::<E>,
+        state_to_bytes: to_bytes::<S>,
+        state_from_bytes: from_bytes::<S>,
     }
 }
 
-impl<T> TryFromBytes for T
+pub fn to_bytes<T>(value: &T) -> Result<Bytes, EncodeError>
+where
+    T: Message,
+{
+    let mut bytes = BytesMut::new();
+    value.encode(&mut bytes)?;
+    Ok(bytes.into())
+}
+
+pub fn from_bytes<T>(bytes: Bytes) -> Result<T, DecodeError>
 where
     T: Message + Default,
 {
-    type Error = DecodeError;
-
-    fn try_from_bytes(bytes: Bytes) -> Result<Self, Self::Error> {
-        T::decode(bytes)
-    }
+    T::decode(bytes)
 }
 
 #[cfg(test)]
@@ -38,11 +48,11 @@ mod tests {
         // Prost comes with `Message` implementations for basic types like `String`.
         let s = "test".to_string();
 
-        let bytes = s.try_into_bytes();
+        let bytes = to_bytes(&s);
         assert!(bytes.is_ok());
         let bytes = bytes.unwrap();
 
-        let s_2 = <String as TryFromBytes>::try_from_bytes(bytes);
+        let s_2 = from_bytes::<String>(bytes);
         assert!(s_2.is_ok());
         let s_2 = s_2.unwrap();
         assert_eq!(s_2, s);
