@@ -90,9 +90,6 @@ impl EvtLog for PostgresEvtLog {
             let seq_no = (last_seq_no + 1 + n as u64) as i64;
             let bytes =
                 evt_to_bytes(evt).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
-            // let bytes = evt
-            //     .try_into_bytes()
-            //     .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
             tx.execute(&stmt, &[&id, &seq_no, &bytes.as_ref()])
                 .await
                 .map_err(Error::ExecuteStmt)?;
