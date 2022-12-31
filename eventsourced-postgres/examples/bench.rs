@@ -7,8 +7,8 @@ use tokio::task::JoinSet;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use uuid::Uuid;
 
-const ENTITY_COUNT: usize = 20;
-const EVT_COUNT: usize = 50000;
+const ENTITY_COUNT: usize = 10;
+const EVT_COUNT: usize = 200000;
 const SNAPSHOT_AFTER: u64 = u64::MAX;
 
 #[tokio::main]
@@ -42,11 +42,13 @@ async fn main() -> Result<()> {
     let mut tasks = JoinSet::new();
     let start_time = Instant::now();
     for id in &ids {
+        let id = *id;
+
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default().with_snapshot_after(SNAPSHOT_AFTER);
         let counter = Entity::spawn(
-            *id,
+            id,
             counter,
             42,
             evt_log,
@@ -55,8 +57,12 @@ async fn main() -> Result<()> {
         )
         .await
         .context("Cannot spawn entity")?;
+
         tasks.spawn(async move {
             for n in 0..EVT_COUNT / 2 {
+                if n % 10_000 == 0 {
+                    println!("{id}: {n} events persisted");
+                }
                 let _ = counter
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
@@ -70,6 +76,7 @@ async fn main() -> Result<()> {
             }
         });
     }
+
     while tasks.join_next().await.is_some() {}
     let end_time = Instant::now();
     println!(
