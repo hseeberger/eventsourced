@@ -12,7 +12,7 @@ pub trait EvtLog {
 
     /// Persist the given events for the given entity ID and the given last sequence number.
     fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
-        &'a mut self,
+        &'a self,
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
@@ -39,6 +39,6 @@ pub trait EvtLog {
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
     where
         E: Send + 'a,
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: std::error::Error + Send + Sync + 'static;
 }
