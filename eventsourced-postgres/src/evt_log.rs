@@ -72,7 +72,7 @@ impl PostgresEvtLog {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
         EvtFromBytesError: std::error::Error + Send + Sync + 'static,
     {
-        debug!(from_seq_no, to_seq_no, "Querying next chunk");
+        debug!(%id, from_seq_no, to_seq_no, "Querying events");
 
         let cnn = self.cnn().await?;
         let params: [&(dyn ToSql + Sync); 3] = [&id, &(from_seq_no as i64), &(to_seq_no as i64)];
@@ -184,16 +184,18 @@ impl EvtLog for PostgresEvtLog {
 
         debug!(%id, from_seq_no, to_seq_no, "Building event stream");
 
-        let mut last_seq_no = from_seq_no;
+        let last_seq_no = self.last_seq_no(id).await?;
+
+        let mut current_from_seq_no = from_seq_no;
         let evts = stream! {
-            'outer: while (last_seq_no < to_seq_no) {
+            'outer: while (current_from_seq_no < to_seq_no) {
                 let evts = self
-                    .next_evts_by_id(id, last_seq_no, to_seq_no, None, evt_from_bytes)
+                    .next_evts_by_id(id, current_from_seq_no, to_seq_no, None, evt_from_bytes)
                     .await?;
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            last_seq_no = seq_no;
+                            current_from_seq_no = seq_no;
                             yield Ok(evt);
                         }
                         err => {
@@ -202,7 +204,10 @@ impl EvtLog for PostgresEvtLog {
                         }
                     }
                 }
-                sleep(self.poll_interval).await;
+                // Only sleep if requesting future events.
+                if (last_seq_no < to_seq_no) {
+                    sleep(self.poll_interval).await;
+                }
             }
         };
 
