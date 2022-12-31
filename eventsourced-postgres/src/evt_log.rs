@@ -1,10 +1,8 @@
 //! An [EvtLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 
+use crate::{Cnn, CnnPool, Error};
 use async_stream::stream;
-use bb8_postgres::{
-    bb8::{Pool, PooledConnection},
-    PostgresConnectionManager,
-};
+use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
 use eventsourced::{EvtLog, Metadata};
 use futures::{Stream, TryStreamExt};
@@ -14,7 +12,6 @@ use std::{
     fmt::{self, Debug, Formatter},
     time::Duration,
 };
-use thiserror::Error;
 use tokio::time::sleep;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::debug;
@@ -50,7 +47,7 @@ impl PostgresEvtLog {
     pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.cnn()
             .await?
-            .execute(include_str!("create_tables.sql"), &[])
+            .execute(include_str!("create_evt_log.sql"), &[])
             .await?;
         Ok(())
     }
@@ -89,7 +86,7 @@ impl PostgresEvtLog {
                 let bytes = row.get::<_, &[u8]>(1);
                 let bytes = Bytes::copy_from_slice(bytes);
                 evt_from_bytes(bytes)
-                    .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                    .map_err(|source| Error::FromBytes(Box::new(source)))
                     .map(|evt| (seq_no, evt))
             });
 
@@ -138,8 +135,7 @@ impl EvtLog for PostgresEvtLog {
             .map_err(Error::PrepareStmt)?;
         for (n, evt) in evts.iter().enumerate() {
             let seq_no = (last_seq_no + 1 + n as u64) as i64;
-            let bytes =
-                evt_to_bytes(evt).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
+            let bytes = evt_to_bytes(evt).map_err(|source| Error::ToBytes(Box::new(source)))?;
             tx.execute(&stmt, &[&id, &seq_no, &bytes.as_ref()])
                 .await
                 .map_err(Error::ExecuteStmt)?;
@@ -214,10 +210,6 @@ impl EvtLog for PostgresEvtLog {
         Ok(evts)
     }
 }
-
-type CnnPool<T> = Pool<PostgresConnectionManager<T>>;
-
-type Cnn<'a, T> = PooledConnection<'a, PostgresConnectionManager<T>>;
 
 /// Configuration for the [PostgresEvtLog].
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,66 +291,14 @@ impl Default for Config {
     }
 }
 
-/// Errors from the [PostgresEvtLog].
-#[derive(Debug, Error)]
-pub enum Error {
-    /// Cannot create connection manager.
-    #[error("Cannot create connection manager")]
-    ConnectionManager(#[source] tokio_postgres::Error),
-
-    /// Cannot create connection pool.
-    #[error("Cannot create connection pool")]
-    ConnectionPool(#[source] tokio_postgres::Error),
-
-    /// Cannot get connection from pool.
-    #[error("Cannot get connection from pool")]
-    GetConnection(#[source] bb8_postgres::bb8::RunError<tokio_postgres::Error>),
-
-    /// Cannot prepare statement.
-    #[error("Cannot prepare statement")]
-    PrepareStmt(#[source] tokio_postgres::Error),
-
-    /// Cannot start transaction.
-    #[error("Cannot start transaction")]
-    StartTx(#[source] tokio_postgres::Error),
-
-    /// Cannot commit transaction.
-    #[error("Cannot commit transaction")]
-    CommitTx(#[source] tokio_postgres::Error),
-
-    /// Cannot execute statement.
-    #[error("Cannot execute statement")]
-    ExecuteStmt(#[source] tokio_postgres::Error),
-
-    /// Cannot convert events to bytes.
-    #[error("Cannot convert events to bytes")]
-    EvtsIntoBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-
-    /// Cannot convert bytes to events.
-    #[error("Cannot convert bytes to events")]
-    EvtsFromBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-
-    /// Cannot get next row.
-    #[error("Cannot get next row")]
-    NextRow(#[source] tokio_postgres::Error),
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{array::TryFromSliceError, convert::Infallible, future};
+    use eventsourced::convert;
+    use std::future;
     use testcontainers::{clients::Cli, images::postgres::Postgres};
 
-    fn to_bytes(n: &i32) -> Result<Bytes, Infallible> {
-        Ok(Bytes::copy_from_slice(&n.to_ne_bytes()))
-    }
-
-    fn from_bytes(bytes: Bytes) -> Result<i32, TryFromSliceError> {
-        bytes.as_ref().try_into().map(i32::from_ne_bytes)
-    }
-
     #[tokio::test]
-    /// Directly testing the [PostgresEvtLog].
     async fn test() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let client = Cli::default();
         let container = client.run(Postgres::default());
@@ -374,13 +314,13 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         evt_log
-            .persist(id, [1, 2, 3].as_ref(), 0, &to_bytes)
+            .persist(id, [1, 2, 3].as_ref(), 0, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2, 3, None, &from_bytes)
+            .evts_by_id::<i32, _, _>(id, 2, 3, None, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
@@ -388,10 +328,12 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1, 5, None, &from_bytes)
+            .evts_by_id::<i32, _, _>(id, 1, 5, None, convert::prost::from_bytes)
             .await?;
 
-        evt_log.persist(id, [4, 5].as_ref(), 3, &to_bytes).await?;
+        evt_log
+            .persist(id, [4, 5].as_ref(), 3, &convert::prost::to_bytes)
+            .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);
 

@@ -1,7 +1,7 @@
 use crate::counter::{Cmd, Counter};
 use anyhow::{anyhow, Context, Result};
 use eventsourced::{convert, Entity, NoopSnapshotStore};
-use eventsourced_postgres::{Config, PostgresEvtLog};
+use eventsourced_postgres::{PostgresEvtLog, PostgresEvtLogConfig};
 use std::{iter, time::Instant};
 use tokio::task::JoinSet;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         .context("Cannot initialize tracing")?;
 
     let evt_log = PostgresEvtLog::new(
-        Config::default()
+        PostgresEvtLogConfig::default()
             .with_user("test")
             .with_password("test")
             .with_dbname("test"),
