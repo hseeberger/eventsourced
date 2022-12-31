@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::{
     convert::identity,
     fmt::{self, Debug, Formatter},
+    time::Duration,
 };
 use thiserror::Error;
+use tokio::time::sleep;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::debug;
 use uuid::Uuid;
@@ -22,6 +24,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 pub struct PostgresEvtLog {
     cnn_pool: CnnPool<NoTls>,
+    poll_interval: Duration,
 }
 
 impl PostgresEvtLog {
@@ -38,11 +41,10 @@ impl PostgresEvtLog {
             .await
             .map_err(Error::ConnectionPool)?;
 
-        Ok(Self { cnn_pool })
-    }
-
-    async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
-        self.cnn_pool.get().await.map_err(Error::GetConnection)
+        Ok(Self {
+            cnn_pool,
+            poll_interval: config.poll_interval,
+        })
     }
 
     pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -51,6 +53,54 @@ impl PostgresEvtLog {
             .execute(include_str!("create_tables.sql"), &[])
             .await?;
         Ok(())
+    }
+
+    async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
+        self.cnn_pool.get().await.map_err(Error::GetConnection)
+    }
+
+    async fn next_evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
+        id: Uuid,
+        from_seq_no: u64,
+        to_seq_no: u64,
+        _metadata: Metadata,
+        evt_from_bytes: EvtFromBytes,
+    ) -> Result<impl Stream<Item = Result<(u64, E), Error>> + 'a, Error>
+    where
+        E: Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
+    {
+        debug!(from_seq_no, to_seq_no, "Querying next chunk");
+
+        let cnn = self.cnn().await?;
+        let params: [&(dyn ToSql + Sync); 3] = [&id, &(from_seq_no as i64), &(to_seq_no as i64)];
+        let evts = cnn
+            .query_raw(
+                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2 AND seq_no <= $3",
+                params,
+            )
+            .await
+            .map_err(Error::ExecuteStmt)?
+            .map_err(Error::NextRow)
+            .map_ok(move |row| {
+                let seq_no = row.get::<_, i64>(0) as u64;
+                let bytes = row.get::<_, &[u8]>(1);
+                let bytes = Bytes::copy_from_slice(bytes);
+                evt_from_bytes(bytes)
+                    .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                    .map(|evt| (seq_no, evt))
+            });
+
+        let evts = stream! {
+            for await evt in evts {
+                let evt = evt.and_then(identity);
+                yield evt;
+            }
+        };
+
+        Ok(evts)
     }
 }
 
@@ -64,7 +114,7 @@ impl EvtLog for PostgresEvtLog {
     type Error = Error;
 
     async fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
-        &'a mut self,
+        &'a self,
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
@@ -123,7 +173,7 @@ impl EvtLog for PostgresEvtLog {
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
     where
         E: Send + 'a,
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: std::error::Error + Send + Sync + 'static,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
@@ -134,32 +184,25 @@ impl EvtLog for PostgresEvtLog {
 
         debug!(%id, from_seq_no, to_seq_no, "Building event stream");
 
-        let cnn = self.cnn().await?;
-        let params: [&(dyn ToSql + Sync); 3] = [&id, &(from_seq_no as i64), &(to_seq_no as i64)];
-        let evts = cnn
-            .query_raw(
-                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2 AND seq_no <= $3",
-                params,
-            )
-            .await
-            .map_err(Error::ExecuteStmt)?
-            .map_err(Error::NextRow)
-            .map_ok(move |row| {
-                let seq_no = row.get::<_, i64>(0) as u64;
-                let bytes = row.get::<_, &[u8]>(1);
-                // TODO Can we do better?
-                let bytes = Bytes::copy_from_slice(bytes);
-                evt_from_bytes(bytes)
-                    .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
-                    .map(|evt| (seq_no, evt))
-            });
-
+        let mut last_seq_no = from_seq_no;
         let evts = stream! {
-            for await evt in evts {
-                let evt = evt.and_then(identity);
-                let is_err = evt.is_err();
-                yield evt;
-                if is_err { break; }
+            'outer: while (last_seq_no < to_seq_no) {
+                let evts = self
+                    .next_evts_by_id(id, last_seq_no, to_seq_no, None, evt_from_bytes)
+                    .await?;
+                for await evt in evts {
+                    match evt {
+                        Ok(evt @ (seq_no, _)) => {
+                            last_seq_no = seq_no;
+                            yield Ok(evt);
+                        }
+                        err => {
+                            yield err;
+                            break 'outer;
+                        }
+                    }
+                }
+                sleep(self.poll_interval).await;
             }
         };
 
@@ -180,6 +223,7 @@ pub struct Config {
     password: String,
     dbname: String,
     sslmode: String,
+    poll_interval: Duration,
 }
 
 impl Config {
@@ -245,6 +289,7 @@ impl Default for Config {
             password: "".to_string(),
             dbname: "postgres".to_string(),
             sslmode: "prefer".to_string(),
+            poll_interval: Duration::from_secs(3),
         }
     }
 }
@@ -315,7 +360,7 @@ mod tests {
         let port = container.get_host_port_ipv4(5432);
 
         let config = Config::default().with_port(port);
-        let mut evt_log = PostgresEvtLog::new(config).await?;
+        let evt_log = PostgresEvtLog::new(config).await?;
         evt_log.setup().await?;
 
         let id = Uuid::now_v7();
@@ -329,17 +374,26 @@ mod tests {
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
 
-        evt_log.persist(id, [4, 5].as_ref(), 3, &to_bytes).await?;
-        let last_seq_no = evt_log.last_seq_no(id).await?;
-        assert_eq!(last_seq_no, 5);
-
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2, 4, None, &from_bytes)
+            .evts_by_id::<i32, _, _>(id, 2, 3, None, &from_bytes)
             .await?;
         let sum = evts
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
-        assert_eq!(sum, 9);
+        assert_eq!(sum, 5);
+
+        let evts = evt_log
+            .evts_by_id::<i32, _, _>(id, 1, 5, None, &from_bytes)
+            .await?;
+
+        evt_log.persist(id, [4, 5].as_ref(), 3, &to_bytes).await?;
+        let last_seq_no = evt_log.last_seq_no(id).await?;
+        assert_eq!(last_seq_no, 5);
+
+        let sum = evts
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
+            .await?;
+        assert_eq!(sum, 15);
 
         Ok(())
     }

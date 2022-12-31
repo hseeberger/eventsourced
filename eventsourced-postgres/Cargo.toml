@@ -17,6 +17,7 @@ bb8-postgres   = { workspace = true }
 bytes          = { workspace = true }
 futures        = { workspace = true }
 serde          = { workspace = true }
+tokio          = { workspace = true, features = [ "time" ] }
 thiserror      = { workspace = true }
 tokio-postgres = { workspace = true }
 tracing        = { workspace = true }

@@ -84,7 +84,7 @@ impl EvtLog for NatsEvtLog {
     type Error = Error;
 
     async fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
-        &'a mut self,
+        &'a self,
         id: Uuid,
         evts: &'b [E],
         last_seq_no: u64,
@@ -401,7 +401,7 @@ mod tests {
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
         let config = Config::default().with_server_addr(server_addr);
-        let mut evt_log = NatsEvtLog::new(config).await?;
+        let evt_log = NatsEvtLog::new(config).await?;
         evt_log.setup().await?;
         let id = Uuid::now_v7();
 

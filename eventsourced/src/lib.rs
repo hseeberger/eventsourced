@@ -95,7 +95,7 @@ where
         binarizer: Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes>,
     ) -> Result<EntityRef<E>, SpawnEntityError<L, S>>
     where
-        EvtFromBytes: Fn(Bytes) -> Result<E::Evt, EvtFromBytesError> + Send + Sync + 'static,
+        EvtFromBytes: Fn(Bytes) -> Result<E::Evt, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: std::error::Error + Send + Sync + 'static,
         StateFromBytes: Fn(Bytes) -> Result<E::State, StateFromBytesError> + Send + Sync + 'static,
         StateFromBytesError: std::error::Error + Send + Sync + 'static,
@@ -353,7 +353,7 @@ mod tests {
         type Error = TestEvtLogError;
 
         async fn persist<'a, 'b, 'c, E, ToBytes, ToBytesError>(
-            &'a mut self,
+            &'a self,
             _id: Uuid,
             _evts: &'b [E],
             _last_seq_no: u64,
