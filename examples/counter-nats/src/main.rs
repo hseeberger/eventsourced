@@ -39,7 +39,6 @@ async fn main() -> Result<()> {
         let id = *id;
 
         let evt_log = evt_log.clone();
-        let snapshot_store = snapshot_store.clone();
         let counter = Counter::default().with_snapshot_after(SNAPSHOT_AFTER);
         let counter = Entity::spawn(
             id,
@@ -85,7 +84,6 @@ async fn main() -> Result<()> {
     let start_time = Instant::now();
     for id in ids {
         let evt_log = evt_log.clone();
-        let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
             let _counter = Entity::spawn(
                 id,
