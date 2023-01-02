@@ -24,39 +24,6 @@ pub enum Cmd {
 }
 
 //include!(concat!(env!("OUT_DIR"), "/counter.rs"));
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Evt {
-    #[prost(oneof = "evt::Evt", tags = "1, 2")]
-    pub evt: ::core::option::Option<evt::Evt>,
-}
-/// Nested message and enum types in `Evt`.
-pub mod evt {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Evt {
-        #[prost(message, tag = "1")]
-        Increased(super::Increased),
-        #[prost(message, tag = "2")]
-        Decreased(super::Decreased),
-    }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Increased {
-    #[prost(uint64, tag = "1")]
-    pub old_value: u64,
-    #[prost(uint64, tag = "2")]
-    pub inc: u64,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Decreased {
-    #[prost(uint64, tag = "1")]
-    pub old_value: u64,
-    #[prost(uint64, tag = "2")]
-    pub dec: u64,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum Error {
