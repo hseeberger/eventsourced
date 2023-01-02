@@ -1,5 +1,4 @@
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
