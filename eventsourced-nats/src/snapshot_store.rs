@@ -1,18 +1,18 @@
 //! A [SnapshotStore] implementation based on [NATS](https://nats.io/).
 
+use crate::Error;
 use async_nats::{
     connect,
     jetstream::{self, kv::Store, Context as Jetstream},
 };
 use bytes::{Bytes, BytesMut};
 use eventsourced::{Metadata, Snapshot, SnapshotStore};
-use prost::{DecodeError, EncodeError, Message};
+use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::{
     any::Any,
     fmt::{self, Debug, Formatter},
 };
-use thiserror::Error;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -36,6 +36,17 @@ impl NatsSnapshotStore {
             jetstream,
             bucket: config.bucket,
         })
+    }
+
+    pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let _ = self
+            .jetstream
+            .create_key_value(jetstream::kv::Config {
+                bucket: "snapshots".to_string(),
+                ..Default::default()
+            })
+            .await?;
+        Ok(())
     }
 
     async fn get_bucket(&self, name: &str) -> Result<Store, Error> {
@@ -149,15 +160,14 @@ pub struct Config {
 }
 
 impl Config {
-    #[allow(missing_docs)]
-    pub fn new<S, T>(server_addr: S, bucket_prefix: T) -> Self
+    pub fn with_server_addr<T>(self, server_addr: T) -> Self
     where
-        S: Into<String>,
         T: Into<String>,
     {
+        let server_addr = server_addr.into();
         Self {
-            server_addr: server_addr.into(),
-            bucket: bucket_prefix.into(),
+            server_addr,
+            ..self
         }
     }
 }
@@ -165,46 +175,58 @@ impl Config {
 impl Default for Config {
     /// Use "localhost:4222" for `server_addr` and "snapshots" for `bucket`.
     fn default() -> Self {
-        Self::new("localhost:4222", "snapshots")
+        Self {
+            server_addr: "localhost:4222".to_string(),
+            bucket: "snapshots".to_string(),
+        }
     }
-}
-
-/// Errors from the [NatsSnapshotStore].
-#[derive(Debug, Error)]
-pub enum Error {
-    /// The connection to the NATS server cannot be established.
-    #[error("Cannot connect to NATS server")]
-    Connect(#[from] std::io::Error),
-
-    /// A NATS KV bucket cannot be obtained.
-    #[error("Cannot get NATS KV bucket")]
-    GetBucket(#[source] async_nats::Error),
-
-    /// Events cannot be converted into bytes.
-    #[error("Cannot convert events to bytes")]
-    EvtsIntoBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-
-    /// Bytes cannot be converted to events.
-    #[error("Cannot convert bytes to events")]
-    EvtsFromBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-
-    /// Events cannot be encoded as Protocol Buffers.
-    #[error("Cannot encode events as Protocol Buffers")]
-    EncodeEvts(#[from] EncodeError),
-
-    /// Events cannot be decoded from Protocol Buffers.
-    #[error("Cannot decode events from Protocol Buffers")]
-    DecodeEvts(#[from] DecodeError),
-
-    /// A snapshot cannot be stored in a NATS KV bucket.
-    #[error("Cannot store snapshot in NATS KV bucket")]
-    SaveSnapshot(#[source] async_nats::Error),
-
-    /// A snapshot cannot be loaded from a NATS KV bucket.
-    #[error("Cannot load snapshot from NATS KV bucket")]
-    LoadSnapshot(#[source] async_nats::Error),
 }
 
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/snapshot_store.rs"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eventsourced::convert;
+    use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
+
+    #[tokio::test]
+    async fn test() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let client = Cli::default();
+        let nats_image = GenericImage::new("nats", "2.9.9")
+            .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
+        let container = client.run((nats_image, vec!["-js".to_string()]));
+        let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
+
+        let config = Config::default().with_server_addr(server_addr);
+        let mut snapshot_store = NatsSnapshotStore::new(config).await?;
+        snapshot_store.setup().await?;
+
+        let id = Uuid::now_v7();
+
+        let snapshot = snapshot_store
+            .load::<i32, _, _>(id, &convert::prost::from_bytes)
+            .await?;
+        assert!(snapshot.is_none());
+
+        let seq_no = 42;
+        let state = 666;
+
+        snapshot_store
+            .save(id, seq_no, &state, None, &convert::prost::to_bytes)
+            .await?;
+
+        let snapshot = snapshot_store
+            .load::<i32, _, _>(id, &convert::prost::from_bytes)
+            .await?;
+        assert!(snapshot.is_some());
+        let snapshot = snapshot.unwrap();
+        assert_eq!(snapshot.seq_no, seq_no);
+        assert_eq!(snapshot.state, state);
+        assert!(snapshot.metadata.is_none());
+
+        Ok(())
+    }
 }

@@ -1,7 +1,8 @@
 [package]
-name          = "eventsourced-nats"
-description   = "NATS implementation for eventsourced EvtLog and SnapshotStore"
+name          = "counter-nats"
+description   = "eventsourced example using eventsourced-nats"
 version       = "0.1.0"
+publish       = false
 edition       = { workspace = true }
 authors       = { workspace = true }
 license       = { workspace = true }
@@ -11,23 +12,16 @@ repository    = { workspace = true }
 documentation = { workspace = true }
 
 [dependencies]
-eventsourced = { path = "../eventsourced" }
-async-nats   = { workspace = true }
-async-stream = { workspace = true }
-bytes        = { workspace = true }
-futures      = { workspace = true }
-prost        = { workspace = true }
-serde        = { workspace = true }
-thiserror    = { workspace = true }
-tracing      = { workspace = true }
-uuid         = { workspace = true }
-
-[dev-dependencies]
+eventsourced       = { path = "../../eventsourced" }
+eventsourced-nats  = { path = "../../eventsourced-nats" }
 anyhow             = { workspace = true }
+bytes              = { workspace = true }
 prost              = { workspace = true }
-testcontainers     = { workspace = true }
 tokio              = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+thiserror          = { workspace = true }
+tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+uuid               = { workspace = true }
 
 [build-dependencies]
 anyhow      = { workspace = true }

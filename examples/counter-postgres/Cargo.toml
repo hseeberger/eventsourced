@@ -1,0 +1,29 @@
+[package]
+name          = "counter-postgres"
+description   = "eventsourced example using eventsourced-postgres"
+version       = "0.1.0"
+publish       = false
+edition       = { workspace = true }
+authors       = { workspace = true }
+license       = { workspace = true }
+readme        = { workspace = true }
+homepage      = { workspace = true }
+repository    = { workspace = true }
+documentation = { workspace = true }
+
+[dependencies]
+eventsourced          = { path = "../../eventsourced" }
+eventsourced-postgres = { path = "../../eventsourced-postgres" }
+anyhow                = { workspace = true }
+bytes                 = { workspace = true }
+prost                 = { workspace = true }
+tokio                 = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+thiserror             = { workspace = true }
+tracing               = { workspace = true }
+tracing-subscriber    = { workspace = true }
+uuid                  = { workspace = true }
+
+[build-dependencies]
+anyhow      = { workspace = true }
+prost-build = { workspace = true }
+walkdir     = { workspace = true }

@@ -1,5 +1,6 @@
 //! An [EvtLog] implementation based on [NATS](https://nats.io/).
 
+use crate::Error;
 use async_nats::{
     connect,
     jetstream::{
@@ -15,14 +16,13 @@ use async_stream::stream;
 use bytes::{Bytes, BytesMut};
 use eventsourced::{EvtLog, Metadata};
 use futures::{stream, Stream, StreamExt};
-use prost::{DecodeError, EncodeError, Message as ProstMessage};
+use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Debug, Formatter},
     io,
     str::FromStr,
 };
-use thiserror::Error;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -58,7 +58,6 @@ impl NatsEvtLog {
             .map_err(Error::GetStream)
     }
 
-    #[cfg(test)]
     pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let _ = self
             .jetstream
@@ -300,62 +299,6 @@ impl Default for Config {
     }
 }
 
-/// Errors from the [NatsEvtLog].
-#[derive(Debug, Error)]
-pub enum Error {
-    /// The connection to the NATS server cannot be established.
-    #[error("Cannot connect to NATS server")]
-    Connect(#[from] std::io::Error),
-
-    /// Events cannot be published.
-    #[error("Cannot publish events")]
-    PublishEvts(#[source] async_nats::Error),
-
-    /// An ACK for publishing events cannot be received.
-    #[error("Cannot get ACK for publishing events")]
-    PublishEvtsAck(#[source] async_nats::Error),
-
-    /// A NATS stream cannot be obtained.
-    #[error("Cannot get NATS stream")]
-    GetStream(#[source] async_nats::Error),
-
-    /// A NATS consumer cannot be created.
-    #[error("Cannot create NATS consumer")]
-    CreateConsumer(#[source] async_nats::Error),
-
-    /// The message stream from a NATS consumer cannot be obtained.
-    #[error("Cannot get message stream from NATS consumer")]
-    GetMessages(#[source] async_nats::Error),
-
-    /// A message cannot be obtained from the NATS message stream.
-    #[error("Cannot get message from NATS message stream")]
-    GetMessage(#[source] async_nats::Error),
-
-    /// The last message for a NATS stream cannot be obtained.
-    #[error("Cannot get last message for NATS stream")]
-    GetLastMessage(#[source] async_nats::Error),
-
-    /// A raw NATS message cannot be converted into a NATS message.
-    #[error("Cannot convert raw NATS message into NATS message")]
-    FromRawMessage(#[source] async_nats::Error),
-
-    /// Events cannot be converted into bytes.
-    #[error("Cannot convert events to bytes")]
-    EvtsIntoBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-
-    /// Bytes cannot be converted to events.
-    #[error("Cannot convert bytes to events")]
-    EvtsFromBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-
-    /// Events cannot be encoded as Protocol Buffers.
-    #[error("Cannot encode events as Protocol Buffers")]
-    EncodeEvts(#[from] EncodeError),
-
-    /// Events cannot be decoded from Protocol Buffers.
-    #[error("Cannot decode events from Protocol Buffers")]
-    DecodeEvts(#[from] DecodeError),
-}
-
 fn seq_no_and_len(msg: &Message) -> (u64, u64) {
     let seq_no = header(msg, SEQ_NO);
     let len = header(msg, LEN);
@@ -388,10 +331,10 @@ mod proto {
 mod tests {
     use super::*;
     use eventsourced::convert;
-    use futures::StreamExt;
+    use futures::TryStreamExt;
+    use std::future;
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
 
-    /// Directly testing the [NatsEvtLog] with trivial events (`u64`).
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let client = Cli::default();
@@ -403,37 +346,40 @@ mod tests {
         let config = Config::default().with_server_addr(server_addr);
         let evt_log = NatsEvtLog::new(config).await?;
         evt_log.setup().await?;
+
         let id = Uuid::now_v7();
 
-        // Verify `last_seq_no` for empty log.
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 0);
 
-        // Verify `persist`.
         evt_log
-            .persist(id, &[1, 2, 3, 4], 1000, &convert::prost::to_bytes)
+            .persist(id, [1, 2, 3].as_ref(), 0, &convert::prost::to_bytes)
             .await?;
-        evt_log
-            .persist(id, &[5, 6, 7], 1004, &convert::prost::to_bytes)
-            .await?;
-        evt_log
-            .persist(id, &[8, 9], 1007, &convert::prost::to_bytes)
-            .await?;
-
-        // Verify `last_seq_no` for non-empty log.
         let last_seq_no = evt_log.last_seq_no(id).await?;
-        assert_eq!(last_seq_no, 1009);
+        assert_eq!(last_seq_no, 3);
 
-        // Verify `evts_by_id`.
         let evts = evt_log
-            .evts_by_id::<u32, _, _>(id, 1002, 1008, None, &convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(id, 2, 3, None, convert::prost::from_bytes)
             .await?;
-        let evts = evts.collect::<Vec<_>>().await;
-        let evts = evts
-            .into_iter()
-            .filter_map(|evt| evt.ok().map(|(_, evt)| evt))
-            .collect::<Vec<_>>();
-        assert_eq!(evts, (2..=8).collect::<Vec<_>>());
+        let sum = evts
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
+            .await?;
+        assert_eq!(sum, 5);
+
+        let evts = evt_log
+            .evts_by_id::<i32, _, _>(id, 1, 5, None, convert::prost::from_bytes)
+            .await?;
+
+        evt_log
+            .persist(id, [4, 5].as_ref(), 3, &convert::prost::to_bytes)
+            .await?;
+        let last_seq_no = evt_log.last_seq_no(id).await?;
+        assert_eq!(last_seq_no, 5);
+
+        let sum = evts
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
+            .await?;
+        assert_eq!(sum, 15);
 
         Ok(())
     }

@@ -11,7 +11,7 @@ repository    = { workspace = true }
 documentation = { workspace = true }
 
 [dependencies]
-eventsourced   = { path = "../eventsourced", default-features = false }
+eventsourced   = { path = "../eventsourced" }
 async-stream   = { workspace = true }
 bb8-postgres   = { workspace = true }
 bytes          = { workspace = true }

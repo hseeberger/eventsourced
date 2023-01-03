@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package example.counter;
+package counter;
 
 message Evt {
   oneof evt {

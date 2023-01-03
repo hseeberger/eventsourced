@@ -331,20 +331,41 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
 #[cfg(all(test, feature = "prost"))]
 mod tests {
     use super::*;
-    use futures::{stream, Stream};
-
-    mod counter {
-        #![allow(unused)]
-        use crate::EventSourced;
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../include/counter.rs"
-        ));
-    }
+    use async_stream::stream;
     use bytes::BytesMut;
-    use counter::*;
+    use futures::Stream;
     use prost::Message;
-    use std::future::ready;
+    use std::convert::Infallible;
+
+    #[derive(Debug)]
+    struct Simple(u64);
+
+    impl EventSourced for Simple {
+        type Cmd = ();
+
+        type Evt = u64;
+
+        type State = u64;
+
+        type Error = Infallible;
+
+        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error> {
+            Ok(vec![
+                (1 << 32) + self.0,
+                (2 << 32) + self.0,
+                (3 << 32) + self.0,
+            ])
+        }
+
+        fn handle_evt(&mut self, _seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
+            self.0 += evt >> 32;
+            None
+        }
+
+        fn set_state(&mut self, state: Self::State) {
+            self.0 = state;
+        }
+    }
 
     #[derive(Debug)]
     struct TestEvtLog;
@@ -370,7 +391,7 @@ mod tests {
         }
 
         async fn last_seq_no(&self, _entity_id: Uuid) -> Result<u64, Self::Error> {
-            Ok(43)
+            Ok(42)
         }
 
         async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
@@ -386,21 +407,21 @@ mod tests {
             EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
             EvtFromBytesError: std::error::Error + Send + Sync + 'static,
         {
-            Ok(stream::iter(0..666)
-                .skip_while(move |n| ready(*n < from_seq_no))
-                .take_while(move |n| ready(*n <= to_seq_no))
-                .map(move |n| {
-                    let evt = Evt {
-                        evt: Some(evt::Evt::Increased(Increased {
-                            old_value: n,
-                            inc: 1,
-                        })),
-                    };
-                    let mut bytes = BytesMut::new();
-                    evt.encode(&mut bytes).unwrap();
-                    let evt = evt_from_bytes(bytes.into()).unwrap();
-                    Ok((n + 1, evt))
-                }))
+            let evts = stream! {
+                for n in 0..666 {
+                    for evt in 1..=3 {
+                        let seq_no = n * 3 + evt;
+                        if from_seq_no <= seq_no && seq_no <= to_seq_no {
+                            let mut bytes = BytesMut::new();
+                            evt.encode(&mut bytes).unwrap();
+                            let evt = evt_from_bytes(bytes.into()).unwrap();
+                            yield Ok((seq_no, evt));
+                        }
+                    }
+
+                }
+            };
+            Ok(evts)
         }
     }
 
@@ -463,27 +484,16 @@ mod tests {
 
         let entity = Entity::spawn(
             Uuid::now_v7(),
-            Counter::default(),
-            666,
+            Simple(0),
+            1,
             event_log,
             snapshot_store,
             convert::prost::binarizer(),
         )
         .await?;
 
-        let evts = entity.handle_cmd(Cmd::Inc(1)).await?;
-        assert_eq!(
-            evts,
-            vec![Evt {
-                evt: Some(evt::Evt::Increased(Increased {
-                    old_value: 43,
-                    inc: 1,
-                }))
-            }]
-        );
-
-        let evts = entity.handle_cmd(Cmd::Dec(666)).await;
-        assert!(evts.is_err());
+        let evts = entity.handle_cmd(()).await?;
+        assert_eq!(evts, vec![(1 << 32) + 42, (2 << 32) + 42, (3 << 32) + 42]);
 
         Ok(())
     }

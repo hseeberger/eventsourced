@@ -42,9 +42,9 @@ pub trait SnapshotStore {
 
 /// Snapshot state along with its sequence number and optional metadata.
 pub struct Snapshot<S> {
-    pub(crate) seq_no: u64,
-    pub(crate) state: S,
-    pub(crate) metadata: Metadata,
+    pub seq_no: u64,
+    pub state: S,
+    pub metadata: Metadata,
 }
 
 impl<S> Snapshot<S> {

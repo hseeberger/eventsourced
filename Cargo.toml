@@ -1,5 +1,11 @@
 [workspace]
-members = [ "eventsourced", "eventsourced-nats", "eventsourced-postgres" ]
+members = [
+  "eventsourced",
+  "eventsourced-nats",
+  "eventsourced-postgres",
+  "examples/counter-nats",
+  "examples/counter-postgres",
+]
 
 [workspace.package]
 edition       = "2021"
