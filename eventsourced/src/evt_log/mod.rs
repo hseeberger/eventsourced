@@ -3,12 +3,12 @@
 use crate::Metadata;
 use bytes::Bytes;
 use futures::Stream;
-use std::future::Future;
+use std::{error::Error as StdError, future::Future};
 use uuid::Uuid;
 
 /// Persistence for events.
 pub trait EvtLog {
-    type Error: std::error::Error;
+    type Error: StdError + Send + Sync;
 
     /// Persist the given events for the given entity ID and the given last sequence number.
     fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
@@ -23,7 +23,7 @@ pub trait EvtLog {
         'c: 'a,
         E: Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
-        EvtToBytesError: std::error::Error + Send + Sync + 'static;
+        EvtToBytesError: StdError + Send + Sync + 'static;
 
     /// Get the last sequence number for the given entity ID.
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error>;
@@ -40,5 +40,5 @@ pub trait EvtLog {
     where
         E: Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: std::error::Error + Send + Sync + 'static;
+        EvtFromBytesError: StdError + Send + Sync + 'static;
 }

@@ -14,7 +14,7 @@ pub use snapshot_store::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use std::{any::Any, fmt::Debug};
+use std::{any::Any, error::Error as StdError, fmt::Debug};
 use thiserror::Error;
 use tokio::{
     pin,
@@ -36,7 +36,7 @@ pub trait EventSourced {
     type State;
 
     /// Error type for the command handler.
-    type Error: std::error::Error;
+    type Error: StdError;
 
     /// Command handler, returning the to be persisted events.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error>;
@@ -75,9 +75,9 @@ where
     L: EvtLog + Send + 'static,
     S: SnapshotStore + Send + 'static,
     EvtToBytes: Fn(&E::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
-    EvtToBytesError: std::error::Error + Send + Sync + 'static,
+    EvtToBytesError: StdError + Send + Sync + 'static,
     StateToBytes: Fn(&E::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-    StateToBytesError: std::error::Error + Send + Sync + 'static,
+    StateToBytesError: StdError + Send + Sync + 'static,
 {
     /// Spawns an event sourced [Entity] with the given ID and creates an [EntityRef] for it.
     ///
@@ -93,12 +93,12 @@ where
         evt_log: L,
         snapshot_store: S,
         binarizer: Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes>,
-    ) -> Result<EntityRef<E>, SpawnEntityError<L, S>>
+    ) -> Result<EntityRef<E>, SpawnEntityError>
     where
         EvtFromBytes: Fn(Bytes) -> Result<E::Evt, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static,
         StateFromBytes: Fn(Bytes) -> Result<E::State, StateFromBytesError> + Send + Sync + 'static,
-        StateFromBytesError: std::error::Error + Send + Sync + 'static,
+        StateFromBytesError: StdError + Send + Sync + 'static,
     {
         assert!(buffer >= 1, "buffer must be positive");
 
@@ -113,7 +113,7 @@ where
         let (snapshot_seq_no, metadata) = snapshot_store
             .load::<E::State, _, _>(id, &state_from_bytes)
             .await
-            .map_err(SpawnEntityError::LoadSnapshot)?
+            .map_err(|source| SpawnEntityError::LoadSnapshot(source.into()))?
             .map(
                 |Snapshot {
                      seq_no,
@@ -131,7 +131,7 @@ where
         let last_seq_no = evt_log
             .last_seq_no(id)
             .await
-            .map_err(SpawnEntityError::LastSeqNo)?;
+            .map_err(|source| SpawnEntityError::LastSeqNo(source.into()))?;
         assert!(
             snapshot_seq_no <= last_seq_no,
             "snapshot_seq_no must be less than or equal to last_seq_no"
@@ -142,10 +142,11 @@ where
             let evts = evt_log
                 .evts_by_id::<E::Evt, _, _>(id, from_seq_no, last_seq_no, metadata, evt_from_bytes)
                 .await
-                .map_err(SpawnEntityError::EvtsById)?;
+                .map_err(|source| SpawnEntityError::EvtsById(source.into()))?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
-                let (seq_no, evt) = evt.map_err(SpawnEntityError::NextEvt)?;
+                let (seq_no, evt) =
+                    evt.map_err(|source| SpawnEntityError::NextEvt(source.into()))?;
                 event_sourced.handle_evt(seq_no, &evt);
             }
         }
@@ -190,7 +191,7 @@ where
     async fn handle_cmd(
         mut self,
         cmd: E::Cmd,
-    ) -> Result<(Self, Result<Vec<E::Evt>, E::Error>), Box<dyn std::error::Error>> {
+    ) -> Result<(Self, Result<Vec<E::Evt>, E::Error>), Box<dyn StdError>> {
         // TODO Remove this helper once async fn in trait is stable!
         fn make_send<T, E>(
             f: impl std::future::Future<Output = Result<T, E>> + Send,
@@ -241,26 +242,22 @@ where
 
 /// Errors from spawning an event sourced [Entity].
 #[derive(Debug, Error)]
-pub enum SpawnEntityError<L, S>
-where
-    L: EvtLog + 'static,
-    S: SnapshotStore + 'static,
-{
+pub enum SpawnEntityError {
     /// A snapshot cannot be loaded from the snapshot store.
     #[error("Cannot load snapshot from snapshot store")]
-    LoadSnapshot(#[source] S::Error),
+    LoadSnapshot(#[source] Box<dyn StdError + Send + Sync>),
 
     /// The last seqence number cannot be obtained from the event log.
     #[error("Cannot get last seqence number from event log")]
-    LastSeqNo(#[source] L::Error),
+    LastSeqNo(#[source] Box<dyn StdError + Send + Sync>),
 
     /// Events by ID cannot be obtained from the event log.
     #[error("Cannot get events by ID from event log")]
-    EvtsById(#[source] L::Error),
+    EvtsById(#[source] Box<dyn StdError + Send + Sync>),
 
     /// The next event cannot be obtained from the event log.
     #[error("Cannot get next event from event log")]
-    NextEvt(#[source] L::Error),
+    NextEvt(#[source] Box<dyn StdError + Send + Sync>),
 }
 
 /// A proxy to a spawned event sourced [Entity] which can be used to invoke its command handler.
@@ -385,7 +382,7 @@ mod tests {
             'c: 'a,
             E: Send + Sync + 'a,
             ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Send + Sync,
-            ToBytesError: std::error::Error + Send + Sync + 'static,
+            ToBytesError: StdError + Send + Sync + 'static,
         {
             Ok(None)
         }
@@ -405,7 +402,7 @@ mod tests {
         where
             E: Send + 'a,
             EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
-            EvtFromBytesError: std::error::Error + Send + Sync + 'static,
+            EvtFromBytesError: StdError + Send + Sync + 'static,
         {
             let evts = stream! {
                 for n in 0..666 {
@@ -448,7 +445,7 @@ mod tests {
             'c: 'a,
             S: Send + Sync + 'a,
             StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-            StateToBytesError: std::error::Error + Send + Sync + 'static,
+            StateToBytesError: StdError + Send + Sync + 'static,
         {
             Ok(())
         }
@@ -460,7 +457,7 @@ mod tests {
         ) -> Result<Option<Snapshot<S>>, Self::Error>
         where
             StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
-            StateFromBytesError: std::error::Error + Send + Sync + 'static,
+            StateFromBytesError: StdError + Send + Sync + 'static,
         {
             let mut bytes = BytesMut::new();
             42.encode(&mut bytes).unwrap();
@@ -478,7 +475,7 @@ mod tests {
     struct TestSnapshotStoreError;
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn std::error::Error>> {
+    async fn test() -> Result<(), Box<dyn StdError>> {
         let event_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
