@@ -14,7 +14,7 @@ pub use snapshot_store::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use std::{any::Any, error::Error as StdError, fmt::Debug};
+use std::{any::Any, error::Error as StdError, fmt::Debug, future::Future};
 use thiserror::Error;
 use tokio::{
     pin,
@@ -106,8 +106,9 @@ where
         } = binarizer;
 
         // Restore snapshot.
-        let (snapshot_seq_no, metadata) = snapshot_store
-            .load::<E::State, _, _>(id, &state_from_bytes)
+        let snapshot_fut =
+            assert_send(snapshot_store.load::<E::State, _, _>(id, &state_from_bytes));
+        let (snapshot_seq_no, metadata) = snapshot_fut
             .await
             .map_err(|source| SpawnEntityError::LoadSnapshot(source.into()))?
             .map(
@@ -135,8 +136,14 @@ where
         if snapshot_seq_no < last_seq_no {
             let from_seq_no = snapshot_seq_no + 1;
             debug!(%id, from_seq_no, last_seq_no , "Replaying evts");
-            let evts = evt_log
-                .evts_by_id::<E::Evt, _, _>(id, from_seq_no, last_seq_no, metadata, evt_from_bytes)
+            let evts_fut = assert_send(evt_log.evts_by_id::<E::Evt, _, _>(
+                id,
+                from_seq_no,
+                last_seq_no,
+                metadata,
+                evt_from_bytes,
+            ));
+            let evts = evts_fut
                 .await
                 .map_err(|source| SpawnEntityError::EvtsById(source.into()))?;
             pin!(evts);
@@ -150,7 +157,7 @@ where
         // Create entity.
         let mut entity = Entity {
             id,
-            seq_no: last_seq_no,
+            seq_no: 42,
             event_sourced,
             evt_log,
             snapshot_store,
@@ -188,13 +195,6 @@ where
         mut self,
         cmd: E::Cmd,
     ) -> Result<(Self, Result<Vec<E::Evt>, E::Error>), Box<dyn StdError>> {
-        // TODO Remove this helper once async fn in trait is stable!
-        fn make_send<T, E>(
-            f: impl std::future::Future<Output = Result<T, E>> + Send,
-        ) -> impl std::future::Future<Output = Result<T, E>> + Send {
-            f
-        }
-
         // Handle command
         let evts = match self.event_sourced.handle_cmd(cmd) {
             Ok(evts) => evts,
@@ -205,7 +205,7 @@ where
             // Persist events
             // TODO Remove this helper once async fn in trait is stable!
             let send_fut =
-                make_send(
+                assert_send(
                     self.evt_log
                         .persist(self.id, &evts, self.seq_no, &self.evt_to_bytes),
                 );
@@ -221,7 +221,7 @@ where
             if let Some(state) = state {
                 debug!(id = %self.id, seq_no = self.seq_no, "Saving snapshot");
                 // TODO Remove this helper once async fn in trait is stable!
-                let send_fut = make_send(self.snapshot_store.save(
+                let send_fut = assert_send(self.snapshot_store.save(
                     self.id,
                     self.seq_no,
                     &state,
@@ -314,6 +314,13 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub evt_from_bytes: EvtFromBytes,
     pub state_to_bytes: StateToBytes,
     pub state_from_bytes: StateFromBytes,
+}
+
+// TODO Remove this helper once async fn in trait is stable!
+fn assert_send<'a, T>(
+    fut: impl Future<Output = T> + Send + 'a,
+) -> impl Future<Output = T> + Send + 'a {
+    fut
 }
 
 #[cfg(all(test, feature = "prost"))]
@@ -483,15 +490,17 @@ mod tests {
         Ok(())
     }
 
+    // We go through these hoops to ensure oddities in "async fn in trait" and other unstable
+    // features are handle appropriately, e.g. by asserting futures are send.
     async fn spawn<E, S>(
         evt_log: E,
         snapshot_store: S,
-    ) -> Result<EntityRef<Simple>, SpawnEntityError>
+    ) -> Result<EntityRef<Simple>, Box<dyn StdError>>
     where
         E: EvtLog,
         S: SnapshotStore,
     {
-        task::spawn(async move {
+        let entity = task::spawn(async move {
             Entity::spawn(
                 Uuid::now_v7(),
                 Simple(0),
@@ -502,6 +511,7 @@ mod tests {
             )
         });
 
-        todo!()
+        let entity = entity.await?.await?;
+        Ok(entity)
     }
 }
