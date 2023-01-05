@@ -3,7 +3,7 @@
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
 #![feature(return_position_impl_trait_in_trait)]
-#![allow(clippy::type_complexity)]
+#![feature(type_alias_impl_trait)]
 
 pub mod convert;
 mod evt_log;
@@ -25,7 +25,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 /// Command and event handling for an event sourced [Entity].
-pub trait EventSourced {
+pub trait EventSourced: Send + 'static {
     /// Command type.
     type Cmd: Debug + Send + Sync + 'static;
 
@@ -67,9 +67,9 @@ pub struct Entity<E, L, S, EvtToBytes, StateToBytes> {
 impl<E, L, S, EvtToBytes, EvtToBytesError, StateToBytes, StateToBytesError>
     Entity<E, L, S, EvtToBytes, StateToBytes>
 where
-    E: EventSourced + Send + 'static,
-    L: EvtLog + Send + 'static,
-    S: SnapshotStore + Send + 'static,
+    E: EventSourced,
+    L: EvtLog,
+    S: SnapshotStore,
     EvtToBytes: Fn(&E::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
     EvtToBytesError: StdError + Send + Sync + 'static,
     StateToBytes: Fn(&E::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
@@ -389,7 +389,10 @@ mod tests {
             to_seq_no: u64,
             _metadata: Metadata,
             evt_from_bytes: EvtFromBytes,
-        ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
+        ) -> Result<
+            EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
+            Self::Error,
+        >
         where
             E: Send + 'a,
             EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
@@ -401,21 +404,21 @@ mod tests {
                         let seq_no = n * 3 + evt;
                         if from_seq_no <= seq_no && seq_no <= to_seq_no {
                             let mut bytes = BytesMut::new();
-                            evt.encode(&mut bytes).unwrap();
-                            let evt = evt_from_bytes(bytes.into()).unwrap();
+                            evt.encode(&mut bytes).map_err(|source| TestEvtLogError(source.into()))?;
+                            let evt = evt_from_bytes(bytes.into()).map_err(|source| TestEvtLogError(source.into()))?;
                             yield Ok((seq_no, evt));
                         }
                     }
 
                 }
             };
-            Ok(evts)
+            Ok(evts.into())
         }
     }
 
     #[derive(Debug, Error)]
     #[error("TestEvtLogError")]
-    struct TestEvtLogError;
+    struct TestEvtLogError(#[source] Box<dyn StdError + Send + Sync>);
 
     #[derive(Debug)]
     struct TestSnapshotStore;
@@ -466,23 +469,37 @@ mod tests {
     struct TestSnapshotStoreError;
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn StdError>> {
-        let event_log = TestEvtLog;
+    async fn test_spawn_handle_cmd() -> Result<(), Box<dyn StdError>> {
+        let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity = Entity::spawn(
-            Uuid::now_v7(),
-            Simple(0),
-            1,
-            event_log,
-            snapshot_store,
-            convert::prost::binarizer(),
-        )
-        .await?;
+        let entity = spawn(evt_log, snapshot_store).await?;
 
         let evts = entity.handle_cmd(()).await??;
         assert_eq!(evts, vec![(1 << 32) + 42, (2 << 32) + 42, (3 << 32) + 42]);
 
         Ok(())
+    }
+
+    async fn spawn<E, S>(
+        evt_log: E,
+        snapshot_store: S,
+    ) -> Result<EntityRef<Simple>, SpawnEntityError>
+    where
+        E: EvtLog,
+        S: SnapshotStore,
+    {
+        task::spawn(async move {
+            Entity::spawn(
+                Uuid::now_v7(),
+                Simple(0),
+                1,
+                evt_log,
+                snapshot_store,
+                convert::prost::binarizer(),
+            )
+        });
+
+        todo!()
     }
 }
