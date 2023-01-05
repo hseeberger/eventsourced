@@ -31,12 +31,14 @@ impl SnapshotStore for NoopSnapshotStore {
         Ok(())
     }
 
-    async fn load<S, StateFromBytes, StateFromBytesError>(
-        &self,
+    async fn load<'a, 'b, S, StateFromBytes, StateFromBytesError>(
+        &'a self,
         _id: Uuid,
-        _state_from_bytes: &StateFromBytes,
+        _state_from_bytes: &'b StateFromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
+        'b: 'a,
+        S: 'a,
         StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
         StateFromBytesError: std::error::Error + Send + Sync + 'static,
     {

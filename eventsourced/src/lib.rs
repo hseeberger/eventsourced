@@ -444,12 +444,14 @@ mod tests {
             Ok(())
         }
 
-        async fn load<S, StateFromBytes, StateFromBytesError>(
-            &self,
+        async fn load<'a, 'b, S, StateFromBytes, StateFromBytesError>(
+            &'a self,
             _id: Uuid,
-            state_from_bytes: &StateFromBytes,
+            state_from_bytes: &'b StateFromBytes,
         ) -> Result<Option<Snapshot<S>>, Self::Error>
         where
+            'b: 'a,
+            S: 'a,
             StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
             StateFromBytesError: StdError + Send + Sync + 'static,
         {

@@ -31,20 +31,26 @@ pub trait EvtLog: Send + Sync + 'static {
         EvtToBytesError: StdError + Send + Sync + 'static;
 
     /// Get the last sequence number for the given entity ID.
-    async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error>;
+    fn last_seq_no<'a>(
+        &'a self,
+        id: Uuid,
+    ) -> impl Future<Output = Result<u64, Self::Error>> + Send + 'a;
 
     /// Get the events for the given ID in the given closed range of sequence numbers.
-    async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
+    fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
         &'a self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
         meta: Metadata,
         evt_from_bytes: EvtFromBytes,
-    ) -> Result<
-        EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
-        Self::Error,
-    >
+    ) -> impl Future<
+        Output = Result<
+            EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
+            Self::Error,
+        >,
+    > + Send
+           + 'a
     where
         E: Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
