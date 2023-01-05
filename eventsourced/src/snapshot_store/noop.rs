@@ -3,7 +3,7 @@
 use super::{Snapshot, SnapshotStore};
 use crate::Metadata;
 use bytes::Bytes;
-use std::{convert::Infallible, fmt::Debug};
+use std::{convert::Infallible, error::Error as StdError, fmt::Debug};
 use uuid::Uuid;
 
 /// A [SnapshotStore] implementation that does nothing.
@@ -26,19 +26,20 @@ impl SnapshotStore for NoopSnapshotStore {
         'c: 'a,
         S: Send + Sync + 'a,
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-        StateToBytesError: std::error::Error + Send + Sync + 'static,
+        StateToBytesError: StdError + Send + Sync + 'static,
     {
         Ok(())
     }
 
-    async fn load<S, StateFromBytes, StateFromBytesError>(
-        &self,
+    async fn load<'a, S, StateFromBytes, StateFromBytesError>(
+        &'a self,
         _id: Uuid,
-        _state_from_bytes: &StateFromBytes,
+        _state_from_bytes: StateFromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
-        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
-        StateFromBytesError: std::error::Error + Send + Sync + 'static,
+        S: 'a,
+        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
+        StateFromBytesError: StdError + Send + Sync + 'static,
     {
         Ok(None)
     }

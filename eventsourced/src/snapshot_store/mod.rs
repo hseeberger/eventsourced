@@ -6,12 +6,12 @@ pub use noop::*;
 
 use crate::Metadata;
 use bytes::Bytes;
-use std::future::Future;
+use std::{error::Error as StdError, future::Future};
 use uuid::Uuid;
 
 /// Persistence for snapshots.
-pub trait SnapshotStore {
-    type Error: std::error::Error;
+pub trait SnapshotStore: Clone + Send + Sync + 'static {
+    type Error: StdError + Send + Sync;
 
     /// Save the given snapshot state for the given entity ID and sequence number.
     fn save<'a, 'b, 'c, S, StateToBytes, StateToBytesError>(
@@ -27,17 +27,18 @@ pub trait SnapshotStore {
         'c: 'a,
         S: Send + Sync + 'a,
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-        StateToBytesError: std::error::Error + Send + Sync + 'static;
+        StateToBytesError: StdError + Send + Sync + 'static;
 
     /// Find and possibly load the [Snapshot] for the given entity ID.
-    async fn load<S, StateFromBytes, StateFromBytesError>(
-        &self,
+    fn load<'a, S, StateFromBytes, StateFromBytesError>(
+        &'a self,
         id: Uuid,
-        state_from_bytes: &StateFromBytes,
-    ) -> Result<Option<Snapshot<S>>, Self::Error>
+        state_from_bytes: StateFromBytes,
+    ) -> impl Future<Output = Result<Option<Snapshot<S>>, Self::Error>> + Send + 'a
     where
-        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
-        StateFromBytesError: std::error::Error + Send + Sync + 'static;
+        S: 'a,
+        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
+        StateFromBytesError: StdError + Send + Sync + 'static;
 }
 
 /// Snapshot state along with its sequence number and optional metadata.

@@ -1,6 +1,6 @@
 use crate::counter::{Cmd, Counter};
 use anyhow::{anyhow, Context, Result};
-use eventsourced::{convert, Entity, NoopSnapshotStore};
+use eventsourced::{convert, Entity, EvtLog, NoopSnapshotStore, SnapshotStore};
 use eventsourced_nats::{NatsEvtLog, NatsEvtLogConfig};
 use std::{iter, time::Instant};
 use tokio::task::JoinSet;
@@ -25,8 +25,17 @@ async fn main() -> Result<()> {
         .await
         .map_err(|error| anyhow!(error))
         .context("Cannot setup NatsEvtLog")?;
+
     let snapshot_store = NoopSnapshotStore;
 
+    run(evt_log, snapshot_store).await
+}
+
+async fn run<L, S>(evt_log: L, snapshot_store: S) -> Result<()>
+where
+    L: EvtLog,
+    S: SnapshotStore,
+{
     let ids = iter::repeat(())
         .take(ENTITY_COUNT)
         .map(|_| Uuid::now_v7())
@@ -39,6 +48,7 @@ async fn main() -> Result<()> {
         let id = *id;
 
         let evt_log = evt_log.clone();
+        let snapshot_store = snapshot_store.clone();
         let counter = Counter::default().with_snapshot_after(SNAPSHOT_AFTER);
         let counter = Entity::spawn(
             id,
@@ -60,11 +70,15 @@ async fn main() -> Result<()> {
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
                     .context("Cannot handle Inc command")
+                    .unwrap()
+                    .context("Invalid command")
                     .unwrap();
                 let _ = counter
                     .handle_cmd(Cmd::Dec(n as u64))
                     .await
                     .context("Cannot handle Dec command")
+                    .unwrap()
+                    .context("Invalid command")
                     .unwrap();
             }
         });
@@ -84,6 +98,7 @@ async fn main() -> Result<()> {
     let start_time = Instant::now();
     for id in ids {
         let evt_log = evt_log.clone();
+        let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
             let _counter = Entity::spawn(
                 id,

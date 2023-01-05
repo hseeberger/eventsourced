@@ -5,10 +5,10 @@ use async_stream::stream;
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
 use eventsourced::{EvtLog, Metadata};
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    convert::identity,
+    error::Error as StdError,
     fmt::{self, Debug, Formatter},
     time::Duration,
 };
@@ -44,7 +44,7 @@ impl PostgresEvtLog {
         })
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
         self.cnn()
             .await?
             .execute(include_str!("create_evt_log.sql"), &[])
@@ -56,18 +56,18 @@ impl PostgresEvtLog {
         self.cnn_pool.get().await.map_err(Error::GetConnection)
     }
 
-    async fn next_evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
-        &'a self,
+    async fn next_evts_by_id<E, EvtFromBytes, EvtFromBytesError>(
+        &self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
         _metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Error>> + 'a, Error>
+    ) -> Result<impl Stream<Item = Result<(u64, E), Error>> + Send, Error>
     where
-        E: Send + 'a,
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
-        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
+        E: Send,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%id, from_seq_no, to_seq_no, "Querying events");
 
@@ -81,21 +81,16 @@ impl PostgresEvtLog {
             .await
             .map_err(Error::ExecuteStmt)?
             .map_err(Error::NextRow)
-            .map_ok(move |row| {
-                let seq_no = row.get::<_, i64>(0) as u64;
-                let bytes = row.get::<_, &[u8]>(1);
-                let bytes = Bytes::copy_from_slice(bytes);
-                evt_from_bytes(bytes)
-                    .map_err(|source| Error::FromBytes(Box::new(source)))
-                    .map(|evt| (seq_no, evt))
+            .map(move |row| {
+                row.and_then(|row| {
+                    let seq_no = row.get::<_, i64>(0) as u64;
+                    let bytes = row.get::<_, &[u8]>(1);
+                    let bytes = Bytes::copy_from_slice(bytes);
+                    evt_from_bytes(bytes)
+                        .map_err(|source| Error::FromBytes(Box::new(source)))
+                        .map(|evt| (seq_no, evt))
+                })
             });
-
-        let evts = stream! {
-            for await evt in evts {
-                let evt = evt.and_then(identity);
-                yield evt;
-            }
-        };
 
         Ok(evts)
     }
@@ -122,7 +117,7 @@ impl EvtLog for PostgresEvtLog {
         'c: 'a,
         E: Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
-        EvtToBytesError: std::error::Error + Send + Sync + 'static,
+        EvtToBytesError: StdError + Send + Sync + 'static,
     {
         assert!(!evts.is_empty(), "evts must not be empty");
 
@@ -166,11 +161,11 @@ impl EvtLog for PostgresEvtLog {
         to_seq_no: u64,
         _metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send + '_, Self::Error>
     where
         E: Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(
@@ -299,7 +294,7 @@ mod tests {
     use testcontainers::{clients::Cli, images::postgres::Postgres};
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn test() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);
