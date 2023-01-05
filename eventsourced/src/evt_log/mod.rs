@@ -26,10 +26,7 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         EvtToBytesError: StdError + Send + Sync + 'static;
 
     /// Get the last sequence number for the given entity ID.
-    fn last_seq_no<'a>(
-        &'a self,
-        id: Uuid,
-    ) -> impl Future<Output = Result<u64, Self::Error>> + Send + 'a;
+    fn last_seq_no(&self, id: Uuid) -> impl Future<Output = Result<u64, Self::Error>> + Send + '_;
 
     /// Get the events for the given ID in the given closed range of sequence numbers.
     fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(

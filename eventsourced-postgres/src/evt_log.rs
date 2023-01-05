@@ -5,10 +5,9 @@ use async_stream::stream;
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
 use eventsourced::{EvtLog, Metadata};
-use futures::{Stream, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    convert::identity,
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
     time::Duration,
@@ -57,16 +56,16 @@ impl PostgresEvtLog {
         self.cnn_pool.get().await.map_err(Error::GetConnection)
     }
 
-    async fn next_evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
-        &'a self,
+    async fn next_evts_by_id<E, EvtFromBytes, EvtFromBytesError>(
+        &self,
         id: Uuid,
         from_seq_no: u64,
         to_seq_no: u64,
         _metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Error>> + 'a, Error>
+    ) -> Result<impl Stream<Item = Result<(u64, E), Error>> + Send, Error>
     where
-        E: Send + 'a,
+        E: Send,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
@@ -82,21 +81,16 @@ impl PostgresEvtLog {
             .await
             .map_err(Error::ExecuteStmt)?
             .map_err(Error::NextRow)
-            .map_ok(move |row| {
-                let seq_no = row.get::<_, i64>(0) as u64;
-                let bytes = row.get::<_, &[u8]>(1);
-                let bytes = Bytes::copy_from_slice(bytes);
-                evt_from_bytes(bytes)
-                    .map_err(|source| Error::FromBytes(Box::new(source)))
-                    .map(|evt| (seq_no, evt))
+            .map(move |row| {
+                row.and_then(|row| {
+                    let seq_no = row.get::<_, i64>(0) as u64;
+                    let bytes = row.get::<_, &[u8]>(1);
+                    let bytes = Bytes::copy_from_slice(bytes);
+                    evt_from_bytes(bytes)
+                        .map_err(|source| Error::FromBytes(Box::new(source)))
+                        .map(|evt| (seq_no, evt))
+                })
             });
-
-        let evts = stream! {
-            for await evt in evts {
-                let evt = evt.and_then(identity);
-                yield evt;
-            }
-        };
 
         Ok(evts)
     }
@@ -167,7 +161,7 @@ impl EvtLog for PostgresEvtLog {
         to_seq_no: u64,
         _metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send + '_, Self::Error>
     where
         E: Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
@@ -181,35 +175,34 @@ impl EvtLog for PostgresEvtLog {
 
         debug!(%id, from_seq_no, to_seq_no, "Building event stream");
 
-        // let last_seq_no = self.last_seq_no(id).await?;
+        let last_seq_no = self.last_seq_no(id).await?;
 
-        // let mut current_from_seq_no = from_seq_no;
-        // let evts = stream! {
-        //     'outer: while (current_from_seq_no < to_seq_no) {
-        //         let evts = self
-        //             .next_evts_by_id(id, current_from_seq_no, to_seq_no, None, evt_from_bytes)
-        //             .await?;
-        //         for await evt in evts {
-        //             match evt {
-        //                 Ok(evt @ (seq_no, _)) => {
-        //                     current_from_seq_no = seq_no;
-        //                     yield Ok(evt);
-        //                 }
-        //                 err => {
-        //                     yield err;
-        //                     break 'outer;
-        //                 }
-        //             }
-        //         }
-        //         // Only sleep if requesting future events.
-        //         if (last_seq_no < to_seq_no) {
-        //             sleep(self.poll_interval).await;
-        //         }
-        //     }
-        // };
+        let mut current_from_seq_no = from_seq_no;
+        let evts = stream! {
+            'outer: while (current_from_seq_no < to_seq_no) {
+                let evts = self
+                    .next_evts_by_id(id, current_from_seq_no, to_seq_no, None, evt_from_bytes)
+                    .await?;
+                for await evt in evts {
+                    match evt {
+                        Ok(evt @ (seq_no, _)) => {
+                            current_from_seq_no = seq_no;
+                            yield Ok(evt);
+                        }
+                        err => {
+                            yield err;
+                            break 'outer;
+                        }
+                    }
+                }
+                // Only sleep if requesting future events.
+                if (last_seq_no < to_seq_no) {
+                    sleep(self.poll_interval).await;
+                }
+            }
+        };
 
-        // Ok(evts.into())
-        Ok(futures::stream::empty())
+        Ok(evts)
     }
 }
 
