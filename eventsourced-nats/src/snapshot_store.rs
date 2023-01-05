@@ -11,6 +11,7 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::{
     any::Any,
+    error::Error as StdError,
     fmt::{self, Debug, Formatter},
 };
 use tracing::debug;
@@ -38,7 +39,7 @@ impl NatsSnapshotStore {
         })
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
         let _ = self
             .jetstream
             .create_key_value(jetstream::kv::Config {
@@ -81,7 +82,7 @@ impl SnapshotStore for NatsSnapshotStore {
         'c: 'a,
         S: Send + Sync + 'a,
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-        StateToBytesError: std::error::Error + Send + Sync + 'static,
+        StateToBytesError: StdError + Send + Sync + 'static,
     {
         let mut bytes = BytesMut::new();
         let state =
@@ -104,14 +105,16 @@ impl SnapshotStore for NatsSnapshotStore {
         Ok(())
     }
 
-    async fn load<S, StateFromBytes, StateFromBytesError>(
-        &self,
+    async fn load<'a, 'b, S, StateFromBytes, StateFromBytesError>(
+        &'a self,
         id: Uuid,
-        state_from_bytes: &StateFromBytes,
+        state_from_bytes: &'b StateFromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
+        'b: 'a,
+        S: 'a,
         StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
-        StateFromBytesError: std::error::Error + Send + Sync + 'static,
+        StateFromBytesError: StdError + Send + Sync + 'static,
     {
         let snapshot = self
             .get_bucket(&self.bucket)
@@ -193,7 +196,7 @@ mod tests {
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn test() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", "2.9.9")
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));

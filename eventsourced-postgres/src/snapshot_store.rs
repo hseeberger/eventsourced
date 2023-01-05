@@ -5,7 +5,10 @@ use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
 use eventsourced::{Metadata, Snapshot, SnapshotStore};
 use serde::{Deserialize, Serialize};
-use std::fmt::{self, Debug, Formatter};
+use std::{
+    error::Error as StdError,
+    fmt::{self, Debug, Formatter},
+};
 use tokio_postgres::NoTls;
 use tracing::debug;
 use uuid::Uuid;
@@ -32,7 +35,7 @@ impl PostgresSnapshotStore {
         Ok(Self { cnn_pool })
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
         self.cnn()
             .await?
             .execute(include_str!("create_snapshot_store.sql"), &[])
@@ -67,7 +70,7 @@ impl SnapshotStore for PostgresSnapshotStore {
         'c: 'a,
         S: Send + Sync + 'a,
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-        StateToBytesError: std::error::Error + Send + Sync + 'static,
+        StateToBytesError: StdError + Send + Sync + 'static,
     {
         let cnn = self.cnn().await?;
         let bytes = state_to_bytes(state).map_err(|source| Error::ToBytes(Box::new(source)))?;
@@ -80,14 +83,16 @@ impl SnapshotStore for PostgresSnapshotStore {
         Ok(())
     }
 
-    async fn load<S, StateFromBytes, StateFromBytesError>(
-        &self,
+    async fn load<'a, 'b, S, StateFromBytes, StateFromBytesError>(
+        &'a self,
         id: Uuid,
-        state_from_bytes: &StateFromBytes,
+        state_from_bytes: &'b StateFromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
+        'b: 'a,
+        S: 'a,
         StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
-        StateFromBytesError: std::error::Error + Send + Sync + 'static,
+        StateFromBytesError: StdError + Send + Sync + 'static,
     {
         let cnn = self.cnn().await?;
         cnn.query_opt("SELECT seq_no, state FROM snapshots WHERE id = $1", &[&id])
@@ -190,7 +195,7 @@ mod tests {
     use testcontainers::{clients::Cli, images::postgres::Postgres};
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn test() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);

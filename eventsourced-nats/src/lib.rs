@@ -12,6 +12,7 @@ pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
 pub use snapshot_store::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore};
 
 use prost::{DecodeError, EncodeError};
+use std::error::Error as StdError;
 use thiserror::Error;
 
 /// Errors from the [NatsEvtLog] or [NatsSnapshotStore].
@@ -55,11 +56,11 @@ pub enum Error {
 
     /// Events cannot be converted into bytes.
     #[error("Cannot convert events to bytes")]
-    EvtsIntoBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+    EvtsIntoBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
     /// Bytes cannot be converted to events.
     #[error("Cannot convert bytes to events")]
-    EvtsFromBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
+    EvtsFromBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
     /// Events cannot be encoded as Protocol Buffers.
     #[error("Cannot encode events as Protocol Buffers")]

@@ -14,11 +14,12 @@ use async_nats::{
 };
 use async_stream::stream;
 use bytes::{Bytes, BytesMut};
-use eventsourced::{EvtLog, Metadata};
+use eventsourced::{EvtLog, EvtStream, Metadata};
 use futures::{stream, Stream, StreamExt};
 use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
 use std::{
+    error::Error as StdError,
     fmt::{self, Debug, Formatter},
     io,
     str::FromStr,
@@ -58,7 +59,7 @@ impl NatsEvtLog {
             .map_err(Error::GetStream)
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
         let _ = self
             .jetstream
             .create_stream(jetstream::stream::Config {
@@ -94,7 +95,7 @@ impl EvtLog for NatsEvtLog {
         'c: 'a,
         E: Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
-        EvtToBytesError: std::error::Error + Send + Sync + 'static,
+        EvtToBytesError: StdError + Send + Sync + 'static,
     {
         assert!(!evts.is_empty(), "evts must not be empty");
 
@@ -171,11 +172,14 @@ impl EvtLog for NatsEvtLog {
         to_seq_no: u64,
         metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + 'a, Self::Error>
+    ) -> Result<
+        EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send + 'a, Self::Error>,
+        Self::Error,
+    >
     where
         E: Send + 'a,
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
-        EvtFromBytesError: std::error::Error + Send + Sync + 'static,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static,
     {
         assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(
@@ -252,7 +256,7 @@ impl EvtLog for NatsEvtLog {
             }
         };
 
-        Ok(evts)
+        Ok(evts.into())
     }
 }
 
@@ -336,7 +340,7 @@ mod tests {
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
 
     #[tokio::test]
-    async fn test_evt_log() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", "2.9.9")
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
