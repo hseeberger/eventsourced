@@ -60,11 +60,15 @@ async fn main() -> Result<()> {
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
                     .context("Cannot handle Inc command")
+                    .unwrap()
+                    .context("Invalid command")
                     .unwrap();
                 let _ = counter
                     .handle_cmd(Cmd::Dec(n as u64))
                     .await
                     .context("Cannot handle Dec command")
+                    .unwrap()
+                    .context("Invalid command")
                     .unwrap();
             }
         });

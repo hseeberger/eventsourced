@@ -27,16 +27,16 @@ use uuid::Uuid;
 /// Command and event handling for an event sourced [Entity].
 pub trait EventSourced {
     /// Command type.
-    type Cmd: Debug;
+    type Cmd: Debug + Send + Sync + 'static;
 
     /// Event type.
-    type Evt: Debug;
+    type Evt: Debug + Send + Sync + 'static;
 
     /// Snapshot state type.
-    type State;
+    type State: Send + Sync;
 
     /// Error type for the command handler.
-    type Error: StdError;
+    type Error: StdError + Send + Sync + 'static;
 
     /// Command handler, returning the to be persisted events.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error>;
@@ -68,10 +68,6 @@ impl<E, L, S, EvtToBytes, EvtToBytesError, StateToBytes, StateToBytesError>
     Entity<E, L, S, EvtToBytes, StateToBytes>
 where
     E: EventSourced + Send + 'static,
-    E::Cmd: Send + 'static,
-    E::Evt: Send + Sync,
-    E::State: Send + Sync,
-    E::Error: Send,
     L: EvtLog + Send + 'static,
     S: SnapshotStore + Send + 'static,
     EvtToBytes: Fn(&E::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
@@ -272,7 +268,7 @@ where
 
 impl<E> EntityRef<E>
 where
-    E: EventSourced + 'static,
+    E: EventSourced,
 {
     /// Get the ID of the proxied event sourced [Entity].
     pub fn id(&self) -> Uuid {
@@ -280,38 +276,33 @@ where
     }
 
     /// Invoke the command handler of the proxied event sourced [Entity].
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Vec<E::Evt>, EntityRefError<E>> {
+    pub async fn handle_cmd(
+        &self,
+        cmd: E::Cmd,
+    ) -> Result<Result<Vec<E::Evt>, E::Error>, EntityRefError> {
         let (result_in, result_out) = oneshot::channel();
-        self.cmd_in.send((cmd, result_in)).await?;
-        result_out.await?.map_err(EntityRefError::InvalidCommand)
+        self.cmd_in
+            .send((cmd, result_in))
+            .await
+            .map_err(|source| EntityRefError::SendCmd(source.into()))?;
+        result_out.await.map_err(EntityRefError::RcvHandlerResult)
     }
 }
 
 /// Errors from an [EntityRef].
 #[derive(Debug, Error)]
-pub enum EntityRefError<E>
-where
-    E: EventSourced + 'static,
-{
-    /// An invalid command has been rejected by a command hander. This is considered a client
-    /// error, like 400 Bad Request, i.e. normal behavior of the event sourced [Entity] and its
-    /// [EntityRef].
-    #[error("Invalid command rejected by command handler")]
-    InvalidCommand(#[source] E::Error),
-
+pub enum EntityRefError {
     /// A command cannot be sent from an [EntityRef] to its [Entity]. This is considered an
     /// internal error, like 500 Internal Server Error, i.e. erroneous behavior of the event
     /// sourced [Entity] and its [EntityRef].
     #[error("Cannot send command to Entity")]
-    SendCmd(
-        #[from] mpsc::error::SendError<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
-    ),
+    SendCmd(#[source] Box<dyn StdError + Send + Sync>),
 
     /// An [EntityRef] cannot receive the command handler result from its [Entity], potentially
     /// because its entity has terminated. This is considered an internal error, like 500 Internal
     /// Server Error, i.e. erroneous behavior of the event sourced [Entity] and its [EntityRef].
     #[error("Cannot receive command handler result from Entity")]
-    EntityTerminated(#[from] oneshot::error::RecvError),
+    RcvHandlerResult(#[from] oneshot::error::RecvError),
 }
 
 /// Optional metadata to optimize sequence number based lookup of events in the [EvtLog].
@@ -489,7 +480,7 @@ mod tests {
         )
         .await?;
 
-        let evts = entity.handle_cmd(()).await?;
+        let evts = entity.handle_cmd(()).await??;
         assert_eq!(evts, vec![(1 << 32) + 42, (2 << 32) + 42, (3 << 32) + 42]);
 
         Ok(())
