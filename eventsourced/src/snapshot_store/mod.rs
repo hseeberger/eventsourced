@@ -10,7 +10,7 @@ use std::{error::Error as StdError, future::Future};
 use uuid::Uuid;
 
 /// Persistence for snapshots.
-pub trait SnapshotStore: Send + Sync + 'static {
+pub trait SnapshotStore: Clone + Send + Sync + 'static {
     type Error: StdError + Send + Sync;
 
     /// Save the given snapshot state for the given entity ID and sequence number.

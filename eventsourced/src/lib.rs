@@ -362,7 +362,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestEvtLog;
 
     impl EvtLog for TestEvtLog {
@@ -427,7 +427,7 @@ mod tests {
     #[error("TestEvtLogError")]
     struct TestEvtLogError(#[source] Box<dyn StdError + Send + Sync>);
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestSnapshotStore;
 
     impl SnapshotStore for TestSnapshotStore {

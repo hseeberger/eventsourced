@@ -12,7 +12,7 @@ use std::{
 use uuid::Uuid;
 
 /// Persistence for events.
-pub trait EvtLog: Send + Sync + 'static {
+pub trait EvtLog: Clone + Send + Sync + 'static {
     type Error: StdError + Send + Sync;
 
     /// Persist the given events for the given entity ID and the given last sequence number.
