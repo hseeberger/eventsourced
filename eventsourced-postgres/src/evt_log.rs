@@ -4,7 +4,7 @@ use crate::{Cnn, CnnPool, Error};
 use async_stream::stream;
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::{EvtLog, EvtStream, Metadata};
+use eventsourced::{EvtLog, Metadata};
 use futures::{Stream, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -167,10 +167,7 @@ impl EvtLog for PostgresEvtLog {
         to_seq_no: u64,
         _metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
-    ) -> Result<
-        EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
-        Self::Error,
-    >
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>
     where
         E: Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
@@ -212,7 +209,7 @@ impl EvtLog for PostgresEvtLog {
         // };
 
         // Ok(evts.into())
-        Ok(futures::stream::empty().into())
+        Ok(futures::stream::empty())
     }
 }
 

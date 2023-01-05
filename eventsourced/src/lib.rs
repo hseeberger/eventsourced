@@ -396,10 +396,7 @@ mod tests {
             to_seq_no: u64,
             _metadata: Metadata,
             evt_from_bytes: EvtFromBytes,
-        ) -> Result<
-            EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
-            Self::Error,
-        >
+        ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>
         where
             E: Send + 'a,
             EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
@@ -419,7 +416,7 @@ mod tests {
 
                 }
             };
-            Ok(evts.into())
+            Ok(evts)
         }
     }
 
