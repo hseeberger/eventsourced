@@ -93,7 +93,8 @@ where
     where
         EvtFromBytes: Fn(Bytes) -> Result<E::Evt, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
-        StateFromBytes: Fn(Bytes) -> Result<E::State, StateFromBytesError> + Send + Sync + 'static,
+        StateFromBytes:
+            Fn(Bytes) -> Result<E::State, StateFromBytesError> + Copy + Send + Sync + 'static,
         StateFromBytesError: StdError + Send + Sync + 'static,
     {
         assert!(buffer >= 1, "buffer must be positive");
@@ -106,8 +107,7 @@ where
         } = binarizer;
 
         // Restore snapshot.
-        let snapshot_fut =
-            assert_send(snapshot_store.load::<E::State, _, _>(id, &state_from_bytes));
+        let snapshot_fut = assert_send(snapshot_store.load::<E::State, _, _>(id, state_from_bytes));
         let (snapshot_seq_no, metadata) = snapshot_fut
             .await
             .map_err(|source| SpawnEntityError::LoadSnapshot(source.into()))?
@@ -402,7 +402,7 @@ mod tests {
         >
         where
             E: Send + 'a,
-            EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Send + Sync + 'static,
+            EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
             EvtFromBytesError: StdError + Send + Sync + 'static,
         {
             let evts = stream! {
@@ -451,15 +451,15 @@ mod tests {
             Ok(())
         }
 
-        async fn load<'a, 'b, S, StateFromBytes, StateFromBytesError>(
+        async fn load<'a, S, StateFromBytes, StateFromBytesError>(
             &'a self,
             _id: Uuid,
-            state_from_bytes: &'b StateFromBytes,
+            state_from_bytes: StateFromBytes,
         ) -> Result<Option<Snapshot<S>>, Self::Error>
         where
-            'b: 'a,
             S: 'a,
-            StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
+            StateFromBytes:
+                Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
             StateFromBytesError: StdError + Send + Sync + 'static,
         {
             let mut bytes = BytesMut::new();

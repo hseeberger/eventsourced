@@ -173,7 +173,7 @@ impl EvtLog for NatsEvtLog {
         metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
     ) -> Result<
-        EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send + 'a, Self::Error>,
+        EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
         Self::Error,
     >
     where

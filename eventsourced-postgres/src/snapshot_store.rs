@@ -83,15 +83,14 @@ impl SnapshotStore for PostgresSnapshotStore {
         Ok(())
     }
 
-    async fn load<'a, 'b, S, StateFromBytes, StateFromBytesError>(
+    async fn load<'a, S, StateFromBytes, StateFromBytesError>(
         &'a self,
         id: Uuid,
-        state_from_bytes: &'b StateFromBytes,
+        state_from_bytes: StateFromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
-        'b: 'a,
         S: 'a,
-        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
+        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
         StateFromBytesError: StdError + Send + Sync + 'static,
     {
         let cnn = self.cnn().await?;

@@ -30,15 +30,14 @@ pub trait SnapshotStore: Send + Sync + 'static {
         StateToBytesError: StdError + Send + Sync + 'static;
 
     /// Find and possibly load the [Snapshot] for the given entity ID.
-    fn load<'a, 'b, S, StateFromBytes, StateFromBytesError>(
+    fn load<'a, S, StateFromBytes, StateFromBytesError>(
         &'a self,
         id: Uuid,
-        state_from_bytes: &'b StateFromBytes,
+        state_from_bytes: StateFromBytes,
     ) -> impl Future<Output = Result<Option<Snapshot<S>>, Self::Error>> + Send + 'a
     where
-        'b: 'a,
         S: 'a,
-        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Send + Sync + 'static,
+        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
         StateFromBytesError: StdError + Send + Sync + 'static;
 }
 

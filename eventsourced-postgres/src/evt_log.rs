@@ -168,7 +168,7 @@ impl EvtLog for PostgresEvtLog {
         _metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
     ) -> Result<
-        EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send + 'a, Self::Error>,
+        EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
         Self::Error,
     >
     where
@@ -184,34 +184,35 @@ impl EvtLog for PostgresEvtLog {
 
         debug!(%id, from_seq_no, to_seq_no, "Building event stream");
 
-        let last_seq_no = self.last_seq_no(id).await?;
+        // let last_seq_no = self.last_seq_no(id).await?;
 
-        let mut current_from_seq_no = from_seq_no;
-        let evts = stream! {
-            'outer: while (current_from_seq_no < to_seq_no) {
-                let evts = self
-                    .next_evts_by_id(id, current_from_seq_no, to_seq_no, None, evt_from_bytes)
-                    .await?;
-                for await evt in evts {
-                    match evt {
-                        Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = seq_no;
-                            yield Ok(evt);
-                        }
-                        err => {
-                            yield err;
-                            break 'outer;
-                        }
-                    }
-                }
-                // Only sleep if requesting future events.
-                if (last_seq_no < to_seq_no) {
-                    sleep(self.poll_interval).await;
-                }
-            }
-        };
+        // let mut current_from_seq_no = from_seq_no;
+        // let evts = stream! {
+        //     'outer: while (current_from_seq_no < to_seq_no) {
+        //         let evts = self
+        //             .next_evts_by_id(id, current_from_seq_no, to_seq_no, None, evt_from_bytes)
+        //             .await?;
+        //         for await evt in evts {
+        //             match evt {
+        //                 Ok(evt @ (seq_no, _)) => {
+        //                     current_from_seq_no = seq_no;
+        //                     yield Ok(evt);
+        //                 }
+        //                 err => {
+        //                     yield err;
+        //                     break 'outer;
+        //                 }
+        //             }
+        //         }
+        //         // Only sleep if requesting future events.
+        //         if (last_seq_no < to_seq_no) {
+        //             sleep(self.poll_interval).await;
+        //         }
+        //     }
+        // };
 
-        Ok(evts.into())
+        // Ok(evts.into())
+        Ok(futures::stream::empty().into())
     }
 }
 

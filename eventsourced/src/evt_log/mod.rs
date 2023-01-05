@@ -46,11 +46,7 @@ pub trait EvtLog: Send + Sync + 'static {
         evt_from_bytes: EvtFromBytes,
     ) -> impl Future<
         Output = Result<
-            EvtStream<
-                E,
-                impl Stream<Item = Result<(u64, E), Self::Error>> + Send + 'a,
-                Self::Error,
-            >,
+            EvtStream<E, impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
             Self::Error,
         >,
     > + Send
