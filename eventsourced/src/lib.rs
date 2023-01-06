@@ -39,7 +39,7 @@ pub trait EventSourced: Send + 'static {
     /// Error type for the command handler.
     type Error: StdError + Send + Sync + 'static;
 
-    /// Command handler, returning the to be persisted events.
+    /// Command handler, returning the to be persisted events or an error.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
@@ -277,6 +277,11 @@ where
     }
 
     /// Invoke the command handler of the proxied event sourced [Entity].
+    ///
+    /// The returned `Result` signals whether the command could be sent to the [Entity] and the
+    /// command handler result could be received. If that is not the case, that is a technical
+    /// error. If that is the case, the `Success` variant contains another `Result` which signals
+    /// whether the command was valid or not. If it was, the persisted events are returned.
     pub async fn handle_cmd(
         &self,
         cmd: E::Cmd,

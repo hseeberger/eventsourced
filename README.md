@@ -14,27 +14,31 @@ EventSourced is inspired to a large degree by the excellent [Akka Persistence](h
 
 The `EventSourced` trait defines types for commands, events, snapshot state and errors as well as functions for command handling, event handling and setting a snapshot state.
 
-The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a pluggable snapshot store respectively. For [Postgres](https://www.postgresql.org/) and [NATS](https://nats.io/) these are already provided.
+The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a pluggable snapshot store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/) these are already provided.
 
 The `Entity` struct and its associated `spawn` fuction provide for creating "running" instances of an `EventSourced` implementation, identifiable by a `Uuid`, for some event log and some snapshot store. Conversion of events and snapshot state to and from bytes happens via functions; for [prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json) these are already provided.
 
 ## Counter example (no pun intended)
 
-The `counter` package in the `example` directory contains a simple example: a counter which handles `Inc` and `Decrease` commands and emits/handles `Increased` and `Decreased` events.
+The `counter` package in the `example` directory contains a simple example: a counter which handles `Inc` and `Dec` commands and emits/handles `Increased` and `Decreased` events.
 
 ```rust
 impl EventSourced for Counter {
     ...
 
+    /// Command handler, returning the to be persisted events or an error.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error> {
         match cmd {
             Cmd::Inc(inc) => {
-                if inc > u64::MAX - self.value {
+                // Validate command: overflow.
+                if inc + self.value > u64::MAX {
                     Err(Error::Overflow {
                         value: self.value,
                         inc,
                     })
-                } else {
+                }
+                // Valid Inc command results in Increased event.
+                else {
                     Ok(vec![Evt {
                         evt: Some(evt::Evt::Increased(Increased {
                             old_value: self.value,
@@ -47,6 +51,7 @@ impl EventSourced for Counter {
         }
     }
 
+    /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
         match evt.evt {
             Some(evt::Evt::Increased(Increased { old_value, inc })) => {
@@ -68,7 +73,7 @@ impl EventSourced for Counter {
 }
 ```
 
-There are also the two `counter-nats` and `counter-postgres` packages, with a biary crate each, using `eventsourced-nats` and `eventsourced-postgres` respectively for the event log.
+There are also the two `counter-nats` and `counter-postgres` packages, with a binary crate each, using `eventsourced-nats` and `eventsourced-postgres` respectively for the event log.
 
 ```rust
 ...
