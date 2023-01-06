@@ -3,6 +3,7 @@ members = [
   "eventsourced",
   "eventsourced-nats",
   "eventsourced-postgres",
+  "examples/counter",
   "examples/counter-nats",
   "examples/counter-postgres",
 ]
@@ -22,7 +23,9 @@ async-nats         = { version = "0" }
 async-stream       = { version = "0" }
 bb8-postgres       = { version = "0" }
 bytes              = { version = "1" }
+configured         = { version = "0" }
 futures            = { version = "0" }
+humantime-serde    = { version = "1" }
 pin-project-lite   = { version = "0" }
 prost              = { version = "0" }
 prost-build        = { version = "0" }

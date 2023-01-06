@@ -12,18 +12,11 @@ repository    = { workspace = true }
 documentation = { workspace = true }
 
 [dependencies]
+counter            = { path = "../counter" }
 eventsourced       = { path = "../../eventsourced" }
 eventsourced-nats  = { path = "../../eventsourced-nats" }
 anyhow             = { workspace = true }
-bytes              = { workspace = true }
-prost              = { workspace = true }
+configured         = { workspace = true }
+serde              = { workspace = true }
 tokio              = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
-thiserror          = { workspace = true }
-tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
-uuid               = { workspace = true }
-
-[build-dependencies]
-anyhow      = { workspace = true }
-prost-build = { workspace = true }
-walkdir     = { workspace = true }

@@ -208,6 +208,7 @@ impl EvtLog for PostgresEvtLog {
 
 /// Configuration for the [PostgresEvtLog].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
     host: String,
     port: u16,
@@ -215,6 +216,7 @@ pub struct Config {
     password: String,
     dbname: String,
     sslmode: String,
+    #[serde(with = "humantime_serde")]
     poll_interval: Duration,
 }
 
@@ -277,9 +279,9 @@ impl Default for Config {
         Self {
             host: "localhost".to_string(),
             port: 5432,
-            user: "postgres".to_string(),
-            password: "".to_string(),
-            dbname: "postgres".to_string(),
+            user: "test".to_string(),
+            password: "test".to_string(),
+            dbname: "test".to_string(),
             sslmode: "prefer".to_string(),
             poll_interval: Duration::from_secs(3),
         }
