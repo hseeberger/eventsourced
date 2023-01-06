@@ -5,9 +5,19 @@ snapshot-after = 100_000_000
 
 [evt-log]
 host          = "localhost"
-port          = 5432
-user          = "test"
-password      = "test"
+port          = 55000
+user          = "postgres"
+password      = "postgrespw"
 dbname        = "test"
 sslmode       = "prefer"
 poll-interval = "2s"
+
+[snapshot-store]
+host          = "localhost"
+port          = 55000
+user          = "postgres"
+password      = "postgrespw"
+dbname        = "test"
+sslmode       = "prefer"
+poll-interval = "2s"
+

@@ -6,10 +6,10 @@ use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 
 pub fn binarizer<E, S>() -> Binarizer<
-    for<'a> fn(&'a E) -> Result<bytes::Bytes, EncodeError>,
-    fn(bytes::Bytes) -> Result<E, DecodeError>,
-    for<'a> fn(&'a S) -> Result<bytes::Bytes, EncodeError>,
-    fn(bytes::Bytes) -> Result<S, DecodeError>,
+    for<'a> fn(&'a E) -> Result<Bytes, EncodeError>,
+    fn(Bytes) -> Result<E, DecodeError>,
+    for<'a> fn(&'a S) -> Result<Bytes, EncodeError>,
+    fn(Bytes) -> Result<S, DecodeError>,
 >
 where
     E: Message + Default,

@@ -8,6 +8,38 @@ Event sourced entities in [Rust](https://www.rust-lang.org/).
 - `eventsourced-nats`: [NATS](https://nats.io/) implementation for eventsourced `EvtLog` and `SnapshotStore`
 - `eventsourced-postgres`: [Postgres](https://www.postgresql.org/) implementation for eventsourced`EvtLog` and `SnapshotStore`
 
+## Requirements for building the project
+
+### Protobuf 
+Before building the project and examples, please make sure you have installed the [protobuf](https://github.com/protocolbuffers/protobuf) dependency.
+
+On macOS this can be done using the following command:
+
+    brew install protobuf
+
+## Running the examples
+
+#### Counter-nats
+To run the example `counter-nats`, `nats-server needs to be installed.
+
+    brew install nats-server
+
+To run the example, first start the `nats-server` with `jetstream`
+
+    nats-server -a localhost -p 4222 -js
+
+The run the example:
+
+    CONFIG_DIR=examples/counter-nats/config cargo run --bin counter-nats
+#### Counter-postgres
+To run the example `counter-postgres` you require you to configure a connection to a running Postgres server.
+
+Visit the (configuration file)[examples/counter-postgres/config/default.toml] and adjust the connection parameters as needed. 
+
+When postgres has been configured correctly, run the example:
+    
+    CONFIG_DIR=examples/counter-postgres/config cargo run --bin counter-postgres
+
 ## Concepts
 
 EventSourced is inspired to a large degree by the excellent [Akka Persistence](https://doc.akka.io/docs/akka/current/typed/index-persistence.html) library.
@@ -115,7 +147,7 @@ tasks.spawn(async move {
 ...
 ```
 
-Take a look at the `example` directory for more details.
+Take a look at the [examples](examples) directory for more details.
 
 
 ## License ##
