@@ -48,7 +48,7 @@ impl EventSourced for Counter {
         match cmd {
             Cmd::Inc(inc) => {
                 // Validate command: overflow.
-                if inc + self.value > u64::MAX {
+                if inc > u64::MAX - self.value {
                     Err(Error::Overflow {
                         value: self.value,
                         inc,
