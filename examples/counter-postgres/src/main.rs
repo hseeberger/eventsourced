@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use configured::Configured;
-use eventsourced::NoopSnapshotStore;
-use eventsourced_postgres::{PostgresEvtLog, PostgresEvtLogConfig};
+use eventsourced_postgres::{
+    PostgresEvtLog, PostgresEvtLogConfig, PostgresSnapshotStore, PostgresSnapshotStoreConfig,
+};
 use serde::Deserialize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -16,14 +17,23 @@ async fn main() -> Result<()> {
     let config = Config::load().context("Cannot load configuration")?;
     println!("Starting with configuration: {config:?}");
 
-    let evt_log = PostgresEvtLog::new(config.evt_log).await?;
+    let evt_log = PostgresEvtLog::new(config.evt_log)
+        .await
+        .context("Cannot create event log")?;
     evt_log
         .setup()
         .await
         .map_err(|error| anyhow!(error))
-        .context("Cannot setup PostgresEvtLog")?;
+        .context("Cannot setup event log")?;
 
-    let snapshot_store = NoopSnapshotStore;
+    let snapshot_store = PostgresSnapshotStore::new(config.snapshot_store)
+        .await
+        .context("Cannot create snapshot store")?;
+    snapshot_store
+        .setup()
+        .await
+        .map_err(|error| anyhow!(error))
+        .context("Cannot setup snapshot store")?;
 
     counter::run(config.counter, evt_log, snapshot_store).await
 }
@@ -33,4 +43,5 @@ async fn main() -> Result<()> {
 struct Config {
     counter: counter::Config,
     evt_log: PostgresEvtLogConfig,
+    snapshot_store: PostgresSnapshotStoreConfig,
 }
