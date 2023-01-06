@@ -11,17 +11,18 @@ repository    = { workspace = true }
 documentation = { workspace = true }
 
 [dependencies]
-eventsourced   = { path = "../eventsourced" }
-async-stream   = { workspace = true }
-bb8-postgres   = { workspace = true }
-bytes          = { workspace = true }
-futures        = { workspace = true }
-serde          = { workspace = true }
-tokio          = { workspace = true, features = [ "time" ] }
-thiserror      = { workspace = true }
-tokio-postgres = { workspace = true }
-tracing        = { workspace = true }
-uuid           = { workspace = true }
+eventsourced    = { path = "../eventsourced" }
+async-stream    = { workspace = true }
+bb8-postgres    = { workspace = true }
+bytes           = { workspace = true }
+futures         = { workspace = true }
+humantime-serde = { workspace = true }
+serde           = { workspace = true }
+tokio           = { workspace = true, features = [ "time" ] }
+thiserror       = { workspace = true }
+tokio-postgres  = { workspace = true }
+tracing         = { workspace = true }
+uuid            = { workspace = true }
 
 [dev-dependencies]
 anyhow             = { workspace = true }

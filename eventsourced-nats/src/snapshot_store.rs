@@ -156,6 +156,7 @@ impl SnapshotStore for NatsSnapshotStore {
 
 /// Configuration for the [SnapshotStore].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub server_addr: String,
     pub bucket: String,
@@ -195,7 +196,7 @@ mod tests {
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", "2.9.9")
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));

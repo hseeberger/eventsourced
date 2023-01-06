@@ -208,6 +208,7 @@ impl EvtLog for PostgresEvtLog {
 
 /// Configuration for the [PostgresEvtLog].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
     host: String,
     port: u16,
@@ -215,6 +216,7 @@ pub struct Config {
     password: String,
     dbname: String,
     sslmode: String,
+    #[serde(with = "humantime_serde")]
     poll_interval: Duration,
 }
 
@@ -294,7 +296,7 @@ mod tests {
     use testcontainers::{clients::Cli, images::postgres::Postgres};
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);

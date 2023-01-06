@@ -44,7 +44,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_string() {
+    fn test_convert_prost() {
         // Prost comes with `Message` implementations for basic types like `String`.
         let s = "test".to_string();
 
