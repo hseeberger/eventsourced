@@ -34,7 +34,7 @@ The run the example:
 #### Counter-postgres
 To run the example `counter-postgres` you require you to configure a connection to a running Postgres server.
 
-Visit the (configuration file)[examples/counter-postgres/config/default.toml] and adjust the connection parameters as needed. 
+Visit the [configuration file](examples/counter-postgres/config/default.toml) and adjust the connection parameters as needed. 
 
 When postgres has been configured correctly, run the example:
     
