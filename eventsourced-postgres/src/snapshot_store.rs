@@ -111,6 +111,7 @@ impl SnapshotStore for PostgresSnapshotStore {
 
 /// Configuration for the [PostgresSnapshotStore].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
     host: String,
     port: u16,
@@ -194,7 +195,7 @@ mod tests {
     use testcontainers::{clients::Cli, images::postgres::Postgres};
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);

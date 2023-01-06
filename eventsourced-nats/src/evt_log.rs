@@ -259,6 +259,7 @@ impl EvtLog for NatsEvtLog {
 
 /// Configuration for the [NatsEvtLog].
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub struct Config {
     server_addr: String,
     stream_name: String,
@@ -291,11 +292,9 @@ impl Config {
 impl Default for Config {
     /// Use "localhost:4222" for `server_addr` and "evts" for `stream_name`.
     fn default() -> Self {
-        let server_addr = "localhost:4222".into();
-        let stream_name = "evts".into();
         Self {
-            server_addr,
-            stream_name,
+            server_addr: "localhost:4222".into(),
+            stream_name: "evts".into(),
         }
     }
 }

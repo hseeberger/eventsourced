@@ -48,7 +48,7 @@ mod tests {
     struct Foo(u64);
 
     #[test]
-    fn test() {
+    fn test_convert_serde_json() {
         let foo = Foo(42);
 
         let bytes = to_bytes(&foo);

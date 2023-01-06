@@ -279,9 +279,9 @@ impl Default for Config {
         Self {
             host: "localhost".to_string(),
             port: 5432,
-            user: "test".to_string(),
-            password: "test".to_string(),
-            dbname: "test".to_string(),
+            user: "postgres".to_string(),
+            password: "".to_string(),
+            dbname: "postgres".to_string(),
             sslmode: "prefer".to_string(),
             poll_interval: Duration::from_secs(3),
         }
@@ -296,7 +296,7 @@ mod tests {
     use testcontainers::{clients::Cli, images::postgres::Postgres};
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);
