@@ -11,7 +11,7 @@ repository    = { workspace = true }
 documentation = { workspace = true }
 
 [dependencies]
-eventsourced = { path = "../eventsourced" }
+eventsourced = { path = "../eventsourced", version = "0.1.0" }
 async-nats   = { workspace = true }
 async-stream = { workspace = true }
 bytes        = { workspace = true }
