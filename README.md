@@ -1,5 +1,16 @@
 # EventSourced
 
+[![Crates.io][crates-badge]][crates-url]
+[![license][license-badge]][license-url]
+[![build][build-badge]][build-url]
+
+[crates-badge]: https://img.shields.io/crates/v/eventsourced
+[crates-url]: https://crates.io/crates/eventsourced
+[license-badge]: https://img.shields.io/github/license/hseeberger/eventsourced
+[license-url]: https://github.com/hseeberger/eventsourced/blob/main/LICENSE
+[build-badge]: https://img.shields.io/github/actions/workflow/status/hseeberger/eventsourced/ci.yaml
+[build-url]: https://github.com/hseeberger/eventsourced/actions/workflows/ci.yaml
+
 Event sourced entities in [Rust](https://www.rust-lang.org/).
 
 ## Crates
