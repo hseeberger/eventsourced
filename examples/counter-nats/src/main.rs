@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use configured::Configured;
-use eventsourced::NoopSnapshotStore;
-use eventsourced_nats::{NatsEvtLog, NatsEvtLogConfig};
+use eventsourced_nats::{NatsEvtLog, NatsEvtLogConfig, NatsSnapshotStore, NatsSnapshotStoreConfig};
 use serde::Deserialize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -16,14 +15,23 @@ async fn main() -> Result<()> {
     let config = Config::load().context("Cannot load configuration")?;
     println!("Starting with configuration: {config:?}");
 
-    let evt_log = NatsEvtLog::new(NatsEvtLogConfig::default()).await?;
+    let evt_log = NatsEvtLog::new(NatsEvtLogConfig::default())
+        .await
+        .context("Cannot create event log")?;
     evt_log
         .setup()
         .await
         .map_err(|error| anyhow!(error))
-        .context("Cannot setup NatsEvtLog")?;
+        .context("Cannot setup event log")?;
 
-    let snapshot_store = NoopSnapshotStore;
+    let snapshot_store = NatsSnapshotStore::new(NatsSnapshotStoreConfig::default())
+        .await
+        .context("Cannot create snapshot store")?;
+    snapshot_store
+        .setup()
+        .await
+        .map_err(|error| anyhow!(error))
+        .context("Cannot setup snapshot store")?;
 
     counter::run(config.counter, evt_log, snapshot_store).await
 }

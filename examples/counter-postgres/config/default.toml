@@ -1,5 +1,5 @@
 [counter]
-entity-count   = 50
+entity-count   = 100
 evt-count      = 10_000
 snapshot-after = 100_000_000
 
@@ -10,4 +10,12 @@ user          = "test"
 password      = "test"
 dbname        = "test"
 sslmode       = "prefer"
-poll-interval = "2s"
+poll-interval = "3s"
+
+[snapshot-store]
+host     = "localhost"
+port     = 5432
+user     = "test"
+password = "test"
+dbname   = "test"
+sslmode  = "prefer"

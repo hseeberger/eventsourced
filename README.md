@@ -18,6 +18,18 @@ The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a plugg
 
 The `Entity` struct and its associated `spawn` fuction provide for creating "running" instances of an `EventSourced` implementation, identifiable by a `Uuid`, for some event log and some snapshot store. Conversion of events and snapshot state to and from bytes happens via functions; for [prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json) these are already provided.
 
+## Requirements for building the project
+
+### Protobuf
+
+Before building the project and examples, please make sure you have installed the [protobuf](https://github.com/protocolbuffers/protobuf) dependency that is not only needed for the optional byte conversion with prost, which is a default feature, but also for eventsourced-nats. The only way to get away without `protobuf` is to change the default features and not build eventsourced-nats.
+
+On macOS `protobuf` can be installed via Homebrew:
+
+```
+brew install protobuf
+```
+
 ## Counter example (no pun intended)
 
 The `counter` package in the `example` directory contains a simple example: a counter which handles `Inc` and `Dec` commands and emits/handles `Increased` and `Decreased` events.
@@ -115,8 +127,77 @@ tasks.spawn(async move {
 ...
 ```
 
-Take a look at the `example` directory for more details.
+Take a look at the [examples](examples) directory for more details.
 
+### Running the counter-nats example
+
+For the `counter-nats` example, nats-server needs to be installed. On macOS just use Homebrew:
+
+```
+brew install nats-server
+```
+
+Before running the example, start the nats-server with the `jetstream` feature enabled:
+
+```
+nats-server --jetstream
+```
+
+Then use the following command to run the example:
+
+```
+RUST_LOG=info \
+    CONFIG_DIR=examples/counter-postgres/config \
+    cargo run \
+    --release \
+    --package counter-nats
+```
+
+Notice that you can change the configuration either by changing the `defaul.yaml` file at `examples/counter-nats/config` or by overriding the configuration settings with environment variables, e.g. `APP__COUNTER__EVT_COUNT=42`:
+
+```
+APP__COUNTER__EVT_COUNT=42 \
+    RUST_LOG=info \
+    CONFIG_DIR=examples/counter-nats/config \
+    cargo run \
+    --release \
+    --package counter-nats
+```
+
+### Running the counter-postgres example
+
+For the `counter-postgres` example, PostgreSQL needs to be installed. On macOS just use Homebrew:
+
+```
+brew install postgresql@14
+```
+
+Before running the example, start PostgreSQL:
+
+```
+brew services run postgresql@14
+```
+
+Make sure you know the following connection parameters:
+- host
+- port
+- user
+- password
+- dbname
+
+Change the configuration either by changing the `defaul.yaml` file at `examples/counter-postgres/config` or by overriding the configuration settings with environment variables, e.g. `APP__EVT_LOG__DBNAME=test` or `APP__COUNTER__EVT_COUNT=42`:
+
+Then use the following command to run the example:
+
+```
+APP__EVT_LOG__DBNAME=test \
+    APP__COUNTER__EVT_COUNT=42 \
+    RUST_LOG=info \
+    CONFIG_DIR=examples/counter-postgres/config \
+    cargo run \
+    --release \
+    --package counter-postgres
+```
 
 ## License ##
 

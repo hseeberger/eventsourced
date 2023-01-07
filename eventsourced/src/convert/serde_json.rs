@@ -8,10 +8,10 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{from_slice, to_value, Error};
 
 pub fn binarizer<E, S>() -> Binarizer<
-    for<'a> fn(&'a E) -> Result<bytes::Bytes, Error>,
-    fn(bytes::Bytes) -> Result<E, Error>,
-    for<'a> fn(&'a S) -> Result<bytes::Bytes, Error>,
-    fn(bytes::Bytes) -> Result<S, Error>,
+    for<'a> fn(&'a E) -> Result<Bytes, Error>,
+    fn(Bytes) -> Result<E, Error>,
+    for<'a> fn(&'a S) -> Result<Bytes, Error>,
+    fn(Bytes) -> Result<S, Error>,
 >
 where
     E: Serialize + DeserializeOwned,
