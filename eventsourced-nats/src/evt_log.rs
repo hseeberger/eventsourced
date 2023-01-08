@@ -93,11 +93,16 @@ impl EvtLog for NatsEvtLog {
     where
         'b: 'a,
         'c: 'a,
-        E: Send + Sync + 'a,
+        E: Debug + Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static,
     {
         assert!(!evts.is_empty(), "evts must not be empty");
+        assert!(
+            last_seq_no <= Self::MAX_SEQ_NO - evts.len() as u64,
+            "last_seq_no must be less or equal {} - evts.len()",
+            Self::MAX_SEQ_NO
+        );
 
         // Convert events into bytes.
         let len = evts.len();
@@ -174,7 +179,7 @@ impl EvtLog for NatsEvtLog {
         evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>
     where
-        E: Send + 'a,
+        E: Debug + Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
@@ -367,7 +372,13 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1, 5, None, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(
+                id,
+                1,
+                NatsEvtLog::MAX_SEQ_NO,
+                None,
+                convert::prost::from_bytes,
+            )
             .await?;
 
         evt_log
@@ -377,6 +388,7 @@ mod tests {
         assert_eq!(last_seq_no, 5);
 
         let sum = evts
+            .take(5)
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
