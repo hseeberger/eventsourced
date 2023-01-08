@@ -105,6 +105,10 @@ impl Debug for PostgresEvtLog {
 impl EvtLog for PostgresEvtLog {
     type Error = Error;
 
+    /// The maximum value for sequence numbers. As PostgreSQL does not support unsigned integers,
+    /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
+    const MAX_SEQ_NO: u64 = i64::MAX as u64;
+
     async fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
         &'a self,
         id: Uuid,
@@ -115,11 +119,16 @@ impl EvtLog for PostgresEvtLog {
     where
         'b: 'a,
         'c: 'a,
-        E: Send + Sync + 'a,
+        E: Debug + Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static,
     {
         assert!(!evts.is_empty(), "evts must not be empty");
+        assert!(
+            last_seq_no <= Self::MAX_SEQ_NO - evts.len() as u64,
+            "last_seq_no must be less or equal {} - evts.len()",
+            Self::MAX_SEQ_NO
+        );
 
         // Persist all events transactionally.
         let mut cnn = self.cnn().await?;
@@ -163,7 +172,7 @@ impl EvtLog for PostgresEvtLog {
         evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send + '_, Self::Error>
     where
-        E: Send + 'a,
+        E: Debug + Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
@@ -172,6 +181,11 @@ impl EvtLog for PostgresEvtLog {
             from_seq_no <= to_seq_no,
             "from_seq_no must be less than or equal to to_seq_no"
         );
+        assert!(
+            to_seq_no <= Self::MAX_SEQ_NO,
+            "to_seq_no must be less or equal {}",
+            Self::MAX_SEQ_NO
+        );
 
         debug!(%id, from_seq_no, to_seq_no, "Building event stream");
 
@@ -179,14 +193,15 @@ impl EvtLog for PostgresEvtLog {
 
         let mut current_from_seq_no = from_seq_no;
         let evts = stream! {
-            'outer: while (current_from_seq_no < to_seq_no) {
+            'outer: loop {
                 let evts = self
                     .next_evts_by_id(id, current_from_seq_no, to_seq_no, None, evt_from_bytes)
                     .await?;
+
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = seq_no;
+                            current_from_seq_no = seq_no + 1;
                             yield Ok(evt);
                         }
                         err => {
@@ -195,6 +210,11 @@ impl EvtLog for PostgresEvtLog {
                         }
                     }
                 }
+
+                if current_from_seq_no > to_seq_no {
+                    break;
+                }
+
                 // Only sleep if requesting future events.
                 if (last_seq_no < to_seq_no) {
                     sleep(self.poll_interval).await;
@@ -325,7 +345,13 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1, 5, None, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(
+                id,
+                1,
+                PostgresEvtLog::MAX_SEQ_NO,
+                None,
+                convert::prost::from_bytes,
+            )
             .await?;
 
         evt_log
@@ -335,6 +361,7 @@ mod tests {
         assert_eq!(last_seq_no, 5);
 
         let sum = evts
+            .take(5)
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
