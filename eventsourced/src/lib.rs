@@ -15,7 +15,7 @@ pub use snapshot_store::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use std::{any::Any, error::Error as StdError, fmt::Debug, future::Future};
+use std::{any::Any, error::Error as StdError, fmt::Debug};
 use thiserror::Error;
 use tokio::{
     pin,
@@ -108,8 +108,8 @@ where
         } = binarizer;
 
         // Restore snapshot.
-        let snapshot_fut = assert_send(snapshot_store.load::<E::State, _, _>(id, state_from_bytes));
-        let (snapshot_seq_no, metadata) = snapshot_fut
+        let (snapshot_seq_no, metadata) = snapshot_store
+            .load::<E::State, _, _>(id, state_from_bytes)
             .await
             .map_err(|source| SpawnEntityError::LoadSnapshot(source.into()))?
             .map(
@@ -137,14 +137,8 @@ where
         if snapshot_seq_no < last_seq_no {
             let from_seq_no = snapshot_seq_no + 1;
             debug!(%id, from_seq_no, last_seq_no , "Replaying evts");
-            let evts_fut = assert_send(evt_log.evts_by_id::<E::Evt, _, _>(
-                id,
-                from_seq_no,
-                last_seq_no,
-                metadata,
-                evt_from_bytes,
-            ));
-            let evts = evts_fut
+            let evts = evt_log
+                .evts_by_id::<E::Evt, _, _>(id, from_seq_no, last_seq_no, metadata, evt_from_bytes)
                 .await
                 .map_err(|source| SpawnEntityError::EvtsById(source.into()))?;
             pin!(evts);
@@ -204,13 +198,10 @@ where
 
         if !evts.is_empty() {
             // Persist events
-            // TODO Remove this helper once async fn in trait is stable!
-            let send_fut =
-                assert_send(
-                    self.evt_log
-                        .persist(self.id, &evts, self.seq_no, &self.evt_to_bytes),
-                );
-            let metadata = send_fut.await?;
+            let metadata = self
+                .evt_log
+                .persist(self.id, &evts, self.seq_no, &self.evt_to_bytes)
+                .await?;
 
             // Handle persisted events
             let state = evts.iter().fold(None, |state, evt| {
@@ -221,15 +212,9 @@ where
             // Persist latest snapshot if any
             if let Some(state) = state {
                 debug!(id = %self.id, seq_no = self.seq_no, "Saving snapshot");
-                // TODO Remove this helper once async fn in trait is stable!
-                let send_fut = assert_send(self.snapshot_store.save(
-                    self.id,
-                    self.seq_no,
-                    &state,
-                    metadata,
-                    &self.state_to_bytes,
-                ));
-                send_fut.await?;
+                self.snapshot_store
+                    .save(self.id, self.seq_no, &state, metadata, &self.state_to_bytes)
+                    .await?;
             }
         }
 
@@ -320,13 +305,6 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub evt_from_bytes: EvtFromBytes,
     pub state_to_bytes: StateToBytes,
     pub state_from_bytes: StateFromBytes,
-}
-
-// TODO Remove this helper once async fn in trait is stable!
-fn assert_send<'a, T>(
-    fut: impl Future<Output = T> + Send + 'a,
-) -> impl Future<Output = T> + Send + 'a {
-    fut
 }
 
 #[cfg(all(test, feature = "prost"))]
