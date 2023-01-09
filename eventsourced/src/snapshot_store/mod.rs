@@ -21,7 +21,7 @@ pub trait SnapshotStore: Clone + Send + Sync + 'static {
         state: &'b S,
         meta: Metadata,
         state_to_bytes: &'c StateToBytes,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'a
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send
     where
         'b: 'a,
         'c: 'a,
@@ -34,7 +34,7 @@ pub trait SnapshotStore: Clone + Send + Sync + 'static {
         &'a self,
         id: Uuid,
         state_from_bytes: StateFromBytes,
-    ) -> impl Future<Output = Result<Option<Snapshot<S>>, Self::Error>> + Send + 'a
+    ) -> impl Future<Output = Result<Option<Snapshot<S>>, Self::Error>> + Send
     where
         S: 'a,
         StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
