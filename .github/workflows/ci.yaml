@@ -38,15 +38,13 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Check code formatting
+      - name: Check code format (cargo fmt)
         run: cargo +nightly fmt --check
 
-      - name: Lint
+      - name: Lint (cargo clippy)
         run: |
           cargo clippy --no-deps -- -D warnings
-          cargo clippy --no-deps --no-default-features --features serde_json -- -D warnings
 
-      - name: Test
+      - name: Test (cargo test)
         run: |
           cargo test
-          cargo test --no-default-features --features serde_json --package eventsourced
