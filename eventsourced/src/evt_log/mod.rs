@@ -25,7 +25,7 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         evts: &'b [E],
         last_seq_no: u64,
         evt_to_bytes: &'c EvtToBytes,
-    ) -> impl Future<Output = Result<Metadata, Self::Error>> + Send + 'a
+    ) -> impl Future<Output = Result<Metadata, Self::Error>> + Send
     where
         'b: 'a,
         'c: 'a,
@@ -52,7 +52,6 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
     ) -> impl Future<
         Output = Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
     > + Send
-           + 'a
     where
         E: Debug + Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
