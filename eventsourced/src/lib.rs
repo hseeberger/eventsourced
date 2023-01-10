@@ -352,16 +352,14 @@ mod tests {
     impl EvtLog for TestEvtLog {
         type Error = TestEvtLogError;
 
-        async fn persist<'a, 'b, 'c, E, ToBytes, ToBytesError>(
+        async fn persist<'a, E, ToBytes, ToBytesError>(
             &'a self,
             _id: Uuid,
-            _evts: &'b [E],
+            _evts: &'a [E],
             _last_seq_no: u64,
-            _to_bytes: &'c ToBytes,
+            _to_bytes: &'a ToBytes,
         ) -> Result<Metadata, Self::Error>
         where
-            'b: 'a,
-            'c: 'a,
             E: Send + Sync + 'a,
             ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Send + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
@@ -414,17 +412,15 @@ mod tests {
     impl SnapshotStore for TestSnapshotStore {
         type Error = TestSnapshotStoreError;
 
-        async fn save<'a, 'b, 'c, S, StateToBytes, StateToBytesError>(
+        async fn save<'a, S, StateToBytes, StateToBytesError>(
             &'a mut self,
             _id: Uuid,
             _seq_no: u64,
-            _state: &'b S,
+            _state: &'a S,
             _metadata: Metadata,
-            _state_to_bytes: &'c StateToBytes,
+            _state_to_bytes: &'a StateToBytes,
         ) -> Result<(), Self::Error>
         where
-            'b: 'a,
-            'c: 'a,
             S: Send + Sync + 'a,
             StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
             StateToBytesError: StdError + Send + Sync + 'static,

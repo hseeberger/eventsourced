@@ -69,17 +69,15 @@ impl Debug for NatsSnapshotStore {
 impl SnapshotStore for NatsSnapshotStore {
     type Error = Error;
 
-    async fn save<'a, 'b, 'c, S, StateToBytes, StateToBytesError>(
+    async fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
         seq_no: u64,
-        state: &'b S,
+        state: &'a S,
         metadata: Metadata,
-        state_to_bytes: &'c StateToBytes,
+        state_to_bytes: &'a StateToBytes,
     ) -> Result<(), Self::Error>
     where
-        'b: 'a,
-        'c: 'a,
         S: Send + Sync + 'a,
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
         StateToBytesError: StdError + Send + Sync + 'static,

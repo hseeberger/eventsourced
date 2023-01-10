@@ -109,16 +109,14 @@ impl EvtLog for PostgresEvtLog {
     /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
     const MAX_SEQ_NO: u64 = i64::MAX as u64;
 
-    async fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
+    async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a self,
         id: Uuid,
-        evts: &'b [E],
+        evts: &'a [E],
         last_seq_no: u64,
-        evt_to_bytes: &'c EvtToBytes,
+        evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
     where
-        'b: 'a,
-        'c: 'a,
         E: Debug + Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static,

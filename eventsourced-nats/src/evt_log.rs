@@ -83,16 +83,14 @@ impl Debug for NatsEvtLog {
 impl EvtLog for NatsEvtLog {
     type Error = Error;
 
-    async fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
+    async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a self,
         id: Uuid,
-        evts: &'b [E],
+        evts: &'a [E],
         last_seq_no: u64,
-        evt_to_bytes: &'c EvtToBytes,
+        evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
     where
-        'b: 'a,
-        'c: 'a,
         E: Debug + Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static,
