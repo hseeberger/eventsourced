@@ -14,17 +14,15 @@ pub trait SnapshotStore: Clone + Send + Sync + 'static {
     type Error: StdError + Send + Sync;
 
     /// Save the given snapshot state for the given entity ID and sequence number.
-    fn save<'a, 'b, 'c, S, StateToBytes, StateToBytesError>(
+    fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
         seq_no: u64,
-        state: &'b S,
+        state: &'a S,
         meta: Metadata,
-        state_to_bytes: &'c StateToBytes,
+        state_to_bytes: &'a StateToBytes,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send
     where
-        'b: 'a,
-        'c: 'a,
         S: Send + Sync + 'a,
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
         StateToBytesError: StdError + Send + Sync + 'static;

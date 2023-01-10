@@ -19,16 +19,14 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
     /// # Panics
     /// - Panics if `evts` are empty.
     /// - Panics if `last_seq_no` is less or equal [MAX_SEQ_NO] - `evts.len()`.
-    fn persist<'a, 'b, 'c, E, EvtToBytes, EvtToBytesError>(
+    fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a self,
         id: Uuid,
-        evts: &'b [E],
+        evts: &'a [E],
         last_seq_no: u64,
-        evt_to_bytes: &'c EvtToBytes,
+        evt_to_bytes: &'a EvtToBytes,
     ) -> impl Future<Output = Result<Metadata, Self::Error>> + Send
     where
-        'b: 'a,
-        'c: 'a,
         E: Debug + Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static;
