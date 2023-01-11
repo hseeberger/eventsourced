@@ -20,11 +20,7 @@ async fn main() -> Result<()> {
     let evt_log = PostgresEvtLog::new(config.evt_log)
         .await
         .context("Cannot create event log")?;
-    evt_log
-        .setup()
-        .await
-        .map_err(|error| anyhow!(error))
-        .context("Cannot setup event log")?;
+    evt_log.setup().await.context("Cannot setup event log")?;
 
     let snapshot_store = PostgresSnapshotStore::new(config.snapshot_store)
         .await

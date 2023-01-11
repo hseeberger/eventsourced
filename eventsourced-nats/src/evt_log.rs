@@ -59,7 +59,7 @@ impl NatsEvtLog {
             .map_err(Error::GetStream)
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
+    pub async fn setup(&self) -> Result<(), Error> {
         let _ = self
             .jetstream
             .create_stream(jetstream::stream::Config {
@@ -67,7 +67,8 @@ impl NatsEvtLog {
                 subjects: vec!["evts.>".to_string()],
                 ..Default::default()
             })
-            .await?;
+            .await
+            .map_err(Error::CreateStream)?;
         Ok(())
     }
 }
