@@ -39,14 +39,15 @@ impl NatsSnapshotStore {
         })
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
+    pub async fn setup(&self) -> Result<(), Error> {
         let _ = self
             .jetstream
             .create_key_value(jetstream::kv::Config {
                 bucket: "snapshots".to_string(),
                 ..Default::default()
             })
-            .await?;
+            .await
+            .map_err(Error::CreateStream)?;
         Ok(())
     }
 

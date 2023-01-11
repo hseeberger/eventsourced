@@ -18,11 +18,7 @@ async fn main() -> Result<()> {
     let evt_log = NatsEvtLog::new(NatsEvtLogConfig::default())
         .await
         .context("Cannot create event log")?;
-    evt_log
-        .setup()
-        .await
-        .map_err(|error| anyhow!(error))
-        .context("Cannot setup event log")?;
+    evt_log.setup().await.context("Cannot setup event log")?;
 
     let snapshot_store = NatsSnapshotStore::new(NatsSnapshotStoreConfig::default())
         .await

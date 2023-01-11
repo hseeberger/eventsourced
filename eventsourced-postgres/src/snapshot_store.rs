@@ -35,11 +35,14 @@ impl PostgresSnapshotStore {
         Ok(Self { cnn_pool })
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
-        self.cnn()
-            .await?
+    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
+        self.cnn_pool
+            .get()
+            .await
+            .map_err(Error::GetConnection)?
             .execute(include_str!("create_snapshot_store.sql"), &[])
-            .await?;
+            .await
+            .map_err(Error::ExecuteStmt)?;
         Ok(())
     }
 

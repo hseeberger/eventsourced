@@ -34,6 +34,10 @@ pub enum Error {
     #[error("Cannot get NATS stream")]
     GetStream(#[source] async_nats::Error),
 
+    /// A NATS stream cannot be created.
+    #[error("Cannot create NATS stream")]
+    CreateStream(#[source] async_nats::Error),
+
     /// A NATS consumer cannot be created.
     #[error("Cannot create NATS consumer")]
     CreateConsumer(#[source] async_nats::Error),
