@@ -57,7 +57,7 @@ pub trait EventSourced: Send + 'static {
 /// save a snapshot at the current sequence number which is used to speed up spawning.
 pub struct Entity<E, L, S, EvtToBytes, StateToBytes> {
     id: Uuid,
-    seq_no: u64,
+    last_seq_no: u64,
     event_sourced: E,
     evt_log: L,
     snapshot_store: S,
@@ -152,7 +152,7 @@ where
         // Create entity.
         let mut entity = Entity {
             id,
-            seq_no: 42,
+            last_seq_no,
             event_sourced,
             evt_log,
             snapshot_store,
@@ -200,20 +200,28 @@ where
             // Persist events
             let metadata = self
                 .evt_log
-                .persist(self.id, &evts, self.seq_no, &self.evt_to_bytes)
+                .persist(self.id, &evts, self.last_seq_no, &self.evt_to_bytes)
                 .await?;
 
             // Handle persisted events
             let state = evts.iter().fold(None, |state, evt| {
-                self.seq_no += 1;
-                self.event_sourced.handle_evt(self.seq_no, evt).or(state)
+                self.last_seq_no += 1;
+                self.event_sourced
+                    .handle_evt(self.last_seq_no, evt)
+                    .or(state)
             });
 
             // Persist latest snapshot if any
             if let Some(state) = state {
-                debug!(id = %self.id, seq_no = self.seq_no, "Saving snapshot");
+                debug!(id = %self.id, seq_no = self.last_seq_no, "Saving snapshot");
                 self.snapshot_store
-                    .save(self.id, self.seq_no, &state, metadata, &self.state_to_bytes)
+                    .save(
+                        self.id,
+                        self.last_seq_no,
+                        &state,
+                        metadata,
+                        &self.state_to_bytes,
+                    )
                     .await?;
             }
         }
