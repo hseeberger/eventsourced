@@ -35,7 +35,7 @@ impl PostgresSnapshotStore {
         Ok(Self { cnn_pool })
     }
 
-    pub async fn setup(&self) -> Result<(), Box<dyn StdError + Send + Sync + 'static>> {
+    pub async fn setup(&self) -> Result<(), Error> {
         self.cnn_pool
             .get()
             .await

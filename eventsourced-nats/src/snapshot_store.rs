@@ -47,7 +47,7 @@ impl NatsSnapshotStore {
                 ..Default::default()
             })
             .await
-            .map_err(Error::CreateStream)?;
+            .map_err(Error::CreateBucket)?;
         Ok(())
     }
 
