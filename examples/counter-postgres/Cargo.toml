@@ -1,7 +1,7 @@
 [package]
 name          = "counter-postgres"
 description   = "eventsourced example using eventsourced-postgres"
-version       = "0.2.0"
+version       = "0.2.1"
 publish       = false
 edition       = { workspace = true }
 authors       = { workspace = true }
