@@ -74,9 +74,10 @@ impl PostgresEvtLog {
     {
         debug!(%id, from_seq_no, to_seq_no, "Querying events");
 
-        let cnn = self.cnn().await?;
         let params: [&(dyn ToSql + Sync); 3] = [&id, &(from_seq_no as i64), &(to_seq_no as i64)];
-        let evts = cnn
+        let evts = self
+            .cnn()
+            .await?
             .query_raw(
                 "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2 AND seq_no <= $3",
                 params,
@@ -131,6 +132,8 @@ impl EvtLog for PostgresEvtLog {
             Self::MAX_SEQ_NO
         );
 
+        debug!(%id, last_seq_no, len = evts.len(), "Persisting events");
+
         // Persist all events transactionally.
         let mut cnn = self.cnn().await?;
         let tx = cnn.transaction().await.map_err(Error::StartTx)?;
@@ -151,8 +154,9 @@ impl EvtLog for PostgresEvtLog {
     }
 
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error> {
-        let cnn = self.cnn().await?;
-        let last_seq_no = cnn
+        let last_seq_no = self
+            .cnn()
+            .await?
             .query_opt(
                 "SELECT COALESCE(MAX(seq_no), 0) FROM evts WHERE id = $1",
                 &[&id],
