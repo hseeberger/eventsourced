@@ -78,6 +78,10 @@ pub enum Error {
     #[error("Cannot get NATS KV bucket")]
     GetBucket(#[source] async_nats::Error),
 
+    /// A NATS KV bucket cannot be created.
+    #[error("Cannot create NATS KV bucket")]
+    CreateBucket(#[source] async_nats::Error),
+
     /// A snapshot cannot be stored in a NATS KV bucket.
     #[error("Cannot store snapshot in NATS KV bucket")]
     SaveSnapshot(#[source] async_nats::Error),
