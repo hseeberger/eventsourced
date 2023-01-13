@@ -73,14 +73,17 @@ impl SnapshotStore for PostgresSnapshotStore {
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
         StateToBytesError: StdError + Send + Sync + 'static,
     {
-        let cnn = self.cnn().await?;
+        debug!(%id, seq_no, "Saving snapshot");
+
         let bytes = state_to_bytes(state).map_err(|source| Error::ToBytes(Box::new(source)))?;
-        cnn.execute(
-            "INSERT INTO snapshots VALUES ($1, $2, $3)",
-            &[&id, &(seq_no as i64), &bytes.as_ref()],
-        )
-        .await
-        .map_err(Error::ExecuteStmt)?;
+        self.cnn()
+            .await?
+            .execute(
+                "INSERT INTO snapshots VALUES ($1, $2, $3)",
+                &[&id, &(seq_no as i64), &bytes.as_ref()],
+            )
+            .await
+            .map_err(Error::ExecuteStmt)?;
         Ok(())
     }
 
@@ -94,8 +97,16 @@ impl SnapshotStore for PostgresSnapshotStore {
         StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
         StateFromBytesError: StdError + Send + Sync + 'static,
     {
-        let cnn = self.cnn().await?;
-        cnn.query_opt("SELECT seq_no, state FROM snapshots WHERE id = $1", &[&id])
+        debug!(%id, "Loading snapshot");
+
+        self.cnn()
+            .await?
+            .query_opt(
+                "SELECT seq_no, state FROM snapshots
+                 WHERE id = $1
+                 AND seq_no = (select max(seq_no) from snapshots where id = $1)",
+                &[&id],
+            )
             .await
             .map_err(Error::ExecuteStmt)?
             .map(move |row| {
