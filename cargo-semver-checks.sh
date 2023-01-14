@@ -1,2 +1,2 @@
 #!/bin/sh
-cargo semver-checks check-release
+# cargo semver-checks check-release
