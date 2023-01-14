@@ -157,11 +157,12 @@ impl SnapshotStore for NatsSnapshotStore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub server_addr: String,
-    pub bucket: String,
+    server_addr: String,
+    bucket: String,
 }
 
 impl Config {
+    /// Change the `server_addr`.
     pub fn with_server_addr<T>(self, server_addr: T) -> Self
     where
         T: Into<String>,
@@ -171,6 +172,15 @@ impl Config {
             server_addr,
             ..self
         }
+    }
+
+    /// Change the `bucket`.
+    pub fn with_bucket<T>(self, bucket: T) -> Self
+    where
+        T: Into<String>,
+    {
+        let bucket = bucket.into();
+        Self { bucket, ..self }
     }
 }
 
