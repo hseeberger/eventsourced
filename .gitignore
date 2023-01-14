@@ -1,4 +1,4 @@
 .vscode
 Cargo.lock
-scratch.rs
+scratch*
 target

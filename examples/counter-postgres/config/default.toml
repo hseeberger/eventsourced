@@ -4,13 +4,13 @@ evt-count      = 10_000
 snapshot-after = 100_000_000
 
 [evt-log]
-host          = "localhost"
-port          = 5432
-user          = "test"
-password      = "test"
-dbname        = "test"
-sslmode       = "prefer"
-poll-interval = "3s"
+host     = "localhost"
+port     = 5432
+user     = "test"
+password = "test"
+dbname   = "test"
+sslmode  = "prefer"
+setup    = true
 
 [snapshot-store]
 host     = "localhost"
@@ -19,3 +19,4 @@ user     = "test"
 password = "test"
 dbname   = "test"
 sslmode  = "prefer"
+setup    = true

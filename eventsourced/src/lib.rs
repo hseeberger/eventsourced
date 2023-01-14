@@ -361,7 +361,7 @@ mod tests {
         type Error = TestEvtLogError;
 
         async fn persist<'a, E, ToBytes, ToBytesError>(
-            &'a self,
+            &'a mut self,
             _id: Uuid,
             _evts: &'a [E],
             _last_seq_no: u64,
@@ -407,6 +407,10 @@ mod tests {
                 }
             };
             Ok(evts)
+        }
+
+        async fn ids(&self) -> Result<impl Stream<Item = Uuid>, Self::Error> {
+            Ok(futures::stream::empty())
         }
     }
 

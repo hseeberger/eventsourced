@@ -32,18 +32,22 @@ impl PostgresSnapshotStore {
             .await
             .map_err(Error::ConnectionPool)?;
 
-        Ok(Self { cnn_pool })
-    }
+        // Setup tables.
+        if config.setup {
+            cnn_pool
+                .get()
+                .await
+                .map_err(Error::GetConnection)?
+                .execute(
+                    &include_str!("create_snapshot_store.sql")
+                        .replace("snapshots", &config.snapshots_table),
+                    &[],
+                )
+                .await
+                .map_err(Error::ExecuteStmt)?;
+        }
 
-    pub async fn setup(&self) -> Result<(), Error> {
-        self.cnn_pool
-            .get()
-            .await
-            .map_err(Error::GetConnection)?
-            .execute(include_str!("create_snapshot_store.sql"), &[])
-            .await
-            .map_err(Error::ExecuteStmt)?;
-        Ok(())
+        Ok(Self { cnn_pool })
     }
 
     async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
@@ -131,6 +135,10 @@ pub struct Config {
     password: String,
     dbname: String,
     sslmode: String,
+    #[serde(default = "snapshots_table_default")]
+    snapshots_table: String,
+    #[serde(default)]
+    setup: bool,
 }
 
 impl Config {
@@ -184,6 +192,19 @@ impl Config {
         Self { sslmode, ..self }
     }
 
+    /// Change the `snapshots_table`.
+    pub fn with_snapshots_table(self, snapshots_table: String) -> Self {
+        Self {
+            snapshots_table,
+            ..self
+        }
+    }
+
+    /// Change the `setup` flag.
+    pub fn with_setup(self, setup: bool) -> Self {
+        Self { setup, ..self }
+    }
+
     fn cnn_config(&self) -> String {
         format!(
             "host={} port={} user={} password={} dbname={} sslmode={}",
@@ -202,8 +223,14 @@ impl Default for Config {
             password: "".to_string(),
             dbname: "postgres".to_string(),
             sslmode: "prefer".to_string(),
+            snapshots_table: snapshots_table_default(),
+            setup: false,
         }
     }
+}
+
+fn snapshots_table_default() -> String {
+    "snapshots".to_string()
 }
 
 #[cfg(test)]
@@ -218,9 +245,8 @@ mod tests {
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = Config::default().with_port(port);
+        let config = Config::default().with_port(port).with_setup(true);
         let mut snapshot_store = PostgresSnapshotStore::new(config).await?;
-        snapshot_store.setup().await?;
 
         let id = Uuid::now_v7();
 

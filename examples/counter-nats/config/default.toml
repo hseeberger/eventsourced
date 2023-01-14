@@ -2,3 +2,11 @@
 entity-count   = 50
 evt-count      = 10_000
 snapshot-after = 100_000_000
+
+[evt-log]
+server-addr = "localhost:4222"
+setup       = true
+
+[snapshot-store]
+server-addr = "localhost:4222"
+setup       = true
