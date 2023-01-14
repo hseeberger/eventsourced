@@ -134,6 +134,7 @@ pub struct Config {
 }
 
 impl Config {
+    /// Change the `host`.
     pub fn with_host<T>(self, host: T) -> Self
     where
         T: Into<String>,
@@ -142,10 +143,12 @@ impl Config {
         Self { host, ..self }
     }
 
+    /// Change the `port`.
     pub fn with_port(self, port: u16) -> Self {
         Self { port, ..self }
     }
 
+    /// Change the `user`.
     pub fn with_user<T>(self, user: T) -> Self
     where
         T: Into<String>,
@@ -154,6 +157,7 @@ impl Config {
         Self { user, ..self }
     }
 
+    /// Change the `password`.
     pub fn with_password<T>(self, password: T) -> Self
     where
         T: Into<String>,
@@ -162,6 +166,7 @@ impl Config {
         Self { password, ..self }
     }
 
+    /// Change the `dbname`.
     pub fn with_dbname<T>(self, dbname: T) -> Self
     where
         T: Into<String>,
@@ -170,6 +175,7 @@ impl Config {
         Self { dbname, ..self }
     }
 
+    /// Change the `sslmode`.
     pub fn with_sslmode<T>(self, sslmode: T) -> Self
     where
         T: Into<String>,

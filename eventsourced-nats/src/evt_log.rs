@@ -270,6 +270,7 @@ pub struct Config {
 }
 
 impl Config {
+    /// Change the `server_addr`.
     pub fn with_server_addr<T>(self, server_addr: T) -> Self
     where
         T: Into<String>,
@@ -281,6 +282,7 @@ impl Config {
         }
     }
 
+    /// Change the `stream_name`.
     pub fn with_stream_name<T>(self, stream_name: T) -> Self
     where
         T: Into<String>,
