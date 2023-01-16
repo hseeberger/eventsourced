@@ -57,5 +57,5 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
 
     fn ids(
         &self,
-    ) -> impl Future<Output = Result<impl Stream<Item = Uuid> + '_, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<impl Stream<Item = Uuid> + Send + '_, Self::Error>> + Send;
 }
