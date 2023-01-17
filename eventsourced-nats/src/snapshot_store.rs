@@ -73,7 +73,7 @@ impl SnapshotStore for NatsSnapshotStore {
         &'a mut self,
         id: Uuid,
         seq_no: u64,
-        state: &'a S,
+        state: S,
         metadata: Metadata,
         state_to_bytes: &'a StateToBytes,
     ) -> Result<(), Self::Error>
@@ -84,7 +84,7 @@ impl SnapshotStore for NatsSnapshotStore {
     {
         let mut bytes = BytesMut::new();
         let state =
-            state_to_bytes(state).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
+            state_to_bytes(&state).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
         let sequence = metadata.and_then(|metadata| metadata.downcast_ref::<u64>().copied());
         let snapshot = proto::Snapshot {
             seq_no,
@@ -240,7 +240,7 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(id, seq_no, &state, None, &convert::prost::to_bytes)
+            .save(id, seq_no, state, None, &convert::prost::to_bytes)
             .await?;
 
         let snapshot = snapshot_store

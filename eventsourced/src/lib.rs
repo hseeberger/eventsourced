@@ -218,7 +218,7 @@ where
                     .save(
                         self.id,
                         self.last_seq_no,
-                        &state,
+                        state,
                         metadata,
                         &self.state_to_bytes,
                     )
@@ -428,7 +428,7 @@ mod tests {
             &'a mut self,
             _id: Uuid,
             _seq_no: u64,
-            _state: &'a S,
+            _state: S,
             _metadata: Metadata,
             _state_to_bytes: &'a StateToBytes,
         ) -> Result<(), Self::Error>

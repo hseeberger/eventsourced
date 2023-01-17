@@ -18,7 +18,7 @@ pub trait SnapshotStore: Clone + Send + Sync + 'static {
         &'a mut self,
         id: Uuid,
         seq_no: u64,
-        state: &'a S,
+        state: S,
         meta: Metadata,
         state_to_bytes: &'a StateToBytes,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send

@@ -17,7 +17,7 @@ impl SnapshotStore for NoopSnapshotStore {
         &'a mut self,
         _id: Uuid,
         _seq_no: u64,
-        _state: &'a S,
+        _state: S,
         _metadata: Metadata,
         _state_to_bytes: &'a StateToBytes,
     ) -> Result<(), Self::Error>
