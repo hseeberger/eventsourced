@@ -1,7 +1,7 @@
 [package]
 name          = "counter"
 description   = "eventsourced example base"
-version       = "0.2.1"
+version       = "0.3.0"
 publish       = false
 edition       = { workspace = true }
 authors       = { workspace = true }
