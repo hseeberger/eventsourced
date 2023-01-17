@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use configured::Configured;
 use eventsourced_nats::{NatsEvtLog, NatsEvtLogConfig, NatsSnapshotStore, NatsSnapshotStoreConfig};
 use serde::Deserialize;
@@ -15,19 +15,13 @@ async fn main() -> Result<()> {
     let config = Config::load().context("Cannot load configuration")?;
     println!("Starting with configuration: {config:?}");
 
-    let evt_log = NatsEvtLog::new(NatsEvtLogConfig::default())
+    let evt_log = NatsEvtLog::new(config.evt_log)
         .await
         .context("Cannot create event log")?;
-    evt_log.setup().await.context("Cannot setup event log")?;
 
-    let snapshot_store = NatsSnapshotStore::new(NatsSnapshotStoreConfig::default())
+    let snapshot_store = NatsSnapshotStore::new(config.snapshot_store)
         .await
         .context("Cannot create snapshot store")?;
-    snapshot_store
-        .setup()
-        .await
-        .map_err(|error| anyhow!(error))
-        .context("Cannot setup snapshot store")?;
 
     counter::run(config.counter, evt_log, snapshot_store).await
 }
@@ -36,4 +30,6 @@ async fn main() -> Result<()> {
 #[serde(rename_all = "kebab-case")]
 struct Config {
     counter: counter::Config,
+    evt_log: NatsEvtLogConfig,
+    snapshot_store: NatsSnapshotStoreConfig,
 }

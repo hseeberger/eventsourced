@@ -167,8 +167,8 @@ RUST_LOG=info \
 Notice that you can change the configuration either by changing the `defaul.yaml` file at `examples/counter-nats/config` or by overriding the configuration settings with environment variables, e.g. `APP__COUNTER__EVT_COUNT=42`:
 
 ```
-APP__COUNTER__EVT_COUNT=42 \
-    RUST_LOG=info \
+RUST_LOG=info \
+    APP__COUNTER__EVT_COUNT=42 \
     CONFIG_DIR=examples/counter-nats/config \
     cargo run \
     --release \
@@ -201,9 +201,9 @@ Change the configuration either by changing the `defaul.yaml` file at `examples/
 Then use the following command to run the example:
 
 ```
-APP__EVT_LOG__DBNAME=test \
+RUST_LOG=info \
+    APP__EVT_LOG__DBNAME=test \
     APP__COUNTER__EVT_COUNT=42 \
-    RUST_LOG=info \
     CONFIG_DIR=examples/counter-postgres/config \
     cargo run \
     --release \

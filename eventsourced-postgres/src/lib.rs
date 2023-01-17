@@ -3,6 +3,7 @@
 
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
+#![feature(nonzero_min_max)]
 #![feature(return_position_impl_trait_in_trait)]
 
 mod evt_log;
@@ -63,4 +64,8 @@ pub enum Error {
     /// Cannot get next row.
     #[error("Cannot get next row")]
     NextRow(#[source] tokio_postgres::Error),
+
+    /// Cannot get column as Uuid.
+    #[error("Cannot get column as Uuid")]
+    ColumnAsUuid(#[source] tokio_postgres::Error),
 }

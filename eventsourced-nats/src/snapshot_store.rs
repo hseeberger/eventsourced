@@ -33,22 +33,21 @@ impl NatsSnapshotStore {
         let client = connect(&server_addr).await?;
         let jetstream = jetstream::new(client);
 
+        // Setup bucket.
+        if config.setup {
+            let _ = jetstream
+                .create_key_value(jetstream::kv::Config {
+                    bucket: "snapshots".to_string(),
+                    ..Default::default()
+                })
+                .await
+                .map_err(Error::CreateBucket)?;
+        }
+
         Ok(Self {
             jetstream,
             bucket: config.bucket,
         })
-    }
-
-    pub async fn setup(&self) -> Result<(), Error> {
-        let _ = self
-            .jetstream
-            .create_key_value(jetstream::kv::Config {
-                bucket: "snapshots".to_string(),
-                ..Default::default()
-            })
-            .await
-            .map_err(Error::CreateBucket)?;
-        Ok(())
     }
 
     async fn get_bucket(&self, name: &str) -> Result<Store, Error> {
@@ -158,7 +157,10 @@ impl SnapshotStore for NatsSnapshotStore {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     server_addr: String,
+    #[serde(default = "bucket_default")]
     bucket: String,
+    #[serde(default)]
+    setup: bool,
 }
 
 impl Config {
@@ -182,6 +184,11 @@ impl Config {
         let bucket = bucket.into();
         Self { bucket, ..self }
     }
+
+    /// Change the `setup` flag.
+    pub fn with_setup(self, setup: bool) -> Self {
+        Self { setup, ..self }
+    }
 }
 
 impl Default for Config {
@@ -189,9 +196,14 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server_addr: "localhost:4222".to_string(),
-            bucket: "snapshots".to_string(),
+            bucket: bucket_default(),
+            setup: false,
         }
     }
+}
+
+fn bucket_default() -> String {
+    "snapshots".to_string()
 }
 
 mod proto {
@@ -212,9 +224,10 @@ mod tests {
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config::default().with_server_addr(server_addr);
+        let config = Config::default()
+            .with_server_addr(server_addr)
+            .with_setup(true);
         let mut snapshot_store = NatsSnapshotStore::new(config).await?;
-        snapshot_store.setup().await?;
 
         let id = Uuid::now_v7();
 

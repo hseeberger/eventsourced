@@ -8,11 +8,14 @@ use eventsourced::{EvtLog, Metadata};
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    future::ready,
+    num::NonZeroUsize,
     time::Duration,
 };
-use tokio::time::sleep;
+use tokio::{sync::broadcast, time::sleep};
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::debug;
 use uuid::Uuid;
@@ -20,8 +23,10 @@ use uuid::Uuid;
 /// An [EvtLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
 pub struct PostgresEvtLog {
-    cnn_pool: CnnPool<NoTls>,
     poll_interval: Duration,
+    cnn_pool: CnnPool<NoTls>,
+    id_sender: broadcast::Sender<Uuid>,
+    ids: HashSet<Uuid>,
 }
 
 impl PostgresEvtLog {
@@ -38,21 +43,53 @@ impl PostgresEvtLog {
             .await
             .map_err(Error::ConnectionPool)?;
 
-        Ok(Self {
-            cnn_pool,
-            poll_interval: config.poll_interval,
-        })
-    }
+        // Setup tables.
+        if config.setup {
+            cnn_pool
+                .get()
+                .await
+                .map_err(Error::GetConnection)?
+                .execute(
+                    &include_str!("create_evt_log.sql").replace("evts", &config.evts_table),
+                    &[],
+                )
+                .await
+                .map_err(Error::ExecuteStmt)?;
+        }
 
-    pub async fn setup(&self) -> Result<(), Error> {
-        self.cnn_pool
+        // Create ID broadcast sender and load IDs.
+        let (id_sender, _) = broadcast::channel(config.id_broadcast_capacity.get());
+        let id_count = cnn_pool
             .get()
             .await
             .map_err(Error::GetConnection)?
-            .execute(include_str!("create_evt_log.sql"), &[])
+            .query_one("SELECT COUNT(*) FROM evts", &[])
             .await
             .map_err(Error::ExecuteStmt)?;
-        Ok(())
+        let id_count = id_count.get::<_, i64>(0) as usize;
+        let ids = HashSet::with_capacity(id_count);
+        let ids = cnn_pool
+            .get()
+            .await
+            .map_err(Error::GetConnection)?
+            .query_raw("SELECT id FROM evts", [&0; 0])
+            .await
+            .map_err(Error::ExecuteStmt)?
+            .try_fold(ids, |mut ids, row| {
+                ready(row.try_get::<_, Uuid>(0).map(|id| {
+                    ids.insert(id);
+                    ids
+                }))
+            })
+            .await
+            .map_err(Error::ColumnAsUuid)?;
+
+        Ok(Self {
+            poll_interval: config.poll_interval,
+            cnn_pool,
+            id_sender,
+            ids,
+        })
     }
 
     async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
@@ -114,7 +151,7 @@ impl EvtLog for PostgresEvtLog {
     const MAX_SEQ_NO: u64 = i64::MAX as u64;
 
     async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
-        &'a self,
+        &'a mut self,
         id: Uuid,
         evts: &'a [E],
         last_seq_no: u64,
@@ -149,6 +186,11 @@ impl EvtLog for PostgresEvtLog {
                 .map_err(Error::ExecuteStmt)?;
         }
         tx.commit().await.map_err(Error::CommitTx)?;
+
+        // Add ID to IDs and send it to ID broadcast channel.
+        drop(cnn); // Needed to borrow self mutable below.
+        self.ids.insert(id);
+        let _ = self.id_sender.send(id);
 
         Ok(None)
     }
@@ -229,6 +271,24 @@ impl EvtLog for PostgresEvtLog {
 
         Ok(evts)
     }
+
+    async fn ids(&self) -> Result<impl Stream<Item = Uuid> + '_, Self::Error> {
+        let mut id_receiver = self.id_sender.subscribe();
+
+        let ids = stream! {
+            // Yield current IDs.
+            for id in &self.ids { yield *id; }
+
+            // Yield future IDs after deduplication.
+            while let Ok(id) = id_receiver.recv().await {
+                if !self.ids.contains(&id) {
+                    yield id;
+                }
+            }
+        };
+
+        Ok(ids)
+    }
 }
 
 /// Configuration for the [PostgresEvtLog].
@@ -241,8 +301,14 @@ pub struct Config {
     password: String,
     dbname: String,
     sslmode: String,
-    #[serde(with = "humantime_serde")]
+    #[serde(default = "evts_table_default")]
+    evts_table: String,
+    #[serde(default = "poll_interval_default", with = "humantime_serde")]
     poll_interval: Duration,
+    #[serde(default = "id_broadcast_capacity_default")]
+    id_broadcast_capacity: NonZeroUsize,
+    #[serde(default)]
+    setup: bool,
 }
 
 impl Config {
@@ -296,12 +362,30 @@ impl Config {
         Self { sslmode, ..self }
     }
 
+    /// Change the `evts_table`.
+    pub fn with_evts_table(self, evts_table: String) -> Self {
+        Self { evts_table, ..self }
+    }
+
     /// Change the `poll_interval`.
     pub fn with_poll_interval(self, poll_interval: Duration) -> Self {
         Self {
             poll_interval,
             ..self
         }
+    }
+
+    /// Change the `id_broadcast_capacity`.
+    pub fn with_id_broadcast_capacity(self, id_broadcast_capacity: NonZeroUsize) -> Self {
+        Self {
+            id_broadcast_capacity,
+            ..self
+        }
+    }
+
+    /// Change the `setup` flag.
+    pub fn with_setup(self, setup: bool) -> Self {
+        Self { setup, ..self }
     }
 
     fn cnn_config(&self) -> String {
@@ -322,9 +406,24 @@ impl Default for Config {
             password: "".to_string(),
             dbname: "postgres".to_string(),
             sslmode: "prefer".to_string(),
-            poll_interval: Duration::from_secs(3),
+            evts_table: evts_table_default(),
+            poll_interval: poll_interval_default(),
+            id_broadcast_capacity: id_broadcast_capacity_default(),
+            setup: false,
         }
     }
+}
+
+fn evts_table_default() -> String {
+    "evts".to_string()
+}
+
+const fn poll_interval_default() -> Duration {
+    Duration::from_secs(2)
+}
+
+const fn id_broadcast_capacity_default() -> NonZeroUsize {
+    NonZeroUsize::MIN
 }
 
 #[cfg(test)]
@@ -340,11 +439,12 @@ mod tests {
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = Config::default().with_port(port);
-        let evt_log = PostgresEvtLog::new(config).await?;
-        evt_log.setup().await?;
+        let config = Config::default().with_port(port).with_setup(true);
+        let mut evt_log = PostgresEvtLog::new(config).await?;
 
         let id = Uuid::now_v7();
+
+        // Start testing.
 
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 0);
@@ -363,6 +463,11 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
+        let ids = evt_log.ids().await?;
+        let ids = ids.take(1).collect::<HashSet<_>>().await;
+        assert_eq!(ids, HashSet::from_iter(vec![id]));
+        let ids = evt_log.ids().await?;
+
         let evts = evt_log
             .evts_by_id::<i32, _, _>(
                 id,
@@ -374,6 +479,7 @@ mod tests {
             .await?;
 
         evt_log
+            .clone()
             .persist(id, [4, 5].as_ref(), 3, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
@@ -384,6 +490,20 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
+
+        let ids = ids.take(1).collect::<HashSet<_>>().await;
+        assert_eq!(ids, HashSet::from_iter(vec![id]));
+        let ids = evt_log.ids().await?;
+
+        let id_2 = Uuid::now_v7();
+
+        evt_log
+            .clone()
+            .persist(id_2, [1].as_ref(), 0, &convert::prost::to_bytes)
+            .await?;
+
+        let ids = ids.take(2).collect::<HashSet<_>>().await;
+        assert_eq!(ids, HashSet::from_iter(vec![id, id_2]));
 
         Ok(())
     }

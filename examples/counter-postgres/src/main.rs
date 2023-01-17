@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use configured::Configured;
 use eventsourced_postgres::{
     PostgresEvtLog, PostgresEvtLogConfig, PostgresSnapshotStore, PostgresSnapshotStoreConfig,
@@ -20,16 +20,10 @@ async fn main() -> Result<()> {
     let evt_log = PostgresEvtLog::new(config.evt_log)
         .await
         .context("Cannot create event log")?;
-    evt_log.setup().await.context("Cannot setup event log")?;
 
     let snapshot_store = PostgresSnapshotStore::new(config.snapshot_store)
         .await
         .context("Cannot create snapshot store")?;
-    snapshot_store
-        .setup()
-        .await
-        .map_err(|error| anyhow!(error))
-        .context("Cannot setup snapshot store")?;
 
     counter::run(config.counter, evt_log, snapshot_store).await
 }

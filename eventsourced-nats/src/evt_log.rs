@@ -6,7 +6,7 @@ use async_nats::{
     jetstream::{
         self,
         consumer::{pull, AckPolicy, DeliverPolicy},
-        response,
+        response::{self, Response},
         stream::Stream as JetstreamStream,
         Context as Jetstream,
     },
@@ -18,12 +18,16 @@ use eventsourced::{EvtLog, Metadata};
 use futures::{stream, Stream, StreamExt};
 use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::{
+    collections::HashSet,
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
     io,
+    num::NonZeroUsize,
     str::FromStr,
 };
+use tokio::sync::broadcast;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -33,8 +37,10 @@ const LEN: &str = "len";
 /// An [EvtLog] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
 pub struct NatsEvtLog {
-    jetstream: Jetstream,
     stream_name: String,
+    jetstream: Jetstream,
+    id_sender: broadcast::Sender<Uuid>,
+    ids: HashSet<Uuid>,
 }
 
 impl NatsEvtLog {
@@ -46,9 +52,52 @@ impl NatsEvtLog {
         let client = connect(&server_addr).await?;
         let jetstream = jetstream::new(client);
 
+        // Setup stream.
+        if config.setup {
+            let _ = jetstream
+                .create_stream(jetstream::stream::Config {
+                    name: "evts".to_string(),
+                    subjects: vec!["evts.>".to_string()],
+                    ..Default::default()
+                })
+                .await
+                .map_err(Error::CreateStream)?;
+        }
+
+        // Create ID broadcast sender and load IDs.
+        let (id_sender, _) = broadcast::channel(config.id_broadcast_capacity.get());
+        let subject = format!("STREAM.INFO.{}", "evts");
+        let payload = &json!({ "subjects_filter": "evts.*" });
+        let response = jetstream
+            .request::<_, Value>(subject, payload)
+            .await
+            .map_err(Error::JetstreamRequest)?;
+        let response = match response {
+            Response::Ok(value) => Ok(value),
+            Response::Err { error } => Err(Error::JetstreamResponse(error)),
+        }?;
+        // TODO: This is a little sloppy; in theory `state` might be missing.
+        let ids = match &response["state"]["subjects"] {
+            Value::Object(map) => {
+                let ids = map
+                    .keys()
+                    .map(|key| {
+                        key.strip_prefix("evts.")
+                            .ok_or(Error::EvtsPrefixMissing)
+                            .and_then(|key| key.try_into().map_err(Error::InvalidSubjectName))
+                    })
+                    .collect::<Result<HashSet<Uuid>, _>>();
+                ids
+            }
+            // TODO: This is a little sloppy; in theory there could be other variants than `Null`.
+            _ => Ok(HashSet::new()),
+        }?;
+
         Ok(Self {
-            jetstream,
             stream_name: config.stream_name,
+            jetstream,
+            id_sender,
+            ids,
         })
     }
 
@@ -57,19 +106,6 @@ impl NatsEvtLog {
             .get_stream(&self.stream_name)
             .await
             .map_err(Error::GetStream)
-    }
-
-    pub async fn setup(&self) -> Result<(), Error> {
-        let _ = self
-            .jetstream
-            .create_stream(jetstream::stream::Config {
-                name: "evts".to_string(),
-                subjects: vec!["evts.>".to_string()],
-                ..Default::default()
-            })
-            .await
-            .map_err(Error::CreateStream)?;
-        Ok(())
     }
 }
 
@@ -85,7 +121,7 @@ impl EvtLog for NatsEvtLog {
     type Error = Error;
 
     async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
-        &'a self,
+        &'a mut self,
         id: Uuid,
         evts: &'a [E],
         last_seq_no: u64,
@@ -114,11 +150,8 @@ impl EvtLog for NatsEvtLog {
         let mut bytes = BytesMut::new();
         evts.encode(&mut bytes)?;
 
-        // Determine NATS subject.
-        let stream_name = &self.stream_name;
-        let subject = format!("{stream_name}.{id}");
-
         // Publish events to NATS subject and await ACK.
+        let subject = format!("{}.{id}", self.stream_name);
         let mut headers = HeaderMap::new();
         headers.insert(SEQ_NO, (last_seq_no + 1).to_string().as_ref());
         headers.insert(LEN, (len).to_string().as_ref());
@@ -131,12 +164,15 @@ impl EvtLog for NatsEvtLog {
             .map_err(Error::PublishEvtsAck)?;
         let metadata = Box::new(ack.sequence);
 
+        // Add ID to IDs and send it to ID broadcast channel.
+        self.ids.insert(id);
+        let _ = self.id_sender.send(id);
+
         Ok(Some(metadata))
     }
 
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error> {
-        let stream_name = self.stream_name.as_str();
-        let subject = format!("{stream_name}.{id}");
+        let subject = format!("{}.{id}", self.stream_name);
         let stream = self.get_stream().await?;
         stream
             .get_last_raw_message_by_subject(&subject)
@@ -196,11 +232,12 @@ impl EvtLog for NatsEvtLog {
                 Some(start_sequence) => DeliverPolicy::ByStartSequence { start_sequence },
                 None => DeliverPolicy::All,
             };
+        let subject = format!("{}.{id}", self.stream_name);
         let msgs = self
             .get_stream()
             .await?
             .create_consumer(pull::Config {
-                filter_subject: format!("{}.{id}", self.stream_name),
+                filter_subject: subject,
                 ack_policy: AckPolicy::None, // Important!
                 deliver_policy,
                 ..Default::default()
@@ -259,6 +296,24 @@ impl EvtLog for NatsEvtLog {
 
         Ok(evts)
     }
+
+    async fn ids(&self) -> Result<impl Stream<Item = Uuid> + '_, Self::Error> {
+        let mut id_receiver = self.id_sender.subscribe();
+
+        let ids = stream! {
+            // Yield current IDs.
+            for id in &self.ids { yield *id; }
+
+            // Yield future IDs after deduplication.
+            while let Ok(id) = id_receiver.recv().await {
+                if !self.ids.contains(&id) {
+                    yield id;
+                }
+            }
+        };
+
+        Ok(ids)
+    }
 }
 
 /// Configuration for the [NatsEvtLog].
@@ -266,7 +321,12 @@ impl EvtLog for NatsEvtLog {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     server_addr: String,
+    #[serde(default = "stream_name_default")]
     stream_name: String,
+    #[serde(default = "id_broadcast_capacity_default")]
+    id_broadcast_capacity: NonZeroUsize,
+    #[serde(default)]
+    setup: bool,
 }
 
 impl Config {
@@ -293,6 +353,11 @@ impl Config {
             ..self
         }
     }
+
+    /// Change the `setup` flag.
+    pub fn with_setup(self, setup: bool) -> Self {
+        Self { setup, ..self }
+    }
 }
 
 impl Default for Config {
@@ -301,8 +366,18 @@ impl Default for Config {
         Self {
             server_addr: "localhost:4222".into(),
             stream_name: "evts".into(),
+            id_broadcast_capacity: id_broadcast_capacity_default(),
+            setup: false,
         }
     }
+}
+
+fn stream_name_default() -> String {
+    "evts".to_string()
+}
+
+const fn id_broadcast_capacity_default() -> NonZeroUsize {
+    NonZeroUsize::MIN
 }
 
 fn seq_no_and_len(msg: &Message) -> (u64, u64) {
@@ -349,11 +424,14 @@ mod tests {
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config::default().with_server_addr(server_addr);
-        let evt_log = NatsEvtLog::new(config).await?;
-        evt_log.setup().await?;
+        let config = Config::default()
+            .with_server_addr(server_addr)
+            .with_setup(true);
+        let mut evt_log = NatsEvtLog::new(config).await?;
 
         let id = Uuid::now_v7();
+
+        // Start testing.
 
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 0);
@@ -372,6 +450,11 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
+        let ids = evt_log.ids().await?;
+        let ids = ids.take(1).collect::<HashSet<_>>().await;
+        assert_eq!(ids, HashSet::from_iter(vec![id]));
+        let ids = evt_log.ids().await?;
+
         let evts = evt_log
             .evts_by_id::<i32, _, _>(
                 id,
@@ -383,6 +466,7 @@ mod tests {
             .await?;
 
         evt_log
+            .clone()
             .persist(id, [4, 5].as_ref(), 3, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
@@ -393,6 +477,20 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
+
+        let ids = ids.take(1).collect::<HashSet<_>>().await;
+        assert_eq!(ids, HashSet::from_iter(vec![id]));
+        let ids = evt_log.ids().await?;
+
+        let id_2 = Uuid::now_v7();
+
+        evt_log
+            .clone()
+            .persist(id_2, [1].as_ref(), 0, &convert::prost::to_bytes)
+            .await?;
+
+        let ids = ids.take(2).collect::<HashSet<_>>().await;
+        assert_eq!(ids, HashSet::from_iter(vec![id, id_2]));
 
         Ok(())
     }
