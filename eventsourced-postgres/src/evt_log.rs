@@ -12,7 +12,7 @@ use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
     future::ready,
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
 use tokio::{sync::broadcast, time::sleep};
@@ -213,7 +213,7 @@ impl EvtLog for PostgresEvtLog {
     async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
         &'a self,
         id: Uuid,
-        from_seq_no: u64,
+        from_seq_no: NonZeroU64,
         to_seq_no: u64,
         _metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
@@ -223,9 +223,8 @@ impl EvtLog for PostgresEvtLog {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
-        assert!(from_seq_no > 0, "from_seq_no must be positive");
         assert!(
-            from_seq_no <= to_seq_no,
+            from_seq_no.get() <= to_seq_no,
             "from_seq_no must be less than or equal to to_seq_no"
         );
         assert!(
@@ -238,7 +237,7 @@ impl EvtLog for PostgresEvtLog {
 
         let last_seq_no = self.last_seq_no(id).await?;
 
-        let mut current_from_seq_no = from_seq_no;
+        let mut current_from_seq_no = from_seq_no.get();
         let evts = stream! {
             'outer: loop {
                 let evts = self
@@ -456,7 +455,13 @@ mod tests {
         assert_eq!(last_seq_no, 3);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2, 3, None, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(
+                id,
+                unsafe { NonZeroU64::new_unchecked(2) },
+                3,
+                None,
+                convert::prost::from_bytes,
+            )
             .await?;
         let sum = evts
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
@@ -471,7 +476,7 @@ mod tests {
         let evts = evt_log
             .evts_by_id::<i32, _, _>(
                 id,
-                1,
+                unsafe { NonZeroU64::new_unchecked(1) },
                 PostgresEvtLog::MAX_SEQ_NO,
                 None,
                 convert::prost::from_bytes,

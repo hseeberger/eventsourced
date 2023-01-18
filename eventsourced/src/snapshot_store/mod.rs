@@ -6,7 +6,7 @@ pub use noop::*;
 
 use crate::Metadata;
 use bytes::Bytes;
-use std::{error::Error as StdError, future::Future};
+use std::{error::Error as StdError, future::Future, num::NonZeroU64};
 use uuid::Uuid;
 
 /// Persistence for snapshots.
@@ -17,7 +17,7 @@ pub trait SnapshotStore: Clone + Send + Sync + 'static {
     fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
-        seq_no: u64,
+        seq_no: NonZeroU64,
         state: S,
         meta: Metadata,
         state_to_bytes: &'a StateToBytes,

@@ -3,7 +3,7 @@
 use super::{Snapshot, SnapshotStore};
 use crate::Metadata;
 use bytes::Bytes;
-use std::{convert::Infallible, error::Error as StdError, fmt::Debug};
+use std::{convert::Infallible, error::Error as StdError, fmt::Debug, num::NonZeroU64};
 use uuid::Uuid;
 
 /// A [SnapshotStore] implementation that does nothing.
@@ -16,7 +16,7 @@ impl SnapshotStore for NoopSnapshotStore {
     async fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         _id: Uuid,
-        _seq_no: u64,
+        _seq_no: NonZeroU64,
         _state: S,
         _metadata: Metadata,
         _state_to_bytes: &'a StateToBytes,

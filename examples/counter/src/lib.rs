@@ -2,9 +2,9 @@ pub mod counter;
 
 use crate::counter::{Cmd, Counter};
 use anyhow::{Context, Result};
-use eventsourced::{convert, Entity, EvtLog, SnapshotStore};
+use eventsourced::{convert, EventSourcedExt, EvtLog, SnapshotStore};
 use serde::Deserialize;
-use std::{iter, time::Instant};
+use std::{iter, num::NonZeroUsize, time::Instant};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
@@ -35,16 +35,16 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default().with_snapshot_after(config.snapshot_after);
-        let counter = Entity::spawn(
-            id,
-            counter,
-            42,
-            evt_log,
-            snapshot_store,
-            convert::prost::binarizer(),
-        )
-        .await
-        .context("Cannot spawn entity")?;
+        let counter = counter
+            .spawn(
+                id,
+                unsafe { NonZeroUsize::new_unchecked(42) },
+                evt_log,
+                snapshot_store,
+                convert::prost::binarizer(),
+            )
+            .await
+            .context("Cannot spawn entity")?;
 
         tasks.spawn(async move {
             for n in 0..config.evt_count / 2 {
@@ -85,17 +85,17 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
-            let _counter = Entity::spawn(
-                id,
-                Counter::default(),
-                42,
-                evt_log,
-                snapshot_store,
-                convert::prost::binarizer(),
-            )
-            .await
-            .context("Cannot spawn entity")
-            .unwrap();
+            let _counter = Counter::default()
+                .spawn(
+                    id,
+                    unsafe { NonZeroUsize::new_unchecked(42) },
+                    evt_log,
+                    snapshot_store,
+                    convert::prost::binarizer(),
+                )
+                .await
+                .context("Cannot spawn entity")
+                .unwrap();
         });
     }
     while tasks.join_next().await.is_some() {}

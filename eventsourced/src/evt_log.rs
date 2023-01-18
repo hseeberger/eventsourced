@@ -3,7 +3,7 @@
 use crate::Metadata;
 use bytes::Bytes;
 use futures::Stream;
-use std::{error::Error as StdError, fmt::Debug, future::Future};
+use std::{error::Error as StdError, fmt::Debug, future::Future, num::NonZeroU64};
 use uuid::Uuid;
 
 /// Persistence for events.
@@ -37,13 +37,12 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
     /// Get the events for the given ID in the given closed range of sequence numbers.
     ///
     /// # Panics
-    /// - Panics if `from_seq_no` is not positive.
     /// - Panics if `from_seq_no` is not less than or equal to `to_seq_no`.
     /// - Panics if `to_seq_no` is not less or equal [MAX_SEQ_NO].
     fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
         &'a self,
         id: Uuid,
-        from_seq_no: u64,
+        from_seq_no: NonZeroU64,
         to_seq_no: u64,
         metadata: Metadata,
         evt_from_bytes: EvtFromBytes,
