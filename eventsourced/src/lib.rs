@@ -15,7 +15,12 @@ pub use snapshot_store::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use std::{any::Any, error::Error as StdError, fmt::Debug, num::NonZeroUsize};
+use std::{
+    any::Any,
+    error::Error as StdError,
+    fmt::Debug,
+    num::{NonZeroU64, NonZeroUsize},
+};
 use thiserror::Error;
 use tokio::{
     pin,
@@ -39,7 +44,7 @@ pub trait EventSourced: Send + Sized + 'static {
     /// Snapshot state type.
     type State: Send + Sync;
 
-    /// Error type for the command handler.
+    /// Error type for rejected (a.k.a. invalid) commands.
     type Error: StdError + Send + Sync + 'static;
 
     /// Command handler, returning the to be persisted events or an error.
@@ -52,21 +57,22 @@ pub trait EventSourced: Send + Sized + 'static {
     fn set_state(&mut self, state: Self::State);
 }
 
+/// Extension methods for types implementing [EventSourced].
 pub trait EventSourcedExt {
     /// Spawns an entity implementing [EventSourced] with the given ID and creates an [EntityRef]
-    /// for it.
+    /// as a handle for it.
     ///
     /// First the given [SnapshotStore] is used to find and possibly load a snapshot. Then the
     /// [EvtLog] is used to find the last sequence number and then to load any remaining events.
     ///
-    /// Commands can be sent by invoking `handle_cmd` on the returned [EntityRef] which uses a
-    /// buffered channel with the given size.
+    /// Commands can be passed to the spawned entity by invoking `handle_cmd` on the returned
+    /// [EntityRef] which uses a buffered channel with the given size.
     ///
-    /// Commands are handled by the command handler of this [EventSourced] value. Valid commands may
-    /// produce events which get persisted along with an increasing sequence number to its [EvtLog]
-    /// and then applied to the event handler of its [EventSourced] value. The event handler may
-    /// decide to save a snapshot at the current sequence number which is used to speed up
-    /// future spawning.
+    /// Commands are handled by the command handler of this entity. They can be rejected by
+    /// returning an error. Valid commands may produce events which get persisted to the [EvtLog]
+    /// along with an increasing sequence number and then applied to the event handler of this
+    /// entity. The event handler may decide to save a snapshot at the current sequence number
+    /// which is used to speed up future spawning.
     async fn spawn<
         L,
         S,
@@ -136,7 +142,7 @@ pub trait EventSourcedExt {
             "snapshot_seq_no must be less than or equal to last_seq_no"
         );
         if snapshot_seq_no < last_seq_no {
-            let from_seq_no = snapshot_seq_no + 1;
+            let from_seq_no = unsafe { NonZeroU64::new_unchecked(snapshot_seq_no + 1) };
             debug!(%id, from_seq_no, last_seq_no , "Replaying evts");
             let evts = evt_log
                 .evts_by_id::<Self::Evt, _, _>(
@@ -157,15 +163,15 @@ pub trait EventSourcedExt {
 
         // Create entity.
         let mut entity = Entity {
+            event_sourced: self,
             id,
             last_seq_no,
-            event_sourced: self,
             evt_log,
             snapshot_store,
             evt_to_bytes,
             state_to_bytes,
         };
-        debug!(%id, "Eventsourced entity created");
+        debug!(%id, "EventSourced entity created");
 
         let (cmd_in, mut cmd_out) = mpsc::channel::<(
             Self::Cmd,
@@ -197,9 +203,9 @@ pub trait EventSourcedExt {
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
 struct Entity<E, L, S, EvtToBytes, StateToBytes> {
+    event_sourced: E,
     id: Uuid,
     last_seq_no: u64,
-    event_sourced: E,
     evt_log: L,
     snapshot_store: S,
     evt_to_bytes: EvtToBytes,
@@ -248,7 +254,7 @@ where
                 self.snapshot_store
                     .save(
                         self.id,
-                        self.last_seq_no,
+                        unsafe { NonZeroU64::new_unchecked(self.last_seq_no) },
                         state,
                         metadata,
                         &self.state_to_bytes,
@@ -281,7 +287,7 @@ pub enum SpawnError {
     NextEvt(#[source] Box<dyn StdError + Send + Sync>),
 }
 
-/// A proxy to a spawned event sourced entity which can be used to invoke its command handler.
+/// A handle for a spawned [EventSourced] entity which can be used to invoke its command handler.
 #[derive(Debug, Clone)]
 pub struct EntityRef<E>
 where
@@ -300,12 +306,14 @@ where
         self.id
     }
 
-    /// Invoke the command handler of the proxied event sourced entity.
+    /// Invoke the command handler of the entity.
     ///
-    /// The returned `Result` signals whether the command could be sent to the entity and the
-    /// command handler result could be received. If that is not the case, that is a technical
-    /// error. If that is the case, the `Success` variant contains another `Result` which signals
-    /// whether the command was valid or not. If it was, the persisted events are returned.
+    /// The returned (outer) `Result` signals, whether the command could be sent to the entity and
+    /// the command handler result could be received, i.e. an `Err` signals a technical failure.
+    ///
+    /// The (outer) `Ok` variant contains another (inner) `Result`, which signals whether the
+    /// command was valid or rejected. If it was valid, the persisted events are returned, else the
+    /// rejection error.
     pub async fn handle_cmd(
         &self,
         cmd: E::Cmd,
@@ -407,7 +415,7 @@ mod tests {
         async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
             &'a self,
             _id: Uuid,
-            from_seq_no: u64,
+            from_seq_no: NonZeroU64,
             to_seq_no: u64,
             _metadata: Metadata,
             evt_from_bytes: EvtFromBytes,
@@ -421,7 +429,7 @@ mod tests {
                 for n in 0..666 {
                     for evt in 1..=3 {
                         let seq_no = n * 3 + evt;
-                        if from_seq_no <= seq_no && seq_no <= to_seq_no {
+                        if from_seq_no.get() <= seq_no && seq_no <= to_seq_no {
                             let mut bytes = BytesMut::new();
                             evt.encode(&mut bytes).map_err(|source| TestEvtLogError(source.into()))?;
                             let evt = evt_from_bytes(bytes.into()).map_err(|source| TestEvtLogError(source.into()))?;
@@ -452,7 +460,7 @@ mod tests {
         async fn save<'a, S, StateToBytes, StateToBytesError>(
             &'a mut self,
             _id: Uuid,
-            _seq_no: u64,
+            _seq_no: NonZeroU64,
             _state: S,
             _metadata: Metadata,
             _state_to_bytes: &'a StateToBytes,

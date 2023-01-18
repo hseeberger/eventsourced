@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    num::NonZeroU64,
 };
 use tokio_postgres::NoTls;
 use tracing::debug;
@@ -67,7 +68,7 @@ impl SnapshotStore for PostgresSnapshotStore {
     async fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
-        seq_no: u64,
+        seq_no: NonZeroU64,
         state: S,
         _metadata: Metadata,
         state_to_bytes: &'a StateToBytes,
@@ -84,7 +85,7 @@ impl SnapshotStore for PostgresSnapshotStore {
             .await?
             .execute(
                 "INSERT INTO snapshots VALUES ($1, $2, $3)",
-                &[&id, &(seq_no as i64), &bytes.as_ref()],
+                &[&id, &(seq_no.get() as i64), &bytes.as_ref()],
             )
             .await
             .map_err(Error::ExecuteStmt)?;
@@ -259,7 +260,13 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(id, seq_no, state, None, &convert::prost::to_bytes)
+            .save(
+                id,
+                unsafe { NonZeroU64::new_unchecked(seq_no) },
+                state,
+                None,
+                &convert::prost::to_bytes,
+            )
             .await?;
 
         let snapshot = snapshot_store

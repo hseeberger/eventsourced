@@ -13,6 +13,7 @@ use std::{
     any::Any,
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    num::NonZeroU64,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -72,7 +73,7 @@ impl SnapshotStore for NatsSnapshotStore {
     async fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
-        seq_no: u64,
+        seq_no: NonZeroU64,
         state: S,
         metadata: Metadata,
         state_to_bytes: &'a StateToBytes,
@@ -87,7 +88,7 @@ impl SnapshotStore for NatsSnapshotStore {
             state_to_bytes(&state).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
         let sequence = metadata.and_then(|metadata| metadata.downcast_ref::<u64>().copied());
         let snapshot = proto::Snapshot {
-            seq_no,
+            seq_no: seq_no.get(),
             state,
             sequence,
         };
@@ -240,7 +241,13 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(id, seq_no, state, None, &convert::prost::to_bytes)
+            .save(
+                id,
+                unsafe { NonZeroU64::new_unchecked(seq_no) },
+                state,
+                None,
+                &convert::prost::to_bytes,
+            )
             .await?;
 
         let snapshot = snapshot_store
