@@ -441,10 +441,6 @@ mod tests {
             };
             Ok(evts)
         }
-
-        async fn ids(&self) -> Result<impl Stream<Item = Uuid>, Self::Error> {
-            Ok(futures::stream::empty())
-        }
     }
 
     #[derive(Debug, Error)]

@@ -8,14 +8,12 @@ use eventsourced::{EvtLog, Metadata};
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
-    future::ready,
     num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
-use tokio::{sync::broadcast, time::sleep};
+use tokio::time::sleep;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::debug;
 use uuid::Uuid;
@@ -25,8 +23,6 @@ use uuid::Uuid;
 pub struct PostgresEvtLog {
     poll_interval: Duration,
     cnn_pool: CnnPool<NoTls>,
-    id_sender: broadcast::Sender<Uuid>,
-    ids: HashSet<Uuid>,
 }
 
 impl PostgresEvtLog {
@@ -57,38 +53,9 @@ impl PostgresEvtLog {
                 .map_err(Error::ExecuteStmt)?;
         }
 
-        // Create ID broadcast sender and load IDs.
-        let (id_sender, _) = broadcast::channel(config.id_broadcast_capacity.get());
-        let id_count = cnn_pool
-            .get()
-            .await
-            .map_err(Error::GetConnection)?
-            .query_one("SELECT COUNT(*) FROM evts", &[])
-            .await
-            .map_err(Error::ExecuteStmt)?;
-        let id_count = id_count.get::<_, i64>(0) as usize;
-        let ids = HashSet::with_capacity(id_count);
-        let ids = cnn_pool
-            .get()
-            .await
-            .map_err(Error::GetConnection)?
-            .query_raw("SELECT id FROM evts", [&0; 0])
-            .await
-            .map_err(Error::ExecuteStmt)?
-            .try_fold(ids, |mut ids, row| {
-                ready(row.try_get::<_, Uuid>(0).map(|id| {
-                    ids.insert(id);
-                    ids
-                }))
-            })
-            .await
-            .map_err(Error::ColumnAsUuid)?;
-
         Ok(Self {
             poll_interval: config.poll_interval,
             cnn_pool,
-            id_sender,
-            ids,
         })
     }
 
@@ -187,11 +154,6 @@ impl EvtLog for PostgresEvtLog {
         }
         tx.commit().await.map_err(Error::CommitTx)?;
 
-        // Add ID to IDs and send it to ID broadcast channel.
-        drop(cnn); // Needed to borrow self mutable below.
-        self.ids.insert(id);
-        let _ = self.id_sender.send(id);
-
         Ok(None)
     }
 
@@ -269,24 +231,6 @@ impl EvtLog for PostgresEvtLog {
         };
 
         Ok(evts)
-    }
-
-    async fn ids(&self) -> Result<impl Stream<Item = Uuid> + '_, Self::Error> {
-        let mut id_receiver = self.id_sender.subscribe();
-
-        let ids = stream! {
-            // Yield current IDs.
-            for id in &self.ids { yield *id; }
-
-            // Yield future IDs after deduplication.
-            while let Ok(id) = id_receiver.recv().await {
-                if !self.ids.contains(&id) {
-                    yield id;
-                }
-            }
-        };
-
-        Ok(ids)
     }
 }
 
@@ -468,11 +412,6 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
-        let ids = evt_log.ids().await?;
-        let ids = ids.take(1).collect::<HashSet<_>>().await;
-        assert_eq!(ids, HashSet::from_iter(vec![id]));
-        let ids = evt_log.ids().await?;
-
         let evts = evt_log
             .evts_by_id::<i32, _, _>(
                 id,
@@ -495,20 +434,6 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
-
-        let ids = ids.take(1).collect::<HashSet<_>>().await;
-        assert_eq!(ids, HashSet::from_iter(vec![id]));
-        let ids = evt_log.ids().await?;
-
-        let id_2 = Uuid::now_v7();
-
-        evt_log
-            .clone()
-            .persist(id_2, [1].as_ref(), 0, &convert::prost::to_bytes)
-            .await?;
-
-        let ids = ids.take(2).collect::<HashSet<_>>().await;
-        assert_eq!(ids, HashSet::from_iter(vec![id, id_2]));
 
         Ok(())
     }

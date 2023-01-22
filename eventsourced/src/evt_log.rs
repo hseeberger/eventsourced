@@ -53,8 +53,4 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         E: Debug + Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static;
-
-    fn ids(
-        &self,
-    ) -> impl Future<Output = Result<impl Stream<Item = Uuid> + Send + '_, Self::Error>> + Send;
 }
