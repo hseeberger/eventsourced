@@ -6,7 +6,7 @@ use async_nats::{
     jetstream::{
         self,
         consumer::{pull, AckPolicy, DeliverPolicy},
-        response::{self, Response},
+        response::{self},
         stream::Stream as JetstreamStream,
         Context as Jetstream,
     },
@@ -18,16 +18,14 @@ use eventsourced::{EvtLog, Metadata};
 use futures::{stream, Stream, StreamExt};
 use prost::Message as ProstMessage;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::{
-    collections::HashSet,
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
     io,
     num::{NonZeroU64, NonZeroUsize},
     str::FromStr,
 };
-use tokio::sync::broadcast;
+
 use tracing::debug;
 use uuid::Uuid;
 
@@ -39,8 +37,6 @@ const LEN: &str = "len";
 pub struct NatsEvtLog {
     stream_name: String,
     jetstream: Jetstream,
-    id_sender: broadcast::Sender<Uuid>,
-    ids: HashSet<Uuid>,
 }
 
 impl NatsEvtLog {
@@ -64,40 +60,9 @@ impl NatsEvtLog {
                 .map_err(Error::CreateStream)?;
         }
 
-        // Create ID broadcast sender and load IDs.
-        let (id_sender, _) = broadcast::channel(config.id_broadcast_capacity.get());
-        let subject = format!("STREAM.INFO.{}", "evts");
-        let payload = &json!({ "subjects_filter": "evts.*" });
-        let response = jetstream
-            .request::<_, Value>(subject, payload)
-            .await
-            .map_err(Error::JetstreamRequest)?;
-        let response = match response {
-            Response::Ok(value) => Ok(value),
-            Response::Err { error } => Err(Error::JetstreamResponse(error)),
-        }?;
-        // TODO: This is a little sloppy; in theory `state` might be missing.
-        let ids = match &response["state"]["subjects"] {
-            Value::Object(map) => {
-                let ids = map
-                    .keys()
-                    .map(|key| {
-                        key.strip_prefix("evts.")
-                            .ok_or(Error::EvtsPrefixMissing)
-                            .and_then(|key| key.try_into().map_err(Error::InvalidSubjectName))
-                    })
-                    .collect::<Result<HashSet<Uuid>, _>>();
-                ids
-            }
-            // TODO: This is a little sloppy; in theory there could be other variants than `Null`.
-            _ => Ok(HashSet::new()),
-        }?;
-
         Ok(Self {
             stream_name: config.stream_name,
             jetstream,
-            id_sender,
-            ids,
         })
     }
 
@@ -163,10 +128,6 @@ impl EvtLog for NatsEvtLog {
             .await
             .map_err(Error::PublishEvtsAck)?;
         let metadata = Box::new(ack.sequence);
-
-        // Add ID to IDs and send it to ID broadcast channel.
-        self.ids.insert(id);
-        let _ = self.id_sender.send(id);
 
         Ok(Some(metadata))
     }
@@ -294,24 +255,6 @@ impl EvtLog for NatsEvtLog {
         };
 
         Ok(evts)
-    }
-
-    async fn ids(&self) -> Result<impl Stream<Item = Uuid> + '_, Self::Error> {
-        let mut id_receiver = self.id_sender.subscribe();
-
-        let ids = stream! {
-            // Yield current IDs.
-            for id in &self.ids { yield *id; }
-
-            // Yield future IDs after deduplication.
-            while let Ok(id) = id_receiver.recv().await {
-                if !self.ids.contains(&id) {
-                    yield id;
-                }
-            }
-        };
-
-        Ok(ids)
     }
 }
 
@@ -455,11 +398,6 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
-        let ids = evt_log.ids().await?;
-        let ids = ids.take(1).collect::<HashSet<_>>().await;
-        assert_eq!(ids, HashSet::from_iter(vec![id]));
-        let ids = evt_log.ids().await?;
-
         let evts = evt_log
             .evts_by_id::<i32, _, _>(
                 id,
@@ -482,20 +420,6 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
-
-        let ids = ids.take(1).collect::<HashSet<_>>().await;
-        assert_eq!(ids, HashSet::from_iter(vec![id]));
-        let ids = evt_log.ids().await?;
-
-        let id_2 = Uuid::now_v7();
-
-        evt_log
-            .clone()
-            .persist(id_2, [1].as_ref(), 0, &convert::prost::to_bytes)
-            .await?;
-
-        let ids = ids.take(2).collect::<HashSet<_>>().await;
-        assert_eq!(ids, HashSet::from_iter(vec![id, id_2]));
 
         Ok(())
     }
