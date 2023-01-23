@@ -51,14 +51,14 @@ where
                 if n > 0 && n % 2_500 == 0 {
                     println!("{id}: {} events persisted", n * 2);
                 }
-                let _ = counter
+                counter
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
                     .context("Cannot handle Inc command")
                     .unwrap()
                     .context("Invalid command")
                     .unwrap();
-                let _ = counter
+                counter
                     .handle_cmd(Cmd::Dec(n as u64))
                     .await
                     .context("Cannot handle Dec command")
