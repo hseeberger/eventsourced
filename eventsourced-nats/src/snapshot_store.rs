@@ -122,7 +122,7 @@ impl SnapshotStore for NatsSnapshotStore {
             .map_err(Error::LoadSnapshot)?
             .map(|bytes| {
                 proto::Snapshot::decode(Bytes::from(bytes))
-                    .map_err(Error::DecodeEvts)
+                    .map_err(Error::DecodeSnapshot)
                     .and_then(
                         |proto::Snapshot {
                              seq_no,

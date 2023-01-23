@@ -13,14 +13,14 @@ use async_nats::{
     HeaderMap, Message,
 };
 use async_stream::stream;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use eventsourced::{EvtLog, Metadata};
-use futures::{stream, Stream, StreamExt};
-use prost::Message as ProstMessage;
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    future::ready,
     io,
     num::{NonZeroU64, NonZeroUsize},
     str::FromStr,
@@ -29,8 +29,7 @@ use std::{
 use tracing::debug;
 use uuid::Uuid;
 
-const SEQ_NO: &str = "seq_no";
-const LEN: &str = "len";
+const SEQ_NO: &str = "eventsourced-seq-no";
 
 /// An [EvtLog] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
@@ -88,7 +87,7 @@ impl EvtLog for NatsEvtLog {
     async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
-        evts: &'a [E],
+        evt: &'a E,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
@@ -97,32 +96,16 @@ impl EvtLog for NatsEvtLog {
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static,
     {
-        assert!(!evts.is_empty(), "evts must not be empty");
-        assert!(
-            last_seq_no <= Self::MAX_SEQ_NO - evts.len() as u64,
-            "last_seq_no must be less or equal {} - evts.len()",
-            Self::MAX_SEQ_NO
-        );
+        // Convert event into bytes.
+        let bytes = evt_to_bytes(evt).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
 
-        // Convert events into bytes.
-        let len = evts.len();
-        let evts = evts
-            .iter()
-            .map(evt_to_bytes)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
-        let evts = proto::Evts { evts };
-        let mut bytes = BytesMut::new();
-        evts.encode(&mut bytes)?;
-
-        // Publish events to NATS subject and await ACK.
+        // Publish event to NATS subject and await ACK.
         let subject = format!("{}.{id}", self.stream_name);
         let mut headers = HeaderMap::new();
         headers.insert(SEQ_NO, (last_seq_no + 1).to_string().as_ref());
-        headers.insert(LEN, (len).to_string().as_ref());
         let ack = self
             .jetstream
-            .publish_with_headers(subject, headers, bytes.into())
+            .publish_with_headers(subject, headers, bytes)
             .await
             .map_err(Error::PublishEvts)?
             .await
@@ -156,12 +139,13 @@ impl EvtLog for NatsEvtLog {
                     }
                 },
                 |msg| {
-                    let msg = Message::try_from(msg).map_err(Error::FromRawMessage);
-                    msg.map(|ref msg| {
-                        let (seq_no, len) = seq_no_and_len(msg);
-                        debug!(%id, seq_no, len, "Last msg found");
-                        seq_no + len - 1
-                    })
+                    Message::try_from(msg)
+                        .map_err(Error::FromRawMessage)
+                        .map(|msg| {
+                            let seq_no = seq_no(&msg);
+                            debug!(%id, seq_no, "Last msg found");
+                            seq_no
+                        })
                 },
             )
     }
@@ -209,31 +193,22 @@ impl EvtLog for NatsEvtLog {
             .map_err(Error::GetMessages)?;
 
         // Transform message stream into event stream
-        let evts = msgs
-            .map(move |msg| match msg {
-                Ok(msg) => {
-                    let (seq_no, len) = seq_no_and_len(&msg);
-                    // Only convert if current message has relevant sequence number range.
-                    if from_seq_no.get() < seq_no + len {
-                        let proto::Evts { evts } = proto::Evts::decode(msg.message.payload)?;
-                        evts.into_iter()
-                            .enumerate()
-                            .map(|(n, evt)| {
-                                evt_from_bytes(evt)
-                                    .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
-                                    .map(|evt| (seq_no + n as u64, evt))
-                            })
-                            .collect()
-                    } else {
-                        Ok(vec![])
-                    }
-                }
-                Err(source) => Err(Error::GetMessage(source)),
-            })
-            .flat_map(|evts| match evts {
-                Ok(evts) => stream::iter(evts.into_iter().map(Ok).collect::<Vec<_>>()),
-                Err(error) => stream::iter(vec![Err(error)]),
-            });
+        let evts = msgs.filter_map(move |msg| {
+            ready(
+                msg.map_err(|source| Error::GetMessage(source))
+                    .and_then(|msg| {
+                        let seq_no = seq_no(&msg);
+                        if from_seq_no.get() <= seq_no {
+                            evt_from_bytes(msg.message.payload)
+                                .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                                .map(|evt| Some((seq_no, evt)))
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                    .transpose(),
+            )
+        });
 
         // Respect sequence number range, in particular stop at `to_seq_no`.
         let evts = stream! {
@@ -322,10 +297,8 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
     NonZeroUsize::MIN
 }
 
-fn seq_no_and_len(msg: &Message) -> (u64, u64) {
-    let seq_no = header(msg, SEQ_NO);
-    let len = header(msg, LEN);
-    (seq_no, len)
+fn seq_no(msg: &Message) -> u64 {
+    header(msg, SEQ_NO)
 }
 
 fn header<T>(msg: &Message, name: &str) -> T
@@ -344,10 +317,6 @@ where
         .unwrap_or_else(|| panic!("Missing value for {name} header"))
         .parse::<T>()
         .unwrap_or_else(|_| panic!("{name} header cannot be parsed"))
-}
-
-mod proto {
-    include!(concat!(env!("OUT_DIR"), "/evt_log.rs"));
 }
 
 #[cfg(all(test))]
@@ -379,7 +348,13 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         evt_log
-            .persist(id, [1, 2, 3].as_ref(), 0, &convert::prost::to_bytes)
+            .persist(id, &1, 0, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .persist(id, &2, 1, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .persist(id, &3, 2, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
@@ -410,7 +385,11 @@ mod tests {
 
         evt_log
             .clone()
-            .persist(id, [4, 5].as_ref(), 3, &convert::prost::to_bytes)
+            .persist(id, &4, 3, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .clone()
+            .persist(id, &5, 4, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);

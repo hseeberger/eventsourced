@@ -120,7 +120,7 @@ impl EvtLog for PostgresEvtLog {
     async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
-        evts: &'a [E],
+        evt: &'a E,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
@@ -129,30 +129,25 @@ impl EvtLog for PostgresEvtLog {
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static,
     {
-        assert!(!evts.is_empty(), "evts must not be empty");
         assert!(
-            last_seq_no <= Self::MAX_SEQ_NO - evts.len() as u64,
-            "last_seq_no must be less or equal {} - evts.len()",
+            last_seq_no < Self::MAX_SEQ_NO,
+            "last_seq_no must be less than equal {}",
             Self::MAX_SEQ_NO
         );
 
-        debug!(%id, last_seq_no, len = evts.len(), "Persisting events");
+        debug!(%id, last_seq_no, "Persisting event");
 
-        // Persist all events transactionally.
-        let mut cnn = self.cnn().await?;
-        let tx = cnn.transaction().await.map_err(Error::StartTx)?;
-        let stmt = tx
+        // Persist event.
+        let cnn = self.cnn().await?;
+        let stmt = cnn
             .prepare("INSERT INTO evts VALUES ($1, $2, $3)")
             .await
             .map_err(Error::PrepareStmt)?;
-        for (n, evt) in evts.iter().enumerate() {
-            let seq_no = (last_seq_no + 1 + n as u64) as i64;
-            let bytes = evt_to_bytes(evt).map_err(|source| Error::ToBytes(Box::new(source)))?;
-            tx.execute(&stmt, &[&id, &seq_no, &bytes.as_ref()])
-                .await
-                .map_err(Error::ExecuteStmt)?;
-        }
-        tx.commit().await.map_err(Error::CommitTx)?;
+        let seq_no = (last_seq_no + 1) as i64;
+        let bytes = evt_to_bytes(evt).map_err(|source| Error::ToBytes(Box::new(source)))?;
+        cnn.execute(&stmt, &[&id, &seq_no, &bytes.as_ref()])
+            .await
+            .map_err(Error::ExecuteStmt)?;
 
         Ok(None)
     }
@@ -393,7 +388,13 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         evt_log
-            .persist(id, [1, 2, 3].as_ref(), 0, &convert::prost::to_bytes)
+            .persist(id, &1, 0, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .persist(id, &2, 1, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .persist(id, &3, 2, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
@@ -424,7 +425,11 @@ mod tests {
 
         evt_log
             .clone()
-            .persist(id, [4, 5].as_ref(), 3, &convert::prost::to_bytes)
+            .persist(id, &4, 3, &convert::prost::to_bytes)
+            .await?;
+        evt_log
+            .clone()
+            .persist(id, &5, 4, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);
