@@ -41,14 +41,6 @@ pub enum Error {
     #[error("Cannot prepare statement")]
     PrepareStmt(#[source] tokio_postgres::Error),
 
-    /// Cannot start transaction.
-    #[error("Cannot start transaction")]
-    StartTx(#[source] tokio_postgres::Error),
-
-    /// Cannot commit transaction.
-    #[error("Cannot commit transaction")]
-    CommitTx(#[source] tokio_postgres::Error),
-
     /// Cannot execute statement.
     #[error("Cannot execute statement")]
     ExecuteStmt(#[source] tokio_postgres::Error),

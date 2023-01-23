@@ -44,7 +44,7 @@ impl EventSourced for Counter {
     type Error = Error;
 
     /// Command handler, returning the to be persisted events or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error> {
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Self::Evt, Self::Error> {
         match cmd {
             Cmd::Inc(inc) => {
                 // Validate command: overflow.
@@ -56,12 +56,12 @@ impl EventSourced for Counter {
                 }
                 // Valid Inc command results in Increased event.
                 else {
-                    Ok(vec![Evt {
+                    Ok(Evt {
                         evt: Some(evt::Evt::Increased(Increased {
                             old_value: self.value,
                             inc,
                         })),
-                    }])
+                    })
                 }
             }
             Cmd::Dec(dec) => {
@@ -74,12 +74,12 @@ impl EventSourced for Counter {
                 }
                 // Valid Dec command results in Decreased event.
                 else {
-                    Ok(vec![Evt {
+                    Ok(Evt {
                         evt: Some(evt::Evt::Decreased(Decreased {
                             old_value: self.value,
                             dec,
                         })),
-                    }])
+                    })
                 }
             }
         }

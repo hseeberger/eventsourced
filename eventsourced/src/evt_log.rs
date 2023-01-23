@@ -14,15 +14,14 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
     /// implementation.
     const MAX_SEQ_NO: u64 = u64::MAX;
 
-    /// Persist the given events for the given entity ID and the given last sequence number.
+    /// Persist the given event for the given entity ID and the given last sequence number.
     ///
     /// # Panics
-    /// - Panics if `evts` are empty.
     /// - Panics if `last_seq_no` is less or equal [MAX_SEQ_NO] - `evts.len()`.
     fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
-        evts: &'a [E],
+        evt: &'a E,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> impl Future<Output = Result<Metadata, Self::Error>> + Send

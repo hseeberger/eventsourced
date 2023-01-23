@@ -34,7 +34,7 @@ use uuid::Uuid;
 pub type Metadata = Option<Box<dyn Any + Send>>;
 
 /// Command and event handling for an event sourced entity.
-pub trait EventSourced: Send + Sized + 'static {
+pub trait EventSourced: Sized + Send + Sync + 'static {
     /// Command type.
     type Cmd: Debug + Send + Sync + 'static;
 
@@ -47,8 +47,8 @@ pub trait EventSourced: Send + Sized + 'static {
     /// Error type for rejected (a.k.a. invalid) commands.
     type Error: StdError + Send + Sync + 'static;
 
-    /// Command handler, returning the to be persisted events or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error>;
+    /// Command handler, returning the to be persisted event or an error.
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Self::Evt, Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, seq_no: u64, evt: &Self::Evt) -> Option<Self::State>;
@@ -69,10 +69,10 @@ pub trait EventSourcedExt {
     /// [EntityRef] which uses a buffered channel with the given size.
     ///
     /// Commands are handled by the command handler of this entity. They can be rejected by
-    /// returning an error. Valid commands may produce events which get persisted to the [EvtLog]
-    /// along with an increasing sequence number and then applied to the event handler of this
-    /// entity. The event handler may decide to save a snapshot at the current sequence number
-    /// which is used to speed up future spawning.
+    /// returning an error. Valid commands may produce an event which get persisted to the [EvtLog]
+    /// along with an increasing sequence number and then applied to the event handler of
+    /// this entity. The event handler may decide to save a snapshot at the current sequence
+    /// number which is used to speed up future spawning.
     async fn spawn<
         L,
         S,
@@ -175,7 +175,7 @@ pub trait EventSourcedExt {
 
         let (cmd_in, mut cmd_out) = mpsc::channel::<(
             Self::Cmd,
-            oneshot::Sender<Result<Vec<Self::Evt>, Self::Error>>,
+            oneshot::Sender<Result<Self::Evt, Self::Error>>,
         )>(buffer.get());
 
         // Spawn handler loop.
@@ -188,7 +188,7 @@ pub trait EventSourcedExt {
                         };
                     }
                     Err(error) => {
-                        error!(%id, %error, "Cannot persist events");
+                        error!(%id, %error, "Cannot persist event");
                         break;
                     }
                 }
@@ -226,44 +226,39 @@ where
     async fn handle_cmd(
         &mut self,
         cmd: E::Cmd,
-    ) -> Result<Result<Vec<E::Evt>, E::Error>, Box<dyn StdError>> {
+    ) -> Result<Result<E::Evt, E::Error>, Box<dyn StdError>> {
         // Handle command.
-        let evts = match self.event_sourced.handle_cmd(cmd) {
-            Ok(evts) => evts,
-            Err(error) => return Ok(Err(error)),
-        };
-
-        if !evts.is_empty() {
-            // Persist events.
-            let metadata = self
-                .evt_log
-                .persist(self.id, &evts, self.last_seq_no, &self.evt_to_bytes)
-                .await?;
-
-            // Handle persisted events.
-            let state = evts.iter().fold(None, |state, evt| {
-                self.last_seq_no += 1;
-                self.event_sourced
-                    .handle_evt(self.last_seq_no, evt)
-                    .or(state)
-            });
-
-            // Persist latest snapshot if any.
-            if let Some(state) = state {
-                debug!(id = %self.id, seq_no = self.last_seq_no, "Saving snapshot");
-                self.snapshot_store
-                    .save(
-                        self.id,
-                        unsafe { NonZeroU64::new_unchecked(self.last_seq_no) },
-                        state,
-                        metadata,
-                        &self.state_to_bytes,
-                    )
+        match self.event_sourced.handle_cmd(cmd) {
+            Ok(evt) => {
+                // Persist event.
+                let metadata = self
+                    .evt_log
+                    .persist(self.id, &evt, self.last_seq_no, &self.evt_to_bytes)
                     .await?;
-            }
-        }
+                self.last_seq_no += 1;
 
-        Ok(Ok(evts))
+                // Handle persisted event.
+                let state = self.event_sourced.handle_evt(self.last_seq_no, &evt);
+
+                // Persist latest snapshot if any.
+                if let Some(state) = state {
+                    debug!(id = %self.id, seq_no = self.last_seq_no, "Saving snapshot");
+                    self.snapshot_store
+                        .save(
+                            self.id,
+                            unsafe { NonZeroU64::new_unchecked(self.last_seq_no) },
+                            state,
+                            metadata,
+                            &self.state_to_bytes,
+                        )
+                        .await?;
+                }
+
+                Ok(Ok(evt))
+            }
+
+            err => Ok(err),
+        }
     }
 }
 
@@ -294,7 +289,7 @@ where
     E: EventSourced,
 {
     id: Uuid,
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<Vec<E::Evt>, E::Error>>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<E::Evt, E::Error>>)>,
 }
 
 impl<E> EntityRef<E>
@@ -317,7 +312,7 @@ where
     pub async fn handle_cmd(
         &self,
         cmd: E::Cmd,
-    ) -> Result<Result<Vec<E::Evt>, E::Error>, EntityRefError> {
+    ) -> Result<Result<E::Evt, E::Error>, EntityRefError> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
@@ -369,12 +364,8 @@ mod tests {
 
         type Error = Infallible;
 
-        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<Vec<Self::Evt>, Self::Error> {
-            Ok(vec![
-                (1 << 32) + self.0,
-                (2 << 32) + self.0,
-                (3 << 32) + self.0,
-            ])
+        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<Self::Evt, Self::Error> {
+            Ok((1 << 32) + self.0)
         }
 
         fn handle_evt(&mut self, _seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
@@ -396,7 +387,7 @@ mod tests {
         async fn persist<'a, E, ToBytes, ToBytesError>(
             &'a mut self,
             _id: Uuid,
-            _evts: &'a [E],
+            _evts: &'a E,
             _last_seq_no: u64,
             _to_bytes: &'a ToBytes,
         ) -> Result<Metadata, Self::Error>
@@ -503,7 +494,7 @@ mod tests {
         let entity = spawn(evt_log, snapshot_store).await?;
 
         let evts = entity.handle_cmd(()).await??;
-        assert_eq!(evts, vec![(1 << 32) + 42, (2 << 32) + 42, (3 << 32) + 42]);
+        assert_eq!(evts, (1 << 32) + 42);
 
         Ok(())
     }
