@@ -24,11 +24,11 @@ pub enum Error {
     #[error("Cannot connect to NATS server")]
     Connect(#[from] std::io::Error),
 
-    /// Events cannot be published.
+    /// An event cannot be published.
     #[error("Cannot publish events")]
     PublishEvts(#[source] async_nats::Error),
 
-    /// An ACK for publishing events cannot be received.
+    /// An ACK for publishing an event cannot be received.
     #[error("Cannot get ACK for publishing events")]
     PublishEvtsAck(#[source] async_nats::Error),
 
@@ -60,21 +60,21 @@ pub enum Error {
     #[error("Cannot convert raw NATS message into NATS message")]
     FromRawMessage(#[source] async_nats::Error),
 
-    /// Events cannot be converted into bytes.
-    #[error("Cannot convert events to bytes")]
+    /// Event cannot be converted into bytes.
+    #[error("Cannot convert event to bytes")]
     EvtsIntoBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
-    /// Bytes cannot be converted to events.
-    #[error("Cannot convert bytes to events")]
+    /// Bytes cannot be converted to event.
+    #[error("Cannot convert bytes to event")]
     EvtsFromBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
-    /// Events cannot be encoded as Protocol Buffers.
-    #[error("Cannot encode events as Protocol Buffers")]
-    EncodeEvts(#[from] EncodeError),
+    /// Snapshot cannot be encoded as Protocol Buffers.
+    #[error("Cannot encode snapshot as Protocol Buffers")]
+    EncodeSnapshot(#[from] EncodeError),
 
-    /// Events cannot be decoded from Protocol Buffers.
-    #[error("Cannot decode events from Protocol Buffers")]
-    DecodeEvts(#[from] DecodeError),
+    /// Snapshot cannot be decoded from Protocol Buffers.
+    #[error("Cannot decode snapshot from Protocol Buffers")]
+    DecodeSnapshot(#[from] DecodeError),
 
     /// A NATS KV bucket cannot be obtained.
     #[error("Cannot get NATS KV bucket")]

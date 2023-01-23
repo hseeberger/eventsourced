@@ -307,7 +307,7 @@ where
     /// the command handler result could be received, i.e. an `Err` signals a technical failure.
     ///
     /// The (outer) `Ok` variant contains another (inner) `Result`, which signals whether the
-    /// command was valid or rejected. If it was valid, the persisted events are returned, else the
+    /// command was valid or rejected. If it was valid, the persisted event is returned, else the
     /// rejection error.
     pub async fn handle_cmd(
         &self,

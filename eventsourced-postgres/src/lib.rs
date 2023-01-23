@@ -45,12 +45,12 @@ pub enum Error {
     #[error("Cannot execute statement")]
     ExecuteStmt(#[source] tokio_postgres::Error),
 
-    /// Cannot convert events to bytes.
-    #[error("Cannot convert events to bytes")]
+    /// Cannot convert an event to bytes.
+    #[error("Cannot convert an event to bytes")]
     ToBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 
-    /// Cannot convert bytes to events.
-    #[error("Cannot convert bytes to events")]
+    /// Cannot convert bytes to an event.
+    #[error("Cannot convert bytes to an event")]
     FromBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 
     /// Cannot get next row.

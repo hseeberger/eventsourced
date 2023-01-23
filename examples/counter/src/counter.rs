@@ -43,7 +43,7 @@ impl EventSourced for Counter {
 
     type Error = Error;
 
-    /// Command handler, returning the to be persisted events or an error.
+    /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Self::Evt, Self::Error> {
         match cmd {
             Cmd::Inc(inc) => {
