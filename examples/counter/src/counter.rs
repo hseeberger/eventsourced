@@ -86,7 +86,7 @@ impl EventSourced for Counter {
     }
 
     /// Event handler, returning whether to take a snapshot or not.
-    fn handle_evt(&mut self, seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
+    fn handle_evt(&mut self, seq_no: u64, evt: Self::Evt) -> Option<Self::State> {
         match evt.evt {
             Some(evt::Evt::Increased(Increased { old_value, inc })) => {
                 self.value += inc;

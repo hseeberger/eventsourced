@@ -51,7 +51,7 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Self::Evt, Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
-    fn handle_evt(&mut self, seq_no: u64, evt: &Self::Evt) -> Option<Self::State>;
+    fn handle_evt(&mut self, seq_no: u64, evt: Self::Evt) -> Option<Self::State>;
 
     /// Snapshot state handler.
     fn set_state(&mut self, state: Self::State);
@@ -157,7 +157,7 @@ pub trait EventSourcedExt {
             pin!(evts);
             while let Some(evt) = evts.next().await {
                 let (seq_no, evt) = evt.map_err(|source| SpawnError::NextEvt(source.into()))?;
-                self.handle_evt(seq_no, &evt);
+                self.handle_evt(seq_no, evt);
             }
         }
 
@@ -173,10 +173,8 @@ pub trait EventSourcedExt {
         };
         debug!(%id, "EventSourced entity created");
 
-        let (cmd_in, mut cmd_out) = mpsc::channel::<(
-            Self::Cmd,
-            oneshot::Sender<Result<Self::Evt, Self::Error>>,
-        )>(buffer.get());
+        let (cmd_in, mut cmd_out) =
+            mpsc::channel::<(Self::Cmd, oneshot::Sender<Result<(), Self::Error>>)>(buffer.get());
 
         // Spawn handler loop.
         task::spawn(async move {
@@ -223,10 +221,7 @@ where
     StateToBytes: Fn(&E::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
     StateToBytesError: StdError + Send + Sync + 'static,
 {
-    async fn handle_cmd(
-        &mut self,
-        cmd: E::Cmd,
-    ) -> Result<Result<E::Evt, E::Error>, Box<dyn StdError>> {
+    async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
         // Handle command.
         match self.event_sourced.handle_cmd(cmd) {
             Ok(evt) => {
@@ -238,7 +233,7 @@ where
                 self.last_seq_no += 1;
 
                 // Handle persisted event.
-                let state = self.event_sourced.handle_evt(self.last_seq_no, &evt);
+                let state = self.event_sourced.handle_evt(self.last_seq_no, evt);
 
                 // Persist latest snapshot if any.
                 if let Some(state) = state {
@@ -254,10 +249,10 @@ where
                         .await?;
                 }
 
-                Ok(Ok(evt))
+                Ok(Ok(()))
             }
 
-            err => Ok(err),
+            Err(error) => Ok(Err(error)),
         }
     }
 }
@@ -289,7 +284,7 @@ where
     E: EventSourced,
 {
     id: Uuid,
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<E::Evt, E::Error>>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<(), E::Error>>)>,
 }
 
 impl<E> EntityRef<E>
@@ -309,10 +304,7 @@ where
     /// The (outer) `Ok` variant contains another (inner) `Result`, which signals whether the
     /// command was valid or rejected. If it was valid, the persisted event is returned, else the
     /// rejection error.
-    pub async fn handle_cmd(
-        &self,
-        cmd: E::Cmd,
-    ) -> Result<Result<E::Evt, E::Error>, EntityRefError> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, EntityRefError> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
@@ -368,7 +360,7 @@ mod tests {
             Ok((1 << 32) + self.0)
         }
 
-        fn handle_evt(&mut self, _seq_no: u64, evt: &Self::Evt) -> Option<Self::State> {
+        fn handle_evt(&mut self, _seq_no: u64, evt: Self::Evt) -> Option<Self::State> {
             self.0 += evt >> 32;
             None
         }
@@ -492,9 +484,7 @@ mod tests {
         let snapshot_store = TestSnapshotStore;
 
         let entity = spawn(evt_log, snapshot_store).await?;
-
-        let evts = entity.handle_cmd(()).await??;
-        assert_eq!(evts, (1 << 32) + 42);
+        entity.handle_cmd(()).await??;
 
         Ok(())
     }
@@ -510,16 +500,18 @@ mod tests {
         S: SnapshotStore,
     {
         let entity = task::spawn(async move {
-            Simple(0).spawn(
-                Uuid::now_v7(),
-                unsafe { NonZeroUsize::new_unchecked(1) },
-                evt_log,
-                snapshot_store,
-                convert::prost::binarizer(),
-            )
+            Simple(0)
+                .spawn(
+                    Uuid::now_v7(),
+                    unsafe { NonZeroUsize::new_unchecked(1) },
+                    evt_log,
+                    snapshot_store,
+                    convert::prost::binarizer(),
+                )
+                .await
         });
 
-        let entity = entity.await?.await?;
+        let entity = entity.await??;
         Ok(entity)
     }
 }
