@@ -6,14 +6,12 @@ use async_nats::{
     jetstream::{self, kv::Store, Context as Jetstream},
 };
 use bytes::{Bytes, BytesMut};
-use eventsourced::{Metadata, Snapshot, SnapshotStore};
+use eventsourced::{SeqNo, Snapshot, SnapshotStore};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::{
-    any::Any,
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
-    num::NonZeroU64,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -73,9 +71,8 @@ impl SnapshotStore for NatsSnapshotStore {
     async fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
-        seq_no: NonZeroU64,
+        seq_no: SeqNo,
         state: S,
-        metadata: Metadata,
         state_to_bytes: &'a StateToBytes,
     ) -> Result<(), Self::Error>
     where
@@ -86,11 +83,9 @@ impl SnapshotStore for NatsSnapshotStore {
         let mut bytes = BytesMut::new();
         let state =
             state_to_bytes(&state).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
-        let sequence = metadata.and_then(|metadata| metadata.downcast_ref::<u64>().copied());
         let snapshot = proto::Snapshot {
-            seq_no: seq_no.get(),
+            seq_no: seq_no.as_u64(),
             state,
-            sequence,
         };
         snapshot.encode(&mut bytes)?;
 
@@ -123,23 +118,16 @@ impl SnapshotStore for NatsSnapshotStore {
             .map(|bytes| {
                 proto::Snapshot::decode(Bytes::from(bytes))
                     .map_err(Error::DecodeSnapshot)
-                    .and_then(
-                        |proto::Snapshot {
-                             seq_no,
-                             state,
-                             sequence,
-                         }| {
-                            state_from_bytes(state)
-                                .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
-                                .map(|state| {
-                                    let metadata = sequence.map(|s| {
-                                        let b: Box<dyn Any + Send> = Box::new(s);
-                                        b
-                                    });
-                                    Snapshot::new(seq_no, state, metadata)
-                                })
-                        },
-                    )
+                    .and_then(|proto::Snapshot { seq_no, state }| {
+                        state_from_bytes(state)
+                            .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                            .and_then(|state| {
+                                seq_no
+                                    .try_into()
+                                    .map_err(Error::InvalidSeqNo)
+                                    .map(|seq_no| Snapshot::new(seq_no, state))
+                            })
+                    })
             })
             .transpose()?;
 
@@ -237,27 +225,21 @@ mod tests {
             .await?;
         assert!(snapshot.is_none());
 
-        let seq_no = 42;
+        let seq_no = 42.try_into().unwrap();
         let state = 666;
 
         snapshot_store
-            .save(
-                id,
-                unsafe { NonZeroU64::new_unchecked(seq_no) },
-                state,
-                None,
-                &convert::prost::to_bytes,
-            )
+            .save(id, seq_no, state, &convert::prost::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
             .load::<i32, _, _>(id, &convert::prost::from_bytes)
             .await?;
+
         assert!(snapshot.is_some());
         let snapshot = snapshot.unwrap();
         assert_eq!(snapshot.seq_no, seq_no);
         assert_eq!(snapshot.state, state);
-        assert!(snapshot.metadata.is_none());
 
         Ok(())
     }

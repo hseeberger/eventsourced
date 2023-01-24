@@ -16,6 +16,7 @@ use bb8_postgres::{
     bb8::{Pool, PooledConnection},
     PostgresConnectionManager,
 };
+use eventsourced::TrySeqNoFromZero;
 use thiserror::Error;
 
 type CnnPool<T> = Pool<PostgresConnectionManager<T>>;
@@ -37,13 +38,9 @@ pub enum Error {
     #[error("Cannot get connection from pool")]
     GetConnection(#[source] bb8_postgres::bb8::RunError<tokio_postgres::Error>),
 
-    /// Cannot prepare statement.
-    #[error("Cannot prepare statement")]
-    PrepareStmt(#[source] tokio_postgres::Error),
-
-    /// Cannot execute statement.
-    #[error("Cannot execute statement")]
-    ExecuteStmt(#[source] tokio_postgres::Error),
+    /// Cannot execute query.
+    #[error("Cannot execute query")]
+    ExecuteQuery(#[source] tokio_postgres::Error),
 
     /// Cannot convert an event to bytes.
     #[error("Cannot convert an event to bytes")]
@@ -60,4 +57,8 @@ pub enum Error {
     /// Cannot get column as Uuid.
     #[error("Cannot get column as Uuid")]
     ColumnAsUuid(#[source] tokio_postgres::Error),
+
+    /// Invalid sequence number.
+    #[error("Invalid sequence number")]
+    InvalidSeqNo(#[source] TrySeqNoFromZero),
 }

@@ -3,6 +3,7 @@
 #![allow(clippy::type_complexity)]
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
+#![feature(nonzero_min_max)]
 #![feature(return_position_impl_trait_in_trait)]
 #![feature(type_alias_impl_trait)]
 
@@ -16,9 +17,8 @@ pub use snapshot_store::*;
 use bytes::Bytes;
 use futures::StreamExt;
 use std::{
-    any::Any,
     error::Error as StdError,
-    fmt::Debug,
+    fmt::{self, Debug, Display},
     num::{NonZeroU64, NonZeroUsize},
 };
 use thiserror::Error;
@@ -29,9 +29,6 @@ use tokio::{
 };
 use tracing::{debug, error};
 use uuid::Uuid;
-
-/// Optional metadata to optimize sequence number based lookup of events in the [EvtLog].
-pub type Metadata = Option<Box<dyn Any + Send>>;
 
 /// Command and event handling for an event sourced entity.
 pub trait EventSourced: Sized + Send + Sync + 'static {
@@ -48,13 +45,48 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     type Error: StdError + Send + Sync + 'static;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Self::Evt, Self::Error>;
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
-    fn handle_evt(&mut self, seq_no: u64, evt: Self::Evt) -> Option<Self::State>;
+    fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State>;
 
     /// Snapshot state handler.
     fn set_state(&mut self, state: Self::State);
+}
+
+/// An event and an optional tag. Either call `into` on an event to create a [TaggedEvt] without tag
+/// or call `with_tag` to create one with a tag.
+#[derive(Debug, Clone)]
+pub struct TaggedEvt<E> {
+    evt: E,
+    tag: Option<String>,
+}
+
+impl<E> From<E> for TaggedEvt<E> {
+    /// Create a [TaggedEvt] without tag.
+    fn from(evt: E) -> Self {
+        Self { evt, tag: None }
+    }
+}
+
+/// Extension methods for events.
+pub trait EvtExt: Sized {
+    /// Create a [TaggedEvt] with the given tag.
+    fn with_tag<T>(self, tag: T) -> TaggedEvt<Self>
+    where
+        T: Into<String>;
+}
+
+impl<E> EvtExt for E {
+    fn with_tag<T>(self, tag: T) -> TaggedEvt<E>
+    where
+        T: Into<String>,
+    {
+        TaggedEvt {
+            evt: self,
+            tag: Some(tag.into()),
+        }
+    }
 }
 
 /// Extension methods for types implementing [EventSourced].
@@ -115,49 +147,38 @@ pub trait EventSourcedExt {
         } = binarizer;
 
         // Restore snapshot.
-        let (snapshot_seq_no, metadata) = snapshot_store
+        let snapshot_seq_no = snapshot_store
             .load::<Self::State, _, _>(id, state_from_bytes)
             .await
             .map_err(|source| SpawnError::LoadSnapshot(source.into()))?
-            .map(
-                |Snapshot {
-                     seq_no,
-                     state,
-                     metadata,
-                 }| {
-                    debug!(%id, seq_no, "Restoring snapshot");
-                    self.set_state(state);
-                    (seq_no, metadata)
-                },
-            )
-            .unwrap_or((0, None));
+            .map(|Snapshot { seq_no, state }| {
+                debug!(%id, %seq_no, "Restoring snapshot");
+                self.set_state(state);
+                seq_no
+            })
+            .unwrap_or(SeqNo::MIN);
 
         // Replay latest events.
         let last_seq_no = evt_log
             .last_seq_no(id)
             .await
-            .map_err(|source| SpawnError::LastSeqNo(source.into()))?;
+            .map_err(|source| SpawnError::LastSeqNo(source.into()))?
+            .unwrap_or(SeqNo::MIN);
         assert!(
             snapshot_seq_no <= last_seq_no,
             "snapshot_seq_no must be less than or equal to last_seq_no"
         );
         if snapshot_seq_no < last_seq_no {
-            let from_seq_no = unsafe { NonZeroU64::new_unchecked(snapshot_seq_no + 1) };
-            debug!(%id, from_seq_no, last_seq_no , "Replaying evts");
+            let from_seq_no = snapshot_seq_no;
+            debug!(%id, %from_seq_no, %last_seq_no , "Replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(
-                    id,
-                    from_seq_no,
-                    last_seq_no,
-                    metadata,
-                    evt_from_bytes,
-                )
+                .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, last_seq_no, evt_from_bytes)
                 .await
                 .map_err(|source| SpawnError::EvtsById(source.into()))?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
-                let (seq_no, evt) = evt.map_err(|source| SpawnError::NextEvt(source.into()))?;
-                self.handle_evt(seq_no, evt);
+                let (_, evt) = evt.map_err(|source| SpawnError::NextEvt(source.into()))?;
+                self.handle_evt(evt);
             }
         }
 
@@ -165,7 +186,6 @@ pub trait EventSourcedExt {
         let mut entity = Entity {
             event_sourced: self,
             id,
-            last_seq_no,
             evt_log,
             snapshot_store,
             evt_to_bytes,
@@ -199,63 +219,6 @@ pub trait EventSourcedExt {
 }
 
 impl<E> EventSourcedExt for E where E: EventSourced {}
-
-struct Entity<E, L, S, EvtToBytes, StateToBytes> {
-    event_sourced: E,
-    id: Uuid,
-    last_seq_no: u64,
-    evt_log: L,
-    snapshot_store: S,
-    evt_to_bytes: EvtToBytes,
-    state_to_bytes: StateToBytes,
-}
-
-impl<E, L, S, EvtToBytes, EvtToBytesError, StateToBytes, StateToBytesError>
-    Entity<E, L, S, EvtToBytes, StateToBytes>
-where
-    E: EventSourced,
-    L: EvtLog,
-    S: SnapshotStore,
-    EvtToBytes: Fn(&E::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
-    EvtToBytesError: StdError + Send + Sync + 'static,
-    StateToBytes: Fn(&E::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-    StateToBytesError: StdError + Send + Sync + 'static,
-{
-    async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
-        // Handle command.
-        match self.event_sourced.handle_cmd(cmd) {
-            Ok(evt) => {
-                // Persist event.
-                let metadata = self
-                    .evt_log
-                    .persist(self.id, &evt, self.last_seq_no, &self.evt_to_bytes)
-                    .await?;
-                self.last_seq_no += 1;
-
-                // Handle persisted event.
-                let state = self.event_sourced.handle_evt(self.last_seq_no, evt);
-
-                // Persist latest snapshot if any.
-                if let Some(state) = state {
-                    debug!(id = %self.id, seq_no = self.last_seq_no, "Saving snapshot");
-                    self.snapshot_store
-                        .save(
-                            self.id,
-                            unsafe { NonZeroU64::new_unchecked(self.last_seq_no) },
-                            state,
-                            metadata,
-                            &self.state_to_bytes,
-                        )
-                        .await?;
-                }
-
-                Ok(Ok(()))
-            }
-
-            Err(error) => Ok(Err(error)),
-        }
-    }
-}
 
 /// Errors from spawning an event sourced entity.
 #[derive(Debug, Error)]
@@ -335,12 +298,105 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub state_from_bytes: StateFromBytes,
 }
 
+/// Sequence number used for events by event log and snapshot store.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SeqNo(NonZeroU64);
+
+impl SeqNo {
+    #[allow(missing_docs)]
+    pub const MIN: SeqNo = Self(unsafe { NonZeroU64::new_unchecked(1) });
+
+    #[allow(missing_docs)]
+    pub const fn new(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+
+    #[allow(missing_docs)]
+    pub const fn as_u64(&self) -> u64 {
+        self.0.get()
+    }
+
+    /// Get the successor of this sequence number.
+    pub fn succ(&self) -> Self {
+        Self(unsafe { NonZeroU64::new_unchecked(self.0.get() + 1) })
+    }
+}
+
+impl TryFrom<u64> for SeqNo {
+    type Error = TrySeqNoFromZero;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        NonZeroU64::new(value)
+            .ok_or(TrySeqNoFromZero)
+            .map(Self::new)
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("SeqNo must not be zero")]
+pub struct TrySeqNoFromZero;
+
+impl Display for SeqNo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+struct Entity<E, L, S, EvtToBytes, StateToBytes> {
+    event_sourced: E,
+    id: Uuid,
+    evt_log: L,
+    snapshot_store: S,
+    evt_to_bytes: EvtToBytes,
+    state_to_bytes: StateToBytes,
+}
+
+impl<E, L, S, EvtToBytes, EvtToBytesError, StateToBytes, StateToBytesError>
+    Entity<E, L, S, EvtToBytes, StateToBytes>
+where
+    E: EventSourced,
+    L: EvtLog,
+    S: SnapshotStore,
+    EvtToBytes: Fn(&E::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
+    EvtToBytesError: StdError + Send + Sync + 'static,
+    StateToBytes: Fn(&E::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
+    StateToBytesError: StdError + Send + Sync + 'static,
+{
+    async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
+        // Handle command.
+        match self.event_sourced.handle_cmd(cmd) {
+            Ok(TaggedEvt { evt, tag }) => {
+                // Persist event.
+                let seq_no = self
+                    .evt_log
+                    .persist(self.id, &evt, tag, &self.evt_to_bytes)
+                    .await?;
+
+                // Handle persisted event.
+                let state = self.event_sourced.handle_evt(evt);
+
+                // Persist latest snapshot if any.
+                if let Some(state) = state {
+                    debug!(id = %self.id, %seq_no, "Saving snapshot");
+                    self.snapshot_store
+                        .save(self.id, seq_no, state, &self.state_to_bytes)
+                        .await?;
+                }
+
+                Ok(Ok(()))
+            }
+
+            Err(error) => Ok(Err(error)),
+        }
+    }
+}
+
 #[cfg(all(test, feature = "prost"))]
 mod tests {
     use super::*;
     use async_stream::stream;
     use bytes::BytesMut;
-    use futures::Stream;
+    use futures::{stream, Stream};
     use prost::Message;
     use std::convert::Infallible;
 
@@ -356,11 +412,11 @@ mod tests {
 
         type Error = Infallible;
 
-        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<Self::Evt, Self::Error> {
-            Ok((1 << 32) + self.0)
+        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error> {
+            Ok(((1 << 32) + self.0).into())
         }
 
-        fn handle_evt(&mut self, _seq_no: u64, evt: Self::Evt) -> Option<Self::State> {
+        fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State> {
             self.0 += evt >> 32;
             None
         }
@@ -379,30 +435,29 @@ mod tests {
         async fn persist<'a, E, ToBytes, ToBytesError>(
             &'a mut self,
             _id: Uuid,
-            _evts: &'a E,
-            _last_seq_no: u64,
+            _evt: &'a E,
+            _tag: Option<String>,
             _to_bytes: &'a ToBytes,
-        ) -> Result<Metadata, Self::Error>
+        ) -> Result<SeqNo, Self::Error>
         where
             E: Send + Sync + 'a,
             ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Send + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
         {
-            Ok(None)
+            Ok(SeqNo(43.try_into().unwrap()))
         }
 
-        async fn last_seq_no(&self, _entity_id: Uuid) -> Result<u64, Self::Error> {
-            Ok(42)
+        async fn last_seq_no(&self, _entity_id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+            Ok(Some(SeqNo(42.try_into().unwrap())))
         }
 
         async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
             &'a self,
             _id: Uuid,
-            from_seq_no: NonZeroU64,
-            to_seq_no: u64,
-            _metadata: Metadata,
+            from_seq_no: SeqNo,
+            to_seq_no: SeqNo,
             evt_from_bytes: EvtFromBytes,
-        ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>
+        ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
             E: Send + 'a,
             EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
@@ -411,8 +466,8 @@ mod tests {
             let evts = stream! {
                 for n in 0..666 {
                     for evt in 1..=3 {
-                        let seq_no = n * 3 + evt;
-                        if from_seq_no.get() <= seq_no && seq_no <= to_seq_no {
+                        let seq_no = (n * 3 + evt).try_into().unwrap();
+                        if from_seq_no <= seq_no && seq_no <= to_seq_no {
                             let mut bytes = BytesMut::new();
                             evt.encode(&mut bytes).map_err(|source| TestEvtLogError(source.into()))?;
                             let evt = evt_from_bytes(bytes.into()).map_err(|source| TestEvtLogError(source.into()))?;
@@ -423,6 +478,20 @@ mod tests {
                 }
             };
             Ok(evts)
+        }
+
+        async fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+            &'a self,
+            _tag: String,
+            _from_seq_no: SeqNo,
+            _evt_from_bytes: EvtFromBytes,
+        ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+        where
+            E: Send + 'a,
+            EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+            EvtFromBytesError: StdError + Send + Sync + 'static,
+        {
+            Ok(stream::empty())
         }
     }
 
@@ -439,9 +508,8 @@ mod tests {
         async fn save<'a, S, StateToBytes, StateToBytesError>(
             &'a mut self,
             _id: Uuid,
-            _seq_no: NonZeroU64,
+            _seq_no: SeqNo,
             _state: S,
-            _metadata: Metadata,
             _state_to_bytes: &'a StateToBytes,
         ) -> Result<(), Self::Error>
         where
@@ -467,9 +535,8 @@ mod tests {
             42.encode(&mut bytes).unwrap();
             let state = state_from_bytes(bytes.into()).unwrap();
             Ok(Some(Snapshot {
-                seq_no: 42,
+                seq_no: 42.try_into().unwrap(),
                 state,
-                metadata: None,
             }))
         }
     }

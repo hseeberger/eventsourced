@@ -10,7 +10,4 @@ message Snapshot {
 
   // The state of the event sourced entity.
   bytes state = 2;
-
-  // The optional sequence of the NATS stream.
-  optional uint64 sequence = 3;
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use eventsourced::EventSourced;
+use eventsourced::{EventSourced, TaggedEvt};
 use thiserror::Error;
 use tracing::debug;
 
@@ -9,6 +9,7 @@ include!(concat!(env!("OUT_DIR"), "/counter.rs"));
 pub struct Counter {
     value: u64,
     snapshot_after: Option<u64>,
+    evts_handled: u64,
 }
 
 impl Counter {
@@ -44,7 +45,7 @@ impl EventSourced for Counter {
     type Error = Error;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Self::Evt, Self::Error> {
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error> {
         match cmd {
             Cmd::Inc(inc) => {
                 // Validate command: overflow.
@@ -61,7 +62,8 @@ impl EventSourced for Counter {
                             old_value: self.value,
                             inc,
                         })),
-                    })
+                    }
+                    .into())
                 }
             }
             Cmd::Dec(dec) => {
@@ -79,28 +81,30 @@ impl EventSourced for Counter {
                             old_value: self.value,
                             dec,
                         })),
-                    })
+                    }
+                    .into())
                 }
             }
         }
     }
 
     /// Event handler, returning whether to take a snapshot or not.
-    fn handle_evt(&mut self, seq_no: u64, evt: Self::Evt) -> Option<Self::State> {
+    fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State> {
         match evt.evt {
             Some(evt::Evt::Increased(Increased { old_value, inc })) => {
                 self.value += inc;
-                debug!(seq_no, old_value, inc, value = self.value, "Increased");
+                debug!(old_value, inc, value = self.value, "Increased");
             }
             Some(evt::Evt::Decreased(Decreased { old_value, dec })) => {
                 self.value -= dec;
-                debug!(seq_no, old_value, dec, value = self.value, "Decreased");
+                debug!(old_value, dec, value = self.value, "Decreased");
             }
             None => panic!("evt is a mandatory field"),
         }
 
+        self.evts_handled += 1;
         self.snapshot_after.and_then(|snapshot_after| {
-            if seq_no % snapshot_after == 0 {
+            if self.evts_handled % snapshot_after == 0 {
                 Some(self.value)
             } else {
                 None

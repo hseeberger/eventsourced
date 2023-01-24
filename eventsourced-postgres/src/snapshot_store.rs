@@ -3,12 +3,11 @@
 use crate::{Cnn, CnnPool, Error};
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::{Metadata, Snapshot, SnapshotStore};
+use eventsourced::{SeqNo, Snapshot, SnapshotStore};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
-    num::NonZeroU64,
 };
 use tokio_postgres::NoTls;
 use tracing::debug;
@@ -45,7 +44,7 @@ impl PostgresSnapshotStore {
                     &[],
                 )
                 .await
-                .map_err(Error::ExecuteStmt)?;
+                .map_err(Error::ExecuteQuery)?;
         }
 
         Ok(Self { cnn_pool })
@@ -68,9 +67,8 @@ impl SnapshotStore for PostgresSnapshotStore {
     async fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
-        seq_no: NonZeroU64,
+        seq_no: SeqNo,
         state: S,
-        _metadata: Metadata,
         state_to_bytes: &'a StateToBytes,
     ) -> Result<(), Self::Error>
     where
@@ -78,18 +76,18 @@ impl SnapshotStore for PostgresSnapshotStore {
         StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
         StateToBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, seq_no, "Saving snapshot");
+        debug!(%id, %seq_no, "Saving snapshot");
 
         let bytes = state_to_bytes(&state).map_err(|source| Error::ToBytes(Box::new(source)))?;
         self.cnn()
             .await?
             .execute(
                 "INSERT INTO snapshots VALUES ($1, $2, $3)",
-                &[&id, &(seq_no.get() as i64), &bytes.as_ref()],
+                &[&id, &(seq_no.as_u64() as i64), &bytes.as_ref()],
             )
             .await
-            .map_err(Error::ExecuteStmt)?;
-        Ok(())
+            .map_err(Error::ExecuteQuery)
+            .map(|_| ())
     }
 
     async fn load<'a, S, StateFromBytes, StateFromBytesError>(
@@ -113,14 +111,16 @@ impl SnapshotStore for PostgresSnapshotStore {
                 &[&id],
             )
             .await
-            .map_err(Error::ExecuteStmt)?
+            .map_err(Error::ExecuteQuery)?
             .map(move |row| {
-                let seq_no = row.get::<_, i64>(0) as u64;
+                let seq_no = (row.get::<_, i64>(0) as u64)
+                    .try_into()
+                    .map_err(Error::InvalidSeqNo)?;
                 let bytes = row.get::<_, &[u8]>(1);
                 let bytes = Bytes::copy_from_slice(bytes);
                 state_from_bytes(bytes)
                     .map_err(|source| Error::FromBytes(Box::new(source)))
-                    .map(|state| Snapshot::new(seq_no, state, None))
+                    .map(|state| Snapshot::new(seq_no, state))
             })
             .transpose()
     }
@@ -256,27 +256,21 @@ mod tests {
             .await?;
         assert!(snapshot.is_none());
 
-        let seq_no = 42;
+        let seq_no = 42.try_into().unwrap();
         let state = 666;
 
         snapshot_store
-            .save(
-                id,
-                unsafe { NonZeroU64::new_unchecked(seq_no) },
-                state,
-                None,
-                &convert::prost::to_bytes,
-            )
+            .save(id, seq_no, state, &convert::prost::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
             .load::<i32, _, _>(id, &convert::prost::from_bytes)
             .await?;
+
         assert!(snapshot.is_some());
         let snapshot = snapshot.unwrap();
         assert_eq!(snapshot.seq_no, seq_no);
         assert_eq!(snapshot.state, state);
-        assert!(snapshot.metadata.is_none());
 
         Ok(())
     }

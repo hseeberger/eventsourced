@@ -1,6 +1,8 @@
 CREATE TABLE IF NOT EXISTS evts (
+  seq_no bigserial,
   id uuid,
-  seq_no bigint,
   evt bytea,
-  PRIMARY KEY (id, seq_no)
+  tag text,
+  PRIMARY KEY (seq_no, id)
 );
+CREATE INDEX evts_tag ON evts(tag);

@@ -4,9 +4,9 @@ mod noop;
 
 pub use noop::*;
 
-use crate::Metadata;
+use crate::SeqNo;
 use bytes::Bytes;
-use std::{error::Error as StdError, future::Future, num::NonZeroU64};
+use std::{error::Error as StdError, future::Future};
 use uuid::Uuid;
 
 /// Persistence for snapshots.
@@ -17,9 +17,8 @@ pub trait SnapshotStore: Clone + Send + Sync + 'static {
     fn save<'a, S, StateToBytes, StateToBytesError>(
         &'a mut self,
         id: Uuid,
-        seq_no: NonZeroU64,
+        seq_no: SeqNo,
         state: S,
-        meta: Metadata,
         state_to_bytes: &'a StateToBytes,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send
     where
@@ -41,18 +40,13 @@ pub trait SnapshotStore: Clone + Send + Sync + 'static {
 
 /// Snapshot state along with its sequence number and optional metadata.
 pub struct Snapshot<S> {
-    pub seq_no: u64,
+    pub seq_no: SeqNo,
     pub state: S,
-    pub metadata: Metadata,
 }
 
 impl<S> Snapshot<S> {
     #[allow(missing_docs)]
-    pub fn new(seq_no: u64, state: S, metadata: Metadata) -> Self {
-        Self {
-            seq_no,
-            state,
-            metadata,
-        }
+    pub fn new(seq_no: SeqNo, state: S) -> Self {
+        Self { seq_no, state }
     }
 }
