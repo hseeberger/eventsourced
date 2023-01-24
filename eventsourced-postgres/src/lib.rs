@@ -37,10 +37,6 @@ pub enum Error {
     #[error("Cannot get connection from pool")]
     GetConnection(#[source] bb8_postgres::bb8::RunError<tokio_postgres::Error>),
 
-    /// Cannot prepare statement.
-    #[error("Cannot prepare statement")]
-    PrepareStmt(#[source] tokio_postgres::Error),
-
     /// Cannot execute statement.
     #[error("Cannot execute statement")]
     ExecuteStmt(#[source] tokio_postgres::Error),

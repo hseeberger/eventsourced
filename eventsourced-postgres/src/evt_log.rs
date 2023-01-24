@@ -45,9 +45,8 @@ impl PostgresEvtLog {
                 .get()
                 .await
                 .map_err(Error::GetConnection)?
-                .execute(
+                .batch_execute(
                     &include_str!("create_evt_log.sql").replace("evts", &config.evts_table),
-                    &[],
                 )
                 .await
                 .map_err(Error::ExecuteStmt)?;
@@ -102,6 +101,44 @@ impl PostgresEvtLog {
 
         Ok(evts)
     }
+
+    async fn next_evts_by_tag<E, EvtFromBytes, EvtFromBytesError>(
+        &self,
+        tag: &str,
+        from_offset: u64,
+        evt_from_bytes: EvtFromBytes,
+    ) -> Result<impl Stream<Item = Result<(u64, E), Error>> + Send, Error>
+    where
+        E: Send,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(tag, from_offset, "Querying events");
+
+        let params: [&(dyn ToSql + Sync); 2] = [&tag, &(from_offset as i64)];
+        let evts = self
+            .cnn()
+            .await?
+            .query_raw(
+                "SELECT \"offset\", evt FROM evts WHERE tag = $1 AND \"offset\" >= $2 ORDER BY \"offset\"",
+                params,
+            )
+            .await
+            .map_err(Error::ExecuteStmt)?
+            .map_err(Error::NextRow)
+            .map(move |row| {
+                row.and_then(|row| {
+                    let offset = row.get::<_, i64>(0) as u64;
+                    let bytes = row.get::<_, &[u8]>(1);
+                    let bytes = Bytes::copy_from_slice(bytes);
+                    evt_from_bytes(bytes)
+                        .map_err(|source| Error::FromBytes(Box::new(source)))
+                        .map(|evt| (offset, evt))
+                })
+            });
+
+        Ok(evts)
+    }
 }
 
 impl Debug for PostgresEvtLog {
@@ -117,10 +154,15 @@ impl EvtLog for PostgresEvtLog {
     /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
     const MAX_SEQ_NO: u64 = i64::MAX as u64;
 
+    /// The maximum value for offset sequence numbers. As PostgreSQL does not support unsigned
+    /// integers, this is `i64::MAX` or `9_223_372_036_854_775_807`.
+    const MAX_OFFSET: u64 = i64::MAX as u64;
+
     async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
         evt: &'a E,
+        tag: Option<String>,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
@@ -139,15 +181,14 @@ impl EvtLog for PostgresEvtLog {
 
         // Persist event.
         let cnn = self.cnn().await?;
-        let stmt = cnn
-            .prepare("INSERT INTO evts VALUES ($1, $2, $3)")
-            .await
-            .map_err(Error::PrepareStmt)?;
         let seq_no = (last_seq_no + 1) as i64;
         let bytes = evt_to_bytes(evt).map_err(|source| Error::ToBytes(Box::new(source)))?;
-        cnn.execute(&stmt, &[&id, &seq_no, &bytes.as_ref()])
-            .await
-            .map_err(Error::ExecuteStmt)?;
+        cnn.execute(
+            "INSERT INTO evts (id, seq_no, evt, tag) VALUES ($1, $2, $3, $4)",
+            &[&id, &seq_no, &bytes.as_ref(), &tag],
+        )
+        .await
+        .map_err(Error::ExecuteStmt)?;
 
         Ok(None)
     }
@@ -156,14 +197,13 @@ impl EvtLog for PostgresEvtLog {
         let last_seq_no = self
             .cnn()
             .await?
-            .query_opt(
+            .query_one(
                 "SELECT COALESCE(MAX(seq_no), 0) FROM evts WHERE id = $1",
                 &[&id],
             )
             .await
-            .map_err(Error::ExecuteStmt)?
-            .map(|row| row.get::<_, i64>(0) as u64)
-            .unwrap_or_default();
+            .map_err(Error::ExecuteStmt)
+            .map(|row| row.get::<_, i64>(0) as u64)?;
         Ok(last_seq_no)
     }
 
@@ -190,7 +230,7 @@ impl EvtLog for PostgresEvtLog {
             Self::MAX_SEQ_NO
         );
 
-        debug!(%id, from_seq_no, to_seq_no, "Building event stream");
+        debug!(%id, from_seq_no, to_seq_no, "Building events by ID stream");
 
         let last_seq_no = self.last_seq_no(id).await?;
 
@@ -220,6 +260,63 @@ impl EvtLog for PostgresEvtLog {
 
                 // Only sleep if requesting future events.
                 if (last_seq_no < to_seq_no) {
+                    sleep(self.poll_interval).await;
+                }
+            }
+        };
+
+        Ok(evts)
+    }
+
+    async fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
+        tag: String,
+        from_offset: u64,
+        evt_from_bytes: EvtFromBytes,
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send + '_, Self::Error>
+    where
+        E: Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(tag, from_offset, "Building events by tag stream");
+
+        assert!(
+            from_offset <= Self::MAX_OFFSET,
+            "from_offset must be less or equal {}",
+            Self::MAX_OFFSET
+        );
+
+        let last_offset = self
+            .cnn()
+            .await?
+            .query_one("SELECT COALESCE(MAX(\"offset\"), 0) FROM evts", &[])
+            .await
+            .map_err(Error::ExecuteStmt)
+            .map(|row| row.get::<_, i64>(0) as u64)?;
+
+        let mut current_from_offset = from_offset;
+        let evts = stream! {
+            'outer: loop {
+                let evts = self
+                    .next_evts_by_tag(&tag, current_from_offset, evt_from_bytes)
+                    .await?;
+
+                for await evt in evts {
+                    match evt {
+                        Ok(evt @ (offset, _)) => {
+                            current_from_offset = offset + 1;
+                            yield Ok(evt);
+                        }
+                        err => {
+                            yield err;
+                            break 'outer;
+                        }
+                    }
+                }
+
+                // Only sleep if requesting future events.
+                if (current_from_offset >= last_offset) {
                     sleep(self.poll_interval).await;
                 }
             }
@@ -388,13 +485,13 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         evt_log
-            .persist(id, &1, 0, &convert::prost::to_bytes)
+            .persist(id, &1, None, 0, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &2, 1, &convert::prost::to_bytes)
+            .persist(id, &2, None, 1, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &3, 2, &convert::prost::to_bytes)
+            .persist(id, &3, None, 2, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
@@ -425,11 +522,11 @@ mod tests {
 
         evt_log
             .clone()
-            .persist(id, &4, 3, &convert::prost::to_bytes)
+            .persist(id, &4, None, 3, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist(id, &5, 4, &convert::prost::to_bytes)
+            .persist(id, &5, None, 4, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);

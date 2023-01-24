@@ -15,7 +15,7 @@ use async_nats::{
 use async_stream::stream;
 use bytes::Bytes;
 use eventsourced::{EvtLog, Metadata};
-use futures::{Stream, StreamExt};
+use futures::{stream, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
@@ -88,6 +88,7 @@ impl EvtLog for NatsEvtLog {
         &'a mut self,
         id: Uuid,
         evt: &'a E,
+        tag: Option<String>,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
@@ -168,7 +169,7 @@ impl EvtLog for NatsEvtLog {
             "from_seq_no must be less than or equal to to_seq_no"
         );
 
-        debug!(%id, from_seq_no, to_seq_no, "Building event stream");
+        debug!(%id, from_seq_no, to_seq_no, "Building events by ID stream");
 
         // Get message stream
         let deliver_policy =
@@ -230,6 +231,22 @@ impl EvtLog for NatsEvtLog {
         };
 
         Ok(evts)
+    }
+
+    async fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
+        tag: String,
+        from_offset: u64,
+        evt_from_bytes: EvtFromBytes,
+    ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send + '_, Self::Error>
+    where
+        E: Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(tag, from_offset, "Building events by tag stream");
+
+        Ok(stream::empty())
     }
 }
 
@@ -348,13 +365,13 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         evt_log
-            .persist(id, &1, 0, &convert::prost::to_bytes)
+            .persist(id, &1, None, 0, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &2, 1, &convert::prost::to_bytes)
+            .persist(id, &2, None, 1, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &3, 2, &convert::prost::to_bytes)
+            .persist(id, &3, None, 2, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
@@ -385,11 +402,11 @@ mod tests {
 
         evt_log
             .clone()
-            .persist(id, &4, 3, &convert::prost::to_bytes)
+            .persist(id, &4, None, 3, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist(id, &5, 4, &convert::prost::to_bytes)
+            .persist(id, &5, None, 4, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);

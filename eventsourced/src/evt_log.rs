@@ -14,6 +14,10 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
     /// implementation.
     const MAX_SEQ_NO: u64 = u64::MAX;
 
+    /// The maximum value for offset sequence numbers. Defaults to `u64::MAX` unless overriden by
+    /// an implementation.
+    const MAX_OFFSET: u64 = u64::MAX;
+
     /// Persist the given event for the given entity ID and the given last sequence number.
     ///
     /// # Panics
@@ -22,6 +26,7 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         &'a mut self,
         id: Uuid,
         evt: &'a E,
+        tag: Option<String>,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> impl Future<Output = Result<Metadata, Self::Error>> + Send
@@ -44,6 +49,19 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         from_seq_no: NonZeroU64,
         to_seq_no: u64,
         metadata: Metadata,
+        evt_from_bytes: EvtFromBytes,
+    ) -> impl Future<
+        Output = Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
+    > + Send
+    where
+        E: Debug + Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static;
+
+    fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
+        tag: String,
+        from_offset: u64,
         evt_from_bytes: EvtFromBytes,
     ) -> impl Future<
         Output = Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,

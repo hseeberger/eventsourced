@@ -48,7 +48,7 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     type Error: StdError + Send + Sync + 'static;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<Self::Evt, Self::Error>;
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<(Self::Evt, Option<String>), Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, seq_no: u64, evt: Self::Evt) -> Option<Self::State>;
@@ -224,11 +224,11 @@ where
     async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
         // Handle command.
         match self.event_sourced.handle_cmd(cmd) {
-            Ok(evt) => {
+            Ok((evt, tag)) => {
                 // Persist event.
                 let metadata = self
                     .evt_log
-                    .persist(self.id, &evt, self.last_seq_no, &self.evt_to_bytes)
+                    .persist(self.id, &evt, tag, self.last_seq_no, &self.evt_to_bytes)
                     .await?;
                 self.last_seq_no += 1;
 
@@ -340,7 +340,7 @@ mod tests {
     use super::*;
     use async_stream::stream;
     use bytes::BytesMut;
-    use futures::Stream;
+    use futures::{stream, Stream};
     use prost::Message;
     use std::convert::Infallible;
 
@@ -356,8 +356,8 @@ mod tests {
 
         type Error = Infallible;
 
-        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<Self::Evt, Self::Error> {
-            Ok((1 << 32) + self.0)
+        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<(Self::Evt, Option<String>), Self::Error> {
+            Ok(((1 << 32) + self.0, None))
         }
 
         fn handle_evt(&mut self, _seq_no: u64, evt: Self::Evt) -> Option<Self::State> {
@@ -379,7 +379,8 @@ mod tests {
         async fn persist<'a, E, ToBytes, ToBytesError>(
             &'a mut self,
             _id: Uuid,
-            _evts: &'a E,
+            _evt: &'a E,
+            _tag: Option<String>,
             _last_seq_no: u64,
             _to_bytes: &'a ToBytes,
         ) -> Result<Metadata, Self::Error>
@@ -423,6 +424,20 @@ mod tests {
                 }
             };
             Ok(evts)
+        }
+
+        async fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+            &'a self,
+            _tag: String,
+            _from_offset: u64,
+            _evt_from_bytes: EvtFromBytes,
+        ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>
+        where
+            E: Send + 'a,
+            EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+            EvtFromBytesError: StdError + Send + Sync + 'static,
+        {
+            Ok(stream::empty())
         }
     }
 
