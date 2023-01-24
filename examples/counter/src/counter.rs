@@ -1,5 +1,5 @@
 use anyhow::Result;
-use eventsourced::EventSourced;
+use eventsourced::{EventSourced, TaggedEvt};
 use thiserror::Error;
 use tracing::debug;
 
@@ -44,7 +44,7 @@ impl EventSourced for Counter {
     type Error = Error;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<(Self::Evt, Option<String>), Self::Error> {
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error> {
         match cmd {
             Cmd::Inc(inc) => {
                 // Validate command: overflow.
@@ -56,15 +56,13 @@ impl EventSourced for Counter {
                 }
                 // Valid Inc command results in Increased event.
                 else {
-                    Ok((
-                        Evt {
-                            evt: Some(evt::Evt::Increased(Increased {
-                                old_value: self.value,
-                                inc,
-                            })),
-                        },
-                        None,
-                    ))
+                    Ok(Evt {
+                        evt: Some(evt::Evt::Increased(Increased {
+                            old_value: self.value,
+                            inc,
+                        })),
+                    }
+                    .into())
                 }
             }
             Cmd::Dec(dec) => {
@@ -77,15 +75,13 @@ impl EventSourced for Counter {
                 }
                 // Valid Dec command results in Decreased event.
                 else {
-                    Ok((
-                        Evt {
-                            evt: Some(evt::Evt::Decreased(Decreased {
-                                old_value: self.value,
-                                dec,
-                            })),
-                        },
-                        None,
-                    ))
+                    Ok(Evt {
+                        evt: Some(evt::Evt::Decreased(Decreased {
+                            old_value: self.value,
+                            dec,
+                        })),
+                    }
+                    .into())
                 }
             }
         }
