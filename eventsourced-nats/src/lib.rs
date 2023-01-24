@@ -12,7 +12,6 @@ mod snapshot_store;
 pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
 pub use snapshot_store::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore};
 
-use async_nats::jetstream;
 use prost::{DecodeError, EncodeError};
 use std::error::Error as StdError;
 use thiserror::Error;
@@ -91,20 +90,4 @@ pub enum Error {
     /// A snapshot cannot be loaded from a NATS KV bucket.
     #[error("Cannot load snapshot from NATS KV bucket")]
     LoadSnapshot(#[source] async_nats::Error),
-
-    /// A Jetstream request cannot be sent/received.
-    #[error("Cannot send or receive Jetstream request")]
-    JetstreamRequest(#[source] async_nats::Error),
-
-    /// A Jetstream request resulted in an error.
-    #[error("Jetstream request resulted in error")]
-    JetstreamResponse(#[source] jetstream::response::Error),
-
-    /// Expected evts. prefix.
-    #[error("Expected evts. prefix")]
-    EvtsPrefixMissing,
-
-    /// Cannot transform subject into UUID.
-    #[error("Cannot transform subject into UUID")]
-    InvalidSubjectName(#[source] uuid::Error),
 }
