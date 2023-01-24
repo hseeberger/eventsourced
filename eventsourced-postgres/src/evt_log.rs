@@ -485,13 +485,25 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         evt_log
-            .persist(id, &1, None, 0, &convert::prost::to_bytes)
+            .persist(
+                id,
+                &1,
+                Some("tag".to_string()),
+                0,
+                &convert::prost::to_bytes,
+            )
             .await?;
         evt_log
             .persist(id, &2, None, 1, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &3, None, 2, &convert::prost::to_bytes)
+            .persist(
+                id,
+                &3,
+                Some("tag".to_string()),
+                2,
+                &convert::prost::to_bytes,
+            )
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
@@ -510,6 +522,15 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
+        let evts_by_tag = evt_log
+            .evts_by_tag::<i32, _, _>("tag".to_string(), 0, convert::prost::from_bytes)
+            .await?;
+        let sum = evts_by_tag
+            .take(2)
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
+            .await?;
+        assert_eq!(sum, 4);
+
         let evts = evt_log
             .evts_by_id::<i32, _, _>(
                 id,
@@ -520,13 +541,23 @@ mod tests {
             )
             .await?;
 
+        let evts_by_tag = evt_log
+            .evts_by_tag::<i32, _, _>("tag".to_string(), 0, convert::prost::from_bytes)
+            .await?;
+
         evt_log
             .clone()
             .persist(id, &4, None, 3, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist(id, &5, None, 4, &convert::prost::to_bytes)
+            .persist(
+                id,
+                &5,
+                Some("tag".to_string()),
+                4,
+                &convert::prost::to_bytes,
+            )
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);
@@ -536,6 +567,12 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
+
+        let sum = evts_by_tag
+            .take(3)
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
+            .await?;
+        assert_eq!(sum, 9);
 
         Ok(())
     }

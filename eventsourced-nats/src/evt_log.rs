@@ -88,7 +88,7 @@ impl EvtLog for NatsEvtLog {
         &'a mut self,
         id: Uuid,
         evt: &'a E,
-        tag: Option<String>,
+        _tag: Option<String>,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
@@ -237,7 +237,7 @@ impl EvtLog for NatsEvtLog {
         &'a self,
         tag: String,
         from_offset: u64,
-        evt_from_bytes: EvtFromBytes,
+        _evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send + '_, Self::Error>
     where
         E: Send + 'a,
@@ -246,6 +246,8 @@ impl EvtLog for NatsEvtLog {
     {
         debug!(tag, from_offset, "Building events by tag stream");
 
+        todo!();
+        #[allow(unreachable_code)]
         Ok(stream::empty())
     }
 }
