@@ -51,6 +51,10 @@ pub enum Error {
     #[error("Cannot get message from NATS message stream")]
     GetMessage(#[source] async_nats::Error),
 
+    /// Cannot get message info.
+    #[error("Cannot get message info")]
+    GetMessageInfo(#[source] async_nats::Error),
+
     /// The last message for a NATS stream cannot be obtained.
     #[error("Cannot get last message for NATS stream")]
     GetLastMessage(#[source] async_nats::Error),

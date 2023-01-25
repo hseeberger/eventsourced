@@ -5,7 +5,7 @@ use async_nats::{
     connect,
     jetstream::{
         self,
-        consumer::{pull, AckPolicy, DeliverPolicy},
+        consumer::{pull, pull::Stream as MsgStream, AckPolicy, DeliverPolicy},
         response::{self},
         stream::Stream as JetstreamStream,
         Context as Jetstream,
@@ -15,7 +15,7 @@ use async_nats::{
 use async_stream::stream;
 use bytes::Bytes;
 use eventsourced::{EvtLog, Metadata};
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
@@ -71,6 +71,26 @@ impl NatsEvtLog {
             .await
             .map_err(Error::GetStream)
     }
+
+    async fn get_msgs(
+        &self,
+        subject: String,
+        deliver_policy: DeliverPolicy,
+    ) -> Result<MsgStream, Error> {
+        self.get_stream()
+            .await?
+            .create_consumer(pull::Config {
+                filter_subject: subject,
+                ack_policy: AckPolicy::None, // Important!
+                deliver_policy,
+                ..Default::default()
+            })
+            .await
+            .map_err(Error::CreateConsumer)?
+            .messages()
+            .await
+            .map_err(Error::GetMessages)
+    }
 }
 
 impl Debug for NatsEvtLog {
@@ -88,7 +108,7 @@ impl EvtLog for NatsEvtLog {
         &'a mut self,
         id: Uuid,
         evt: &'a E,
-        _tag: Option<String>,
+        tag: Option<String>,
         last_seq_no: u64,
         evt_to_bytes: &'a EvtToBytes,
     ) -> Result<Metadata, Self::Error>
@@ -101,7 +121,10 @@ impl EvtLog for NatsEvtLog {
         let bytes = evt_to_bytes(evt).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
 
         // Publish event to NATS subject and await ACK.
-        let subject = format!("{}.{id}", self.stream_name);
+        let subject = match tag {
+            Some(tag) => format!("{}.{id}.{tag}", self.stream_name),
+            None => format!("{}.{id}", self.stream_name),
+        };
         let mut headers = HeaderMap::new();
         headers.insert(SEQ_NO, (last_seq_no + 1).to_string().as_ref());
         let ack = self
@@ -118,8 +141,8 @@ impl EvtLog for NatsEvtLog {
 
     async fn last_seq_no(&self, id: Uuid) -> Result<u64, Self::Error> {
         let subject = format!("{}.{id}", self.stream_name);
-        let stream = self.get_stream().await?;
-        stream
+        self.get_stream()
+            .await?
             .get_last_raw_message_by_subject(&subject)
             .await
             .map_or_else(
@@ -133,7 +156,7 @@ impl EvtLog for NatsEvtLog {
                         .downcast::<response::Error>()
                         .expect("Cannot convert to async_nats response error");
                     if source.code == 10037 {
-                        debug!(%id, "No last msg found");
+                        debug!(%id, "No last message found");
                         Ok(0)
                     } else {
                         Err(Error::GetLastMessage(Box::new(source)))
@@ -144,7 +167,7 @@ impl EvtLog for NatsEvtLog {
                         .map_err(Error::FromRawMessage)
                         .map(|msg| {
                             let seq_no = seq_no(&msg);
-                            debug!(%id, seq_no, "Last msg found");
+                            debug!(%id, seq_no, "Last message found");
                             seq_no
                         })
                 },
@@ -171,29 +194,16 @@ impl EvtLog for NatsEvtLog {
 
         debug!(%id, from_seq_no, to_seq_no, "Building events by ID stream");
 
-        // Get message stream
+        // Get message stream.
+        let subject = format!("{}.{id}", self.stream_name);
         let deliver_policy =
             match metadata.and_then(|metadata| metadata.downcast_ref::<u64>().copied()) {
                 Some(start_sequence) => DeliverPolicy::ByStartSequence { start_sequence },
                 None => DeliverPolicy::All,
             };
-        let subject = format!("{}.{id}", self.stream_name);
-        let msgs = self
-            .get_stream()
-            .await?
-            .create_consumer(pull::Config {
-                filter_subject: subject,
-                ack_policy: AckPolicy::None, // Important!
-                deliver_policy,
-                ..Default::default()
-            })
-            .await
-            .map_err(Error::CreateConsumer)?
-            .messages()
-            .await
-            .map_err(Error::GetMessages)?;
+        let msgs = self.get_msgs(subject, deliver_policy).await?;
 
-        // Transform message stream into event stream
+        // Transform message stream into event stream.
         let evts = msgs.filter_map(move |msg| {
             ready(
                 msg.map_err(|source| Error::GetMessage(source))
@@ -237,7 +247,7 @@ impl EvtLog for NatsEvtLog {
         &'a self,
         tag: String,
         from_offset: u64,
-        _evt_from_bytes: EvtFromBytes,
+        evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send + '_, Self::Error>
     where
         E: Send + 'a,
@@ -246,9 +256,45 @@ impl EvtLog for NatsEvtLog {
     {
         debug!(tag, from_offset, "Building events by tag stream");
 
-        todo!();
-        #[allow(unreachable_code)]
-        Ok(stream::empty())
+        // Get message stream.
+        let subject = format!("{}.*.{tag}", self.stream_name);
+        let deliver_policy = DeliverPolicy::ByStartSequence {
+            start_sequence: from_offset,
+        };
+        let msgs = self.get_msgs(subject, deliver_policy).await?;
+
+        // Transform message stream into event stream.
+        let evts = msgs.filter_map(move |msg| {
+            ready(
+                msg.map_err(|source| Error::GetMessage(source))
+                    .and_then(|msg| {
+                        let offset = msg
+                            .info()
+                            .map_err(|source| Error::GetMessageInfo(source))
+                            .map(|info| info.stream_sequence)?;
+                        if from_offset <= offset {
+                            evt_from_bytes(msg.message.payload)
+                                .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                                .map(|evt| Some((offset, evt)))
+                        } else {
+                            Ok(None)
+                        }
+                    })
+                    .transpose(),
+            )
+        });
+
+        let evts = stream! {
+            for await evt in evts {
+                let is_err = evt.is_err();
+                yield evt;
+                if is_err {
+                    break;
+                }
+            }
+        };
+
+        Ok(evts)
     }
 }
 
@@ -343,8 +389,9 @@ mod tests {
     use super::*;
     use eventsourced::convert;
     use futures::TryStreamExt;
-    use std::future;
+    use std::{future, time::Duration};
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
@@ -367,13 +414,25 @@ mod tests {
         assert_eq!(last_seq_no, 0);
 
         evt_log
-            .persist(id, &1, None, 0, &convert::prost::to_bytes)
+            .persist(
+                id,
+                &1,
+                Some("tag".to_string()),
+                0,
+                &convert::prost::to_bytes,
+            )
             .await?;
         evt_log
             .persist(id, &2, None, 1, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &3, None, 2, &convert::prost::to_bytes)
+            .persist(
+                id,
+                &3,
+                Some("tag".to_string()),
+                2,
+                &convert::prost::to_bytes,
+            )
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 3);
@@ -392,6 +451,15 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
+        let evts_by_tag = evt_log
+            .evts_by_tag::<i32, _, _>("tag".to_string(), 1, convert::prost::from_bytes)
+            .await?;
+        let sum = evts_by_tag
+            .take(2)
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
+            .await?;
+        assert_eq!(sum, 4);
+
         let evts = evt_log
             .evts_by_id::<i32, _, _>(
                 id,
@@ -402,13 +470,23 @@ mod tests {
             )
             .await?;
 
+        let evts_by_tag = evt_log
+            .evts_by_tag::<i32, _, _>("tag".to_string(), 1, convert::prost::from_bytes)
+            .await?;
+
         evt_log
             .clone()
             .persist(id, &4, None, 3, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist(id, &5, None, 4, &convert::prost::to_bytes)
+            .persist(
+                id,
+                &5,
+                Some("tag".to_string()),
+                4,
+                &convert::prost::to_bytes,
+            )
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, 5);
@@ -418,6 +496,12 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
+
+        let sum = evts_by_tag
+            .take(3)
+            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
+            .await?;
+        assert_eq!(sum, 9);
 
         Ok(())
     }
