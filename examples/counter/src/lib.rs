@@ -1,3 +1,6 @@
+#![allow(incomplete_features)]
+#![feature(return_position_impl_trait_in_trait)]
+
 pub mod counter;
 
 use crate::counter::{Cmd, Counter};

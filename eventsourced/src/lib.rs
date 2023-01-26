@@ -45,7 +45,7 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     type Error: StdError + Send + Sync + 'static;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error>;
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State>;
@@ -62,10 +62,28 @@ pub struct TaggedEvt<E> {
     tag: Option<String>,
 }
 
-impl<E> From<E> for TaggedEvt<E> {
-    /// Create a [TaggedEvt] without tag.
-    fn from(evt: E) -> Self {
-        Self { evt, tag: None }
+pub trait IntoTaggedEvt<E>: Send {
+    fn into_tagged_evt(self) -> TaggedEvt<E>;
+}
+
+impl<E> IntoTaggedEvt<E> for TaggedEvt<E>
+where
+    E: Send,
+{
+    fn into_tagged_evt(self) -> TaggedEvt<E> {
+        self
+    }
+}
+
+impl<E> IntoTaggedEvt<E> for E
+where
+    E: Send,
+{
+    fn into_tagged_evt(self) -> TaggedEvt<E> {
+        TaggedEvt {
+            evt: self,
+            tag: None,
+        }
     }
 }
 
@@ -365,7 +383,8 @@ where
     async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
         // Handle command.
         match self.event_sourced.handle_cmd(cmd) {
-            Ok(TaggedEvt { evt, tag }) => {
+            Ok(tagged_evt) => {
+                let TaggedEvt { evt, tag } = tagged_evt.into_tagged_evt();
                 // Persist event.
                 let seq_no = self
                     .evt_log
@@ -412,8 +431,11 @@ mod tests {
 
         type Error = Infallible;
 
-        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error> {
-            Ok(((1 << 32) + self.0).into())
+        fn handle_cmd(
+            &self,
+            _cmd: Self::Cmd,
+        ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+            Ok(((1 << 32) + self.0).with_tag("tag"))
         }
 
         fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State> {

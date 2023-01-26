@@ -5,4 +5,4 @@ CREATE TABLE IF NOT EXISTS evts (
   tag text,
   PRIMARY KEY (seq_no, id)
 );
-CREATE INDEX evts_tag ON evts(tag);
+CREATE INDEX IF NOT EXISTS evts_tag ON evts(tag);
