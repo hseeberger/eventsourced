@@ -45,7 +45,7 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     type Error: StdError + Send + Sync + 'static;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error>;
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State>;
@@ -54,22 +54,35 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     fn set_state(&mut self, state: Self::State);
 }
 
-/// An event and an optional tag. Either call `into` on an event to create a [TaggedEvt] without tag
-/// or call `with_tag` to create one with a tag.
-#[derive(Debug, Clone)]
-pub struct TaggedEvt<E> {
-    evt: E,
-    tag: Option<String>,
+/// Used in an [EventSourced] command handler as impl trait in return position. Together with its
+/// blanked implementation for any event allows for returning plain events without boilerplate.
+pub trait IntoTaggedEvt<E>: Send {
+    fn into_tagged_evt(self) -> TaggedEvt<E>;
 }
 
-impl<E> From<E> for TaggedEvt<E> {
-    /// Create a [TaggedEvt] without tag.
-    fn from(evt: E) -> Self {
-        Self { evt, tag: None }
+impl<E> IntoTaggedEvt<E> for TaggedEvt<E>
+where
+    E: Send,
+{
+    fn into_tagged_evt(self) -> TaggedEvt<E> {
+        self
     }
 }
 
-/// Extension methods for events.
+impl<E> IntoTaggedEvt<E> for E
+where
+    E: Send,
+{
+    fn into_tagged_evt(self) -> TaggedEvt<E> {
+        TaggedEvt {
+            evt: self,
+            tag: None,
+        }
+    }
+}
+
+/// Provide `with_tag` extension method for events. Together with its blanket implementation for any
+/// event allows for calling `with_tag` on any event.
 pub trait EvtExt: Sized {
     /// Create a [TaggedEvt] with the given tag.
     fn with_tag<T>(self, tag: T) -> TaggedEvt<Self>
@@ -87,6 +100,13 @@ impl<E> EvtExt for E {
             tag: Some(tag.into()),
         }
     }
+}
+
+/// An event and an optional tag. Typically not used direcly, but via [IntoTaggedEvt] or [EvtExt].
+#[derive(Debug, Clone)]
+pub struct TaggedEvt<E> {
+    evt: E,
+    tag: Option<String>,
 }
 
 /// Extension methods for types implementing [EventSourced].
@@ -365,7 +385,8 @@ where
     async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
         // Handle command.
         match self.event_sourced.handle_cmd(cmd) {
-            Ok(TaggedEvt { evt, tag }) => {
+            Ok(tagged_evt) => {
+                let TaggedEvt { evt, tag } = tagged_evt.into_tagged_evt();
                 // Persist event.
                 let seq_no = self
                     .evt_log
@@ -412,8 +433,11 @@ mod tests {
 
         type Error = Infallible;
 
-        fn handle_cmd(&self, _cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error> {
-            Ok(((1 << 32) + self.0).into())
+        fn handle_cmd(
+            &self,
+            _cmd: Self::Cmd,
+        ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+            Ok(((1 << 32) + self.0).with_tag("tag"))
         }
 
         fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State> {

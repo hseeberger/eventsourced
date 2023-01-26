@@ -1,5 +1,5 @@
 use anyhow::Result;
-use eventsourced::{EventSourced, TaggedEvt};
+use eventsourced::{EventSourced, IntoTaggedEvt};
 use thiserror::Error;
 use tracing::debug;
 
@@ -45,7 +45,7 @@ impl EventSourced for Counter {
     type Error = Error;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<TaggedEvt<Self::Evt>, Self::Error> {
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
         match cmd {
             Cmd::Inc(inc) => {
                 // Validate command: overflow.
@@ -62,8 +62,7 @@ impl EventSourced for Counter {
                             old_value: self.value,
                             inc,
                         })),
-                    }
-                    .into())
+                    })
                 }
             }
             Cmd::Dec(dec) => {
@@ -81,8 +80,7 @@ impl EventSourced for Counter {
                             old_value: self.value,
                             dec,
                         })),
-                    }
-                    .into())
+                    })
                 }
             }
         }
