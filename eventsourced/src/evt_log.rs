@@ -1,6 +1,6 @@
 //! Persistence for events.
 
-use crate::Metadata;
+use crate::SeqNo;
 use bytes::Bytes;
 use futures::Stream;
 use std::{error::Error as StdError, fmt::Debug, future::Future, num::NonZeroU64};
@@ -12,41 +12,54 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
 
     /// The maximum value for sequence numbers. Defaults to `u64::MAX` unless overriden by an
     /// implementation.
-    const MAX_SEQ_NO: u64 = u64::MAX;
+    const MAX_SEQ_NO: SeqNo = SeqNo::new(NonZeroU64::MAX);
 
-    /// Persist the given event for the given entity ID and the given last sequence number.
-    ///
-    /// # Panics
-    /// - Panics if `last_seq_no` is less or equal [MAX_SEQ_NO] - `evts.len()`.
+    /// Persist the given event and optional tag for the given entity ID and returns the sequence
+    /// number for the persisted event.
     fn persist<'a, E, EvtToBytes, EvtToBytesError>(
         &'a mut self,
         id: Uuid,
         evt: &'a E,
-        last_seq_no: u64,
+        tag: Option<String>,
         evt_to_bytes: &'a EvtToBytes,
-    ) -> impl Future<Output = Result<Metadata, Self::Error>> + Send
+    ) -> impl Future<Output = Result<SeqNo, Self::Error>> + Send
     where
         E: Debug + Send + Sync + 'a,
         EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
         EvtToBytesError: StdError + Send + Sync + 'static;
 
     /// Get the last sequence number for the given entity ID.
-    fn last_seq_no(&self, id: Uuid) -> impl Future<Output = Result<u64, Self::Error>> + Send + '_;
+    fn last_seq_no(
+        &self,
+        id: Uuid,
+    ) -> impl Future<Output = Result<Option<SeqNo>, Self::Error>> + Send + '_;
 
-    /// Get the events for the given ID in the given closed range of sequence numbers.
+    /// Get the events for the given entity ID in the given closed range of sequence numbers.
     ///
     /// # Panics
     /// - Panics if `from_seq_no` is not less than or equal to `to_seq_no`.
-    /// - Panics if `to_seq_no` is not less or equal [MAX_SEQ_NO].
+    /// - Panics if `to_seq_no` is not less than or equal to [MAX_SEQ_NO].
     fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
         &'a self,
         id: Uuid,
-        from_seq_no: NonZeroU64,
-        to_seq_no: u64,
-        metadata: Metadata,
+        from_seq_no: SeqNo,
+        to_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> impl Future<
-        Output = Result<impl Stream<Item = Result<(u64, E), Self::Error>> + Send, Self::Error>,
+        Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>,
+    > + Send
+    where
+        E: Debug + Send + 'a,
+        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
+        EvtFromBytesError: StdError + Send + Sync + 'static;
+
+    fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+        &'a self,
+        tag: String,
+        from_seq_no: SeqNo,
+        evt_from_bytes: EvtFromBytes,
+    ) -> impl Future<
+        Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>,
     > + Send
     where
         E: Debug + Send + 'a,
