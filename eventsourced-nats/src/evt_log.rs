@@ -219,9 +219,9 @@ impl EvtLog for NatsEvtLog {
         Ok(evts)
     }
 
-    async fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+    async fn evts_by_tag<'a, E, T, EvtFromBytes, EvtFromBytesError>(
         &'a self,
-        tag: String,
+        tag: T,
         from_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send + '_, Self::Error>
@@ -229,7 +229,10 @@ impl EvtLog for NatsEvtLog {
         E: Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
+        T: Into<String> + Send,
     {
+        let tag = tag.into();
+
         debug!(tag, %from_seq_no, "Building events by tag stream");
 
         // Get message stream.
@@ -239,26 +242,6 @@ impl EvtLog for NatsEvtLog {
         };
         let msgs = self.get_msgs(subject, deliver_policy).await?;
 
-        // // Transform message stream into event stream.
-        // let evts = msgs.filter_map(move |msg| {
-        //     ready(
-        //         msg.map_err(|source| Error::GetMessage(source))
-        //             .and_then(|msg| {
-        //                 let seq_no: SeqNo = msg
-        //                     .info()
-        //                     .map_err(|source| Error::GetMessageInfo(source))
-        //                     .map(|info| info.stream_sequence.into())?;
-        //                 if from_seq_no <= seq_no {
-        //                     evt_from_bytes(msg.message.payload)
-        //                         .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
-        //                         .map(|evt| Some((seq_no, evt)))
-        //                 } else {
-        //                     Ok(None)
-        //                 }
-        //             })
-        //             .transpose(),
-        //     )
-        // });
         // Transform message stream into event stream.
         let evts = msgs.map(move |msg| {
             let msg = msg.map_err(|source| Error::GetMessage(source))?;
@@ -408,7 +391,7 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _, _>("tag", SeqNo::MIN, convert::prost::from_bytes)
             .await?;
         let sum = evts_by_tag
             .take(2)
@@ -426,7 +409,7 @@ mod tests {
             .await?;
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _, _>("tag", SeqNo::MIN, convert::prost::from_bytes)
             .await?;
 
         evt_log

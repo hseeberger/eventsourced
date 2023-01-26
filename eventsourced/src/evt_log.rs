@@ -53,9 +53,9 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static;
 
-    fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+    fn evts_by_tag<'a, E, T, EvtFromBytes, EvtFromBytesError>(
         &'a self,
-        tag: String,
+        tag: T,
         from_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> impl Future<
@@ -64,5 +64,6 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
     where
         E: Debug + Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: StdError + Send + Sync + 'static;
+        EvtFromBytesError: StdError + Send + Sync + 'static,
+        T: Into<String> + Send;
 }
