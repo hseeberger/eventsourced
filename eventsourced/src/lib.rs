@@ -504,9 +504,9 @@ mod tests {
             Ok(evts)
         }
 
-        async fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+        async fn evts_by_tag<'a, E, T, EvtFromBytes, EvtFromBytesError>(
             &'a self,
-            _tag: String,
+            _tag: T,
             _from_seq_no: SeqNo,
             _evt_from_bytes: EvtFromBytes,
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
@@ -514,6 +514,7 @@ mod tests {
             E: Send + 'a,
             EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
             EvtFromBytesError: StdError + Send + Sync + 'static,
+            T: Into<String> + Send,
         {
             Ok(stream::empty())
         }

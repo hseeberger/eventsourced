@@ -268,9 +268,9 @@ impl EvtLog for PostgresEvtLog {
         Ok(evts)
     }
 
-    async fn evts_by_tag<'a, E, EvtFromBytes, EvtFromBytesError>(
+    async fn evts_by_tag<'a, E, T, EvtFromBytes, EvtFromBytesError>(
         &'a self,
-        tag: String,
+        tag: T,
         from_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send + '_, Self::Error>
@@ -278,12 +278,15 @@ impl EvtLog for PostgresEvtLog {
         E: Send + 'a,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
+        T: Into<String> + Send,
     {
         assert!(
             from_seq_no <= Self::MAX_SEQ_NO,
             "from_seq_no must be less or equal {}",
             Self::MAX_SEQ_NO
         );
+
+        let tag = tag.into();
 
         debug!(tag, %from_seq_no, "Building events by tag stream");
 
@@ -515,7 +518,7 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _, _>("tag", SeqNo::MIN, convert::prost::from_bytes)
             .await?;
         let sum = evts_by_tag
             .take(2)
@@ -533,7 +536,7 @@ mod tests {
             .await?;
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _, _>("tag", SeqNo::MIN, convert::prost::from_bytes)
             .await?;
 
         evt_log
