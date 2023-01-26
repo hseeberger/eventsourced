@@ -1,1 +1,3 @@
-pre-release-hook = [ "../cargo-semver-checks.sh" ]
+pre-release-hook           = [ "../cargo-semver-checks.sh" ]
+pre-release-commit-message = "release: {{crate_name}}"
+tag-message                = "release[{{crate_name}}]: {{version}}"
