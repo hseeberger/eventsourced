@@ -139,7 +139,7 @@ pub trait EventSourcedExt {
     >(
         mut self,
         id: Uuid,
-        buffer: NonZeroUsize,
+        cmd_buffer: NonZeroUsize,
         evt_log: L,
         snapshot_store: S,
         binarizer: Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes>,
@@ -175,24 +175,23 @@ pub trait EventSourcedExt {
                 debug!(%id, %seq_no, "Restoring snapshot");
                 self.set_state(state);
                 seq_no
-            })
-            .unwrap_or(SeqNo::MIN);
+            });
 
         // Replay latest events.
         let last_seq_no = evt_log
             .last_seq_no(id)
             .await
-            .map_err(|source| SpawnError::LastSeqNo(source.into()))?
-            .unwrap_or(SeqNo::MIN);
+            .map_err(|source| SpawnError::LastSeqNo(source.into()))?;
         assert!(
             snapshot_seq_no <= last_seq_no,
             "snapshot_seq_no must be less than or equal to last_seq_no"
         );
         if snapshot_seq_no < last_seq_no {
-            let from_seq_no = snapshot_seq_no;
-            debug!(%id, %from_seq_no, %last_seq_no , "Replaying evts");
+            let from_seq_no = snapshot_seq_no.unwrap_or(SeqNo::MIN);
+            let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
+            debug!(%id, %from_seq_no, %to_seq_no , "Replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, last_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, to_seq_no, evt_from_bytes)
                 .await
                 .map_err(|source| SpawnError::EvtsById(source.into()))?;
             pin!(evts);
@@ -213,8 +212,10 @@ pub trait EventSourcedExt {
         };
         debug!(%id, "EventSourced entity created");
 
-        let (cmd_in, mut cmd_out) =
-            mpsc::channel::<(Self::Cmd, oneshot::Sender<Result<(), Self::Error>>)>(buffer.get());
+        let (cmd_in, mut cmd_out) = mpsc::channel::<(
+            Self::Cmd,
+            oneshot::Sender<Result<(), Self::Error>>,
+        )>(cmd_buffer.get());
 
         // Spawn handler loop.
         task::spawn(async move {
