@@ -22,6 +22,7 @@ use std::{
     fmt::{self, Debug, Formatter},
     io,
     num::NonZeroUsize,
+    time::Duration,
 };
 
 use tracing::debug;
@@ -78,6 +79,7 @@ impl NatsEvtLog {
             .create_consumer(pull::Config {
                 filter_subject: subject,
                 ack_policy: AckPolicy::None, // Important!
+                inactive_threshold: Duration::from_secs(60),
                 deliver_policy,
                 ..Default::default()
             })
