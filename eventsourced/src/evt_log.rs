@@ -35,15 +35,10 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<SeqNo>, Self::Error>> + Send + '_;
 
     /// Get the events for the given entity ID in the given closed range of sequence numbers.
-    ///
-    /// # Panics
-    /// - Panics if `from_seq_no` is not less than or equal to `to_seq_no`.
-    /// - Panics if `to_seq_no` is not less than or equal to [MAX_SEQ_NO].
     fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
         &'a self,
         id: Uuid,
         from_seq_no: SeqNo,
-        to_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> impl Future<
         Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>,

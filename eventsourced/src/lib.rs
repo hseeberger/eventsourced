@@ -191,13 +191,16 @@ pub trait EventSourcedExt {
             let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
             debug!(%id, %from_seq_no, %to_seq_no , "Replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, to_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|source| SpawnError::EvtsById(source.into()))?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
-                let (_, evt) = evt.map_err(|source| SpawnError::NextEvt(source.into()))?;
+                let (seq_no, evt) = evt.map_err(|source| SpawnError::NextEvt(source.into()))?;
                 self.handle_evt(evt);
+                if seq_no == to_seq_no {
+                    break;
+                }
             }
         }
 
@@ -480,7 +483,6 @@ mod tests {
             &'a self,
             _id: Uuid,
             from_seq_no: SeqNo,
-            to_seq_no: SeqNo,
             evt_from_bytes: EvtFromBytes,
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
@@ -492,7 +494,7 @@ mod tests {
                 for n in 0..666 {
                     for evt in 1..=3 {
                         let seq_no = (n * 3 + evt).try_into().unwrap();
-                        if from_seq_no <= seq_no && seq_no <= to_seq_no {
+                        if from_seq_no <= seq_no  {
                             let mut bytes = BytesMut::new();
                             evt.encode(&mut bytes).map_err(|source| TestEvtLogError(source.into()))?;
                             let evt = evt_from_bytes(bytes.into()).map_err(|source| TestEvtLogError(source.into()))?;

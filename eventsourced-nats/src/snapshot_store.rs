@@ -202,13 +202,14 @@ mod proto {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::NATS_VERSION;
     use eventsourced::convert;
     use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
-        let nats_image = GenericImage::new("nats", "2.9.9")
+        let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
