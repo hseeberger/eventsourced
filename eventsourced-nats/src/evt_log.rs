@@ -7,7 +7,7 @@ use async_nats::{
         self,
         consumer::{pull, pull::Stream as MsgStream, AckPolicy, DeliverPolicy},
         context::Publish,
-        response::{self},
+        response,
         stream::Stream as JetstreamStream,
         Context as Jetstream,
     },
@@ -21,6 +21,7 @@ use std::{
     fmt::{self, Debug, Formatter},
     io,
     num::NonZeroUsize,
+    time::Duration,
 };
 
 use tracing::debug;
@@ -82,6 +83,8 @@ impl NatsEvtLog {
             })
             .await
             .map_err(Error::CreateConsumer)?
+            .stream()
+            .heartbeat(Duration::ZERO) // Important!
             .messages()
             .await
             .map_err(Error::GetMessages)
