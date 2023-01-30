@@ -100,3 +100,8 @@ pub enum Error {
     #[error("Invalid sequence number")]
     InvalidSeqNo(#[source] TrySeqNoFromZero),
 }
+
+#[cfg(test)]
+pub mod tests {
+    pub const NATS_VERSION: &str = "2.9.11";
+}

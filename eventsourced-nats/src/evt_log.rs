@@ -12,7 +12,6 @@ use async_nats::{
         Context as Jetstream,
     },
 };
-use async_stream::stream;
 use bytes::Bytes;
 use eventsourced::{EvtLog, SeqNo};
 use futures::{Stream, StreamExt};
@@ -161,7 +160,6 @@ impl EvtLog for NatsEvtLog {
         &'a self,
         id: Uuid,
         from_seq_no: SeqNo,
-        to_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
     where
@@ -169,12 +167,7 @@ impl EvtLog for NatsEvtLog {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
-        assert!(
-            from_seq_no <= to_seq_no,
-            "from_seq_no must be less than or equal to to_seq_no"
-        );
-
-        debug!(%id, %from_seq_no, %to_seq_no, "Building events by ID stream");
+        debug!(%id, %from_seq_no, "Building events by ID stream");
 
         // Get message stream.
         let subject = format!("{}.{id}.*", self.stream_name);
@@ -194,27 +187,6 @@ impl EvtLog for NatsEvtLog {
                 .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
                 .map(|evt| (seq_no, evt))
         });
-
-        // Respect sequence number range, in particular stop at `to_seq_no`.
-        let evts = stream! {
-            for await evt in evts {
-                match evt {
-                    Ok(evt @ (n, _)) if n < to_seq_no => yield Ok(evt),
-
-                    Ok(evt @ (n, _)) if n == to_seq_no => {
-                        yield Ok(evt);
-                        break;
-                    }
-
-                    Ok(_) => break, // seq_no > to_seq_no
-
-                    Err(error) => {
-                        yield Err(error);
-                        break;
-                    },
-                }
-            }
-        };
 
         Ok(evts)
     }
@@ -253,21 +225,6 @@ impl EvtLog for NatsEvtLog {
                 .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
                 .map(|evt| (seq_no, evt))
         });
-
-        let evts = stream! {
-            for await evt in evts {
-                match evt {
-                    Ok(evt) => {
-                        yield Ok(evt);
-                    }
-
-                    Err(error) => {
-                        yield Err(error);
-                        break;
-                    },
-                }
-            }
-        };
 
         Ok(evts)
     }
@@ -340,6 +297,7 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
 #[cfg(all(test))]
 mod tests {
     use super::*;
+    use crate::tests::NATS_VERSION;
     use eventsourced::convert;
     use futures::TryStreamExt;
     use std::future;
@@ -348,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
-        let nats_image = GenericImage::new("nats", "2.9.9")
+        let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
@@ -378,14 +336,10 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into().unwrap()));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(
-                id,
-                2.try_into().unwrap(),
-                3.try_into().unwrap(),
-                convert::prost::from_bytes,
-            )
+            .evts_by_id::<i32, _, _>(id, 2.try_into().unwrap(), convert::prost::from_bytes)
             .await?;
         let sum = evts
+            .take(2)
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 5);
@@ -400,12 +354,7 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(
-                id,
-                1.try_into().unwrap(),
-                NatsEvtLog::MAX_SEQ_NO,
-                convert::prost::from_bytes,
-            )
+            .evts_by_id::<i32, _, _>(id, 1.try_into().unwrap(), convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log

@@ -66,7 +66,6 @@ impl PostgresEvtLog {
         &self,
         id: Uuid,
         from_seq_no: SeqNo,
-        to_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
     where
@@ -74,18 +73,14 @@ impl PostgresEvtLog {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, %from_seq_no, %to_seq_no, "Querying events");
+        debug!(%id, %from_seq_no, "Querying events");
 
-        let params: [&(dyn ToSql + Sync); 3] = [
-            &id,
-            &(from_seq_no.as_u64() as i64),
-            &(to_seq_no.as_u64() as i64),
-        ];
+        let params: [&(dyn ToSql + Sync); 2] = [&id, &(from_seq_no.as_u64() as i64)];
         let evts = self
             .cnn()
             .await?
             .query_raw(
-                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2 AND seq_no <= $3",
+                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2",
                 params,
             )
             .await
@@ -211,7 +206,6 @@ impl EvtLog for PostgresEvtLog {
         &'a self,
         id: Uuid,
         from_seq_no: SeqNo,
-        to_seq_no: SeqNo,
         evt_from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send + '_, Self::Error>
     where
@@ -219,17 +213,7 @@ impl EvtLog for PostgresEvtLog {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
-        assert!(
-            to_seq_no <= Self::MAX_SEQ_NO,
-            "to_seq_no must be less or equal {}",
-            Self::MAX_SEQ_NO
-        );
-        assert!(
-            from_seq_no <= to_seq_no,
-            "from_seq_no must be less than or equal to to_seq_no"
-        );
-
-        debug!(%id, %from_seq_no, %to_seq_no, "Building events by ID stream");
+        debug!(%id, %from_seq_no, "Building events by ID stream");
 
         let last_seq_no = self.last_seq_no(id).await?;
 
@@ -237,7 +221,7 @@ impl EvtLog for PostgresEvtLog {
         let evts = stream! {
             'outer: loop {
                 let evts = self
-                    .next_evts_by_id(id, current_from_seq_no, to_seq_no, evt_from_bytes)
+                    .next_evts_by_id(id, current_from_seq_no, evt_from_bytes)
                     .await?;
 
                 for await evt in evts {
@@ -254,12 +238,8 @@ impl EvtLog for PostgresEvtLog {
                     }
                 }
 
-                if current_from_seq_no > to_seq_no {
-                    break;
-                }
-
                 // Only sleep if requesting future events.
-                if (last_seq_no < Some(to_seq_no)) {
+                if (Some(current_from_seq_no) >= last_seq_no) {
                     sleep(self.poll_interval).await;
                 }
             }
@@ -505,14 +485,10 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into().unwrap()));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(
-                id,
-                2.try_into().unwrap(),
-                3.try_into().unwrap(),
-                convert::prost::from_bytes,
-            )
+            .evts_by_id::<i32, _, _>(id, 2.try_into().unwrap(), convert::prost::from_bytes)
             .await?;
         let sum = evts
+            .take(2)
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 5);
@@ -527,12 +503,7 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(
-                id,
-                1.try_into().unwrap(),
-                PostgresEvtLog::MAX_SEQ_NO,
-                convert::prost::from_bytes,
-            )
+            .evts_by_id::<i32, _, _>(id, 1.try_into().unwrap(), convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log
