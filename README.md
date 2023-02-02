@@ -16,18 +16,137 @@ Event sourced entities in [Rust](https://www.rust-lang.org/).
 ## Crates
 
 - `eventsourced`: core library with `EventSourced`, `Entity`, `EvtLog`, `SnapshotStore`, etc.
-- `eventsourced-nats`: [NATS](https://nats.io/) implementation for eventsourced `EvtLog` and `SnapshotStore`
-- `eventsourced-postgres`: [Postgres](https://www.postgresql.org/) implementation for eventsourced`EvtLog` and `SnapshotStore`
+- `eventsourced-nats`: [NATS](https://nats.io/) implementation for `EvtLog` and `SnapshotStore`
+- `eventsourced-postgres`: [Postgres](https://www.postgresql.org/) implementation for `EvtLog` and `SnapshotStore`
 
 ## Concepts
 
-EventSourced is inspired to a large degree by the excellent [Akka Persistence](https://doc.akka.io/docs/akka/current/typed/index-persistence.html) library.
+EventSourced is inspired to a large degree by the amazing [Akka Persistence](https://doc.akka.io/docs/akka/current/typed/index-persistence.html) library.
 
-The `EventSourced` trait defines types for commands, events, snapshot state and errors as well as functions for command handling, event handling and setting a snapshot state.
+The `EventSourced` trait defines types for commands, events, snapshot state and errors as well as methods for command handling, event handling and setting a snapshot state.
 
-The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a pluggable snapshot store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/) these are already provided.
+The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a pluggable snapshot store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/) these are implemented in the respective crates.
 
-The `Entity` struct and its associated `spawn` fuction provide for creating "running" instances of an `EventSourced` implementation, identifiable by a `Uuid`, for some event log and some snapshot store. Conversion of events and snapshot state to and from bytes happens via functions; for [prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json) these are already provided.
+The `spawn` extension method provides for creating "running" instances of an `EventSourced` implementation, identifiable by a `Uuid`, for some event log and some snapshot store. Conversion of events and snapshot state to and from bytes happens via given "binarizer" functions; for [prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json) these are already provided.
+
+## Example
+
+The following simple counter (no pun intended) example shows how to implement `EventSourced`:
+
+```rust
+#[derive(Debug, Default)]
+pub struct Counter {
+    value: u64,
+    snapshot_after: Option<u64>,
+    evts_handled: u64,
+}
+
+impl Counter {
+    pub fn with_snapshot_after(self, snapshot_after: Option<u64>) -> Self {
+        Self {
+            snapshot_after,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cmd {
+    Inc(u64),
+    Dec(u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum Error {
+    #[error("Overflow: value={value}, increment={inc}")]
+    Overflow { value: u64, inc: u64 },
+    #[error("Underflow: value={value}, decrement={dec}")]
+    Underflow { value: u64, dec: u64 },
+}
+
+impl EventSourced for Counter {
+    type Cmd = Cmd;
+
+    type Evt = Evt;
+
+    type State = u64;
+
+    type Error = Error;
+
+    /// Command handler, returning the to be persisted event or an error.
+    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+        match cmd {
+            Cmd::Inc(inc) => {
+                // Validate command: overflow.
+                if inc > u64::MAX - self.value {
+                    Err(Error::Overflow {
+                        value: self.value,
+                        inc,
+                    })
+                }
+                // Valid Inc command results in Increased event.
+                else {
+                    Ok(Evt {
+                        evt: Some(evt::Evt::Increased(Increased {
+                            old_value: self.value,
+                            inc,
+                        })),
+                    })
+                }
+            }
+            Cmd::Dec(dec) => {
+                // Validate command: underflow.
+                if dec > self.value {
+                    Err(Error::Underflow {
+                        value: self.value,
+                        dec,
+                    })
+                }
+                // Valid Dec command results in Decreased event.
+                else {
+                    Ok(Evt {
+                        evt: Some(evt::Evt::Decreased(Decreased {
+                            old_value: self.value,
+                            dec,
+                        })),
+                    })
+                }
+            }
+        }
+    }
+
+    /// Event handler, returning whether to take a snapshot or not.
+    fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State> {
+        match evt.evt {
+            Some(evt::Evt::Increased(Increased { old_value, inc })) => {
+                self.value += inc;
+                debug!(old_value, inc, value = self.value, "Increased");
+            }
+            Some(evt::Evt::Decreased(Decreased { old_value, dec })) => {
+                self.value -= dec;
+                debug!(old_value, dec, value = self.value, "Decreased");
+            }
+            None => panic!("evt is a mandatory field"),
+        }
+
+        self.evts_handled += 1;
+        self.snapshot_after.and_then(|snapshot_after| {
+            if self.evts_handled % snapshot_after == 0 {
+                Some(self.value)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn set_state(&mut self, state: Self::State) {
+        self.value = state;
+        debug!(value = self.value, "Set state");
+    }
+}
+```
+
+For a more realistic example take a look at [rusty-bank](https://github.com/hseeberger/rusty-bank/).
 
 ## Requirements for building the project
 
