@@ -54,19 +54,17 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     fn set_state(&mut self, state: Self::State);
 }
 
-/// Used in an [EventSourced] command handler as impl trait in return position. Together with its
-/// blanked implementation for any event allows for returning plain events without boilerplate.
-pub trait IntoTaggedEvt<E>: Send {
-    fn into_tagged_evt(self) -> TaggedEvt<E>;
+/// An event and an optional tag. Typically not used direcly, but via [IntoTaggedEvt] or [EvtExt].
+#[derive(Debug, Clone)]
+pub struct TaggedEvt<E> {
+    evt: E,
+    tag: Option<String>,
 }
 
-impl<E> IntoTaggedEvt<E> for TaggedEvt<E>
-where
-    E: Send,
-{
-    fn into_tagged_evt(self) -> TaggedEvt<E> {
-        self
-    }
+/// Used in an [EventSourced] command handler as impl trait in return position. Together with its
+/// blanket implementation for any event allows for returning plain events without boilerplate.
+pub trait IntoTaggedEvt<E>: Send {
+    fn into_tagged_evt(self) -> TaggedEvt<E>;
 }
 
 impl<E> IntoTaggedEvt<E> for E
@@ -78,6 +76,15 @@ where
             evt: self,
             tag: None,
         }
+    }
+}
+
+impl<E> IntoTaggedEvt<E> for TaggedEvt<E>
+where
+    E: Send,
+{
+    fn into_tagged_evt(self) -> TaggedEvt<E> {
+        self
     }
 }
 
@@ -100,13 +107,6 @@ impl<E> EvtExt for E {
             tag: Some(tag.into()),
         }
     }
-}
-
-/// An event and an optional tag. Typically not used direcly, but via [IntoTaggedEvt] or [EvtExt].
-#[derive(Debug, Clone)]
-pub struct TaggedEvt<E> {
-    evt: E,
-    tag: Option<String>,
 }
 
 /// Extension methods for types implementing [EventSourced].
