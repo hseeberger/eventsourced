@@ -34,7 +34,7 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         id: Uuid,
     ) -> impl Future<Output = Result<Option<SeqNo>, Self::Error>> + Send + '_;
 
-    /// Get the events for the given entity ID in the given closed range of sequence numbers.
+    /// Get the events for the given entity ID starting with the given sequence number.
     fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
         &'a self,
         id: Uuid,
@@ -48,6 +48,7 @@ pub trait EvtLog: Clone + Send + Sync + 'static {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static;
 
+    /// Get the events for the given tag starting with the given sequence number.
     fn evts_by_tag<'a, E, T, EvtFromBytes, EvtFromBytesError>(
         &'a self,
         tag: T,
