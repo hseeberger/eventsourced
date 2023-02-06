@@ -120,11 +120,11 @@ pub trait EventSourcedExt {
     /// Commands can be passed to the spawned entity by invoking `handle_cmd` on the returned
     /// [EntityRef] which uses a buffered channel with the given size.
     ///
-    /// Commands are handled by the command handler of this entity. They can be rejected by
-    /// returning an error. Valid commands may produce an event which get persisted to the [EvtLog]
-    /// along with an increasing sequence number and then applied to the event handler of
-    /// this entity. The event handler may decide to save a snapshot at the current sequence
-    /// number which is used to speed up future spawning.
+    /// Commands are handled by the command handler of the spawned entity. They can be rejected by
+    /// returning an error. Valid commands produce an event with an optional tag which gets
+    /// persisted to the [EvtLog] and then applied to the event handler of the respective
+    /// entity. The event handler may decide to save a snapshot which is used to speed up future
+    /// spawning.
     async fn spawn<
         L,
         S,
