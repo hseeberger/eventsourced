@@ -33,7 +33,7 @@ Calling `spawn` results in a cloneable `EntityRef` which can be used to pass com
 
 Events can be queried from the event log by ID or by tag. These queries can be used to build read side projections.
 
-## Requirements for building the project
+## Requirements for building the project and examples
 
 Before building the project and examples, please make sure you have installed the [protobuf](https://github.com/protocolbuffers/protobuf) dependency that is not only needed for the optional byte conversion with prost, which is a default feature, but also for eventsourced-nats. The only way to get away without `protobuf` is to change the default features and not build eventsourced-nats.
 
