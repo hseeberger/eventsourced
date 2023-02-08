@@ -65,6 +65,7 @@ impl EventSourced for Counter {
                     })
                 }
             }
+
             Cmd::Dec(dec) => {
                 // Validate command: underflow.
                 if dec > self.value {

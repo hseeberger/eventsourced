@@ -1,6 +1,6 @@
 [package]
 name          = "eventsourced"
-description   = "Persistent event sourcing"
+description   = "Event sourced entities"
 version       = "0.6.0"
 edition       = { workspace = true }
 authors       = { workspace = true }
