@@ -47,7 +47,7 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
 
-    /// Event handler, returning whether to take a snapshot or not.
+    /// Event handler, also returning whether to take a snapshot or not.
     fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State>;
 
     /// Snapshot state handler.

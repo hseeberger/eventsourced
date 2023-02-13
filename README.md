@@ -49,76 +49,39 @@ The `counter` package in the `example` directory contains a simple example: a co
 
 ```rust
 impl EventSourced for Counter {
-    ...
+    type Cmd = Cmd;
+    type Evt = Evt;
+    type State = u64;
+    type Error = Error;
 
     /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+        let value = self.value;
+
         match cmd {
-            Cmd::Inc(inc) => {
-                // Validate command: overflow.
-                if inc > u64::MAX - self.value {
-                    Err(Error::Overflow {
-                        value: self.value,
-                        inc,
-                    })
-                }
-                // Valid Inc command results in Increased event.
-                else {
-                    Ok(Evt {
-                        evt: Some(evt::Evt::Increased(Increased {
-                            old_value: self.value,
-                            inc,
-                        })),
-                    })
-                }
-            }
+            Cmd::Inc(inc) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
+            Cmd::Inc(inc) => Ok(Evt::Increased(inc)),
 
-            Cmd::Dec(dec) => {
-                // Validate command: underflow.
-                if dec > self.value {
-                    Err(Error::Underflow {
-                        value: self.value,
-                        dec,
-                    })
-                }
-                // Valid Dec command results in Decreased event.
-                else {
-                    Ok(Evt {
-                        evt: Some(evt::Evt::Decreased(Decreased {
-                            old_value: self.value,
-                            dec,
-                        })),
-                    })
-                }
-            }
+            Cmd::Dec(dec) if dec > value => Err(Error::Underflow { value, dec }),
+            Cmd::Dec(dec) => Ok(Evt::Decreased(dec)),
         }
     }
 
-    /// Event handler, returning whether to take a snapshot or not.
+    /// Event handler, also returning whether to take a snapshot or not.
     fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State> {
-        match evt.evt {
-            Some(evt::Evt::Increased(Increased { old_value, inc })) => {
-                self.value += inc;
-                debug!(old_value, inc, value = self.value, "Increased");
-            }
-            Some(evt::Evt::Decreased(Decreased { old_value, dec })) => {
-                self.value -= dec;
-                debug!(old_value, dec, value = self.value, "Decreased");
-            }
-            None => panic!("evt is a mandatory field"),
+        match evt {
+            Evt::Increased(inc) => self.value += inc,
+            Evt::Decreased(dec) => self.value -= dec,
         }
 
-        self.evts_handled += 1;
-        self.snapshot_after.and_then(|snapshot_after| {
-            if self.evts_handled % snapshot_after == 0 {
-                Some(self.value)
-            } else {
-                None
-            }
-        })
+        // No snapshots.
+        None
     }
 
-    ...
+    fn set_state(&mut self, _state: Self::State) {
+        // This method cannot be called as long as `handle_evt` always returns `None`.
+        panic!("No snapshots");
+    }
 }
 ```
 
@@ -128,14 +91,14 @@ There are also the two `counter-nats` and `counter-postgres` packages, with a bi
 ...
 let evt_log = evt_log.clone();
 let snapshot_store = snapshot_store.clone();
-let counter = Counter::default().with_snapshot_after(config.snapshot_after);
+let counter = Counter::default();
 let counter = counter
     .spawn(
         id,
         unsafe { NonZeroUsize::new_unchecked(42) },
         evt_log,
         snapshot_store,
-        convert::prost::binarizer(),
+        convert::serde_json::binarizer(),
     )
     .await
     .context("Cannot spawn entity")?;
@@ -152,13 +115,7 @@ tasks.spawn(async move {
             .unwrap()
             .context("Invalid command")
             .unwrap();
-        counter
-            .handle_cmd(Cmd::Dec(n as u64))
-            .await
-            .context("Cannot handle Dec command")
-            .unwrap()
-            .context("Invalid command")
-            .unwrap();
+        ...
     }
 });
 ...
@@ -184,7 +141,7 @@ Then use the following command to run the example:
 
 ```
 RUST_LOG=info \
-    CONFIG_DIR=examples/counter-postgres/config \
+    CONFIG_DIR=examples/counter-nats/config \
     cargo run \
     --release \
     --package counter-nats
