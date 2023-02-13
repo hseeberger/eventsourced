@@ -1,24 +1,11 @@
 use anyhow::Result;
 use eventsourced::{EventSourced, IntoTaggedEvt};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::debug;
-
-include!(concat!(env!("OUT_DIR"), "/counter.rs"));
 
 #[derive(Debug, Default)]
 pub struct Counter {
     value: u64,
-    snapshot_after: Option<u64>,
-    evts_handled: u64,
-}
-
-impl Counter {
-    pub fn with_snapshot_after(self, snapshot_after: Option<u64>) -> Self {
-        Self {
-            snapshot_after,
-            ..Default::default()
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,92 +14,53 @@ pub enum Cmd {
     Dec(u64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Evt {
+    Increased(u64),
+    Decreased(u64),
+}
+
+#[derive(Debug, Clone, Copy, Error)]
 pub enum Error {
     #[error("Overflow: value={value}, increment={inc}")]
     Overflow { value: u64, inc: u64 },
+
     #[error("Underflow: value={value}, decrement={dec}")]
     Underflow { value: u64, dec: u64 },
 }
 
 impl EventSourced for Counter {
     type Cmd = Cmd;
-
     type Evt = Evt;
-
     type State = u64;
-
     type Error = Error;
 
     /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+        let value = self.value;
+
         match cmd {
-            Cmd::Inc(inc) => {
-                // Validate command: overflow.
-                if inc > u64::MAX - self.value {
-                    Err(Error::Overflow {
-                        value: self.value,
-                        inc,
-                    })
-                }
-                // Valid Inc command results in Increased event.
-                else {
-                    Ok(Evt {
-                        evt: Some(evt::Evt::Increased(Increased {
-                            old_value: self.value,
-                            inc,
-                        })),
-                    })
-                }
-            }
+            Cmd::Inc(inc) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
+            Cmd::Inc(inc) => Ok(Evt::Increased(inc)),
 
-            Cmd::Dec(dec) => {
-                // Validate command: underflow.
-                if dec > self.value {
-                    Err(Error::Underflow {
-                        value: self.value,
-                        dec,
-                    })
-                }
-                // Valid Dec command results in Decreased event.
-                else {
-                    Ok(Evt {
-                        evt: Some(evt::Evt::Decreased(Decreased {
-                            old_value: self.value,
-                            dec,
-                        })),
-                    })
-                }
-            }
+            Cmd::Dec(dec) if dec > value => Err(Error::Underflow { value, dec }),
+            Cmd::Dec(dec) => Ok(Evt::Decreased(dec)),
         }
     }
 
-    /// Event handler, returning whether to take a snapshot or not.
+    /// Event handler, also returning whether to take a snapshot or not.
     fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State> {
-        match evt.evt {
-            Some(evt::Evt::Increased(Increased { old_value, inc })) => {
-                self.value += inc;
-                debug!(old_value, inc, value = self.value, "Increased");
-            }
-            Some(evt::Evt::Decreased(Decreased { old_value, dec })) => {
-                self.value -= dec;
-                debug!(old_value, dec, value = self.value, "Decreased");
-            }
-            None => panic!("evt is a mandatory field"),
+        match evt {
+            Evt::Increased(inc) => self.value += inc,
+            Evt::Decreased(dec) => self.value -= dec,
         }
 
-        self.evts_handled += 1;
-        self.snapshot_after.and_then(|snapshot_after| {
-            if self.evts_handled % snapshot_after == 0 {
-                Some(self.value)
-            } else {
-                None
-            }
-        })
+        // No snapshots.
+        None
     }
 
-    fn set_state(&mut self, state: Self::State) {
-        self.value = state;
-        debug!(value = self.value, "Set state");
+    fn set_state(&mut self, _state: Self::State) {
+        // This method cannot be called as long as `handle_evt` always returns `None`.
+        panic!("No snapshots");
     }
 }

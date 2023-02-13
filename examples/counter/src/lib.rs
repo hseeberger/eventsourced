@@ -16,7 +16,6 @@ use uuid::Uuid;
 pub struct Config {
     entity_count: usize,
     evt_count: usize,
-    snapshot_after: Option<u64>,
 }
 
 pub async fn run<L, S>(config: Config, evt_log: L, snapshot_store: S) -> Result<()>
@@ -37,14 +36,14 @@ where
 
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
-        let counter = Counter::default().with_snapshot_after(config.snapshot_after);
+        let counter = Counter::default();
         let counter = counter
             .spawn(
                 id,
                 unsafe { NonZeroUsize::new_unchecked(42) },
                 evt_log,
                 snapshot_store,
-                convert::prost::binarizer(),
+                convert::serde_json::binarizer(),
             )
             .await
             .context("Cannot spawn entity")?;
@@ -94,7 +93,7 @@ where
                     unsafe { NonZeroUsize::new_unchecked(42) },
                     evt_log,
                     snapshot_store,
-                    convert::prost::binarizer(),
+                    convert::serde_json::binarizer(),
                 )
                 .await
                 .context("Cannot spawn entity")
