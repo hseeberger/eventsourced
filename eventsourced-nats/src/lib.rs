@@ -3,7 +3,6 @@
 
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
-#![feature(nonzero_min_max)]
 #![feature(return_position_impl_trait_in_trait)]
 
 mod evt_log;
@@ -22,7 +21,7 @@ use thiserror::Error;
 pub enum Error {
     /// The connection to the NATS server cannot be established.
     #[error("Cannot connect to NATS server")]
-    Connect(#[from] std::io::Error),
+    Connect(#[from] async_nats::ConnectError),
 
     /// An event cannot be published.
     #[error("Cannot publish events")]
