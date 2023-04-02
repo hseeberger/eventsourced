@@ -239,7 +239,7 @@ impl EvtLog for PostgresEvtLog {
                 }
 
                 // Only sleep if requesting future events.
-                if (Some(current_from_seq_no) >= last_seq_no) {
+                if Some(current_from_seq_no) >= last_seq_no {
                     sleep(self.poll_interval).await;
                 }
             }
@@ -304,7 +304,7 @@ impl EvtLog for PostgresEvtLog {
                 }
 
                 // Only sleep if requesting future events.
-                if (current_from_seq_no >= last_seq_no) {
+                if current_from_seq_no >= last_seq_no {
                     sleep(self.poll_interval).await;
                 }
             }

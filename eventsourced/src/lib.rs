@@ -3,7 +3,6 @@
 #![allow(clippy::type_complexity)]
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
-#![feature(nonzero_min_max)]
 #![feature(return_position_impl_trait_in_trait)]
 #![feature(type_alias_impl_trait)]
 

@@ -3,7 +3,6 @@
 
 #![allow(incomplete_features)]
 #![feature(async_fn_in_trait)]
-#![feature(nonzero_min_max)]
 #![feature(return_position_impl_trait_in_trait)]
 
 mod evt_log;
