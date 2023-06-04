@@ -61,6 +61,6 @@ impl EventSourced for Counter {
 
     fn set_state(&mut self, _state: Self::State) {
         // This method cannot be called as long as `handle_evt` always returns `None`.
-        panic!("No snapshots");
+        panic!("impossible: no snapshots");
     }
 }

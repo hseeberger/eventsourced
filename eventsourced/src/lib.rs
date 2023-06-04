@@ -341,7 +341,8 @@ impl SeqNo {
 
     /// Get the successor of this sequence number.
     pub fn succ(&self) -> Self {
-        Self(unsafe { NonZeroU64::new_unchecked(self.0.get() + 1) })
+        let seq_no = self.0.checked_add(1).expect("overflow");
+        Self(seq_no)
     }
 }
 

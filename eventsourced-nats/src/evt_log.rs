@@ -297,7 +297,7 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
     NonZeroUsize::MIN
 }
 
-#[cfg(all(test))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::NATS_VERSION;

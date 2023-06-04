@@ -40,13 +40,13 @@ where
         let counter = counter
             .spawn(
                 id,
-                unsafe { NonZeroUsize::new_unchecked(42) },
+                NonZeroUsize::new(42).expect("42 is not zero"),
                 evt_log,
                 snapshot_store,
                 convert::serde_json::binarizer(),
             )
             .await
-            .context("Cannot spawn entity")?;
+            .context("spawn entity")?;
 
         tasks.spawn(async move {
             for n in 0..config.evt_count / 2 {
@@ -56,16 +56,16 @@ where
                 counter
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
-                    .context("Cannot handle Inc command")
+                    .context("handle Inc command")
                     .unwrap()
-                    .context("Invalid command")
+                    .context("invalid Inc command")
                     .unwrap();
                 counter
                     .handle_cmd(Cmd::Dec(n as u64))
                     .await
-                    .context("Cannot handle Dec command")
+                    .context("handle Dec command")
                     .unwrap()
-                    .context("Invalid command")
+                    .context("invalid Dec command")
                     .unwrap();
             }
         });
@@ -90,13 +90,13 @@ where
             let _counter = Counter::default()
                 .spawn(
                     id,
-                    unsafe { NonZeroUsize::new_unchecked(42) },
+                    NonZeroUsize::new(42).expect("42 is not zero"),
                     evt_log,
                     snapshot_store,
                     convert::serde_json::binarizer(),
                 )
                 .await
-                .context("Cannot spawn entity")
+                .context("spawn entity")
                 .unwrap();
         });
     }

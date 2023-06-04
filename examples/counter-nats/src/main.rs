@@ -10,18 +10,18 @@ async fn main() -> Result<()> {
         .with(EnvFilter::from_default_env())
         .with(tracing_subscriber::fmt::layer())
         .try_init()
-        .context("Cannot initialize tracing")?;
+        .context("initialize tracing")?;
 
-    let config = Config::load().context("Cannot load configuration")?;
+    let config = Config::load().context("load configuration")?;
     println!("Starting with configuration: {config:?}");
 
     let evt_log = NatsEvtLog::new(config.evt_log)
         .await
-        .context("Cannot create event log")?;
+        .context("create event log")?;
 
     let snapshot_store = NatsSnapshotStore::new(config.snapshot_store)
         .await
-        .context("Cannot create snapshot store")?;
+        .context("create snapshot store")?;
 
     counter::run(config.counter, evt_log, snapshot_store).await
 }
