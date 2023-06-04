@@ -29,7 +29,7 @@ The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a plugg
 
 The `spawn` extension method provides for creating entities – "running" instances of an `EventSourced` implementation, identifiable by a `Uuid` – for some event log and some snapshot store. Conversion of events and snapshot state to and from bytes happens via given `binarizer` functions; for [prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json) these are already provided.
 
-Calling `spawn` results in a cloneable `EntityRef` which can be used to pass commands to the spawned entity by invoking `handle_cmd`. Commands are handled by the command handler of the spawned entity. They can be rejected by returning an error. Valid commands produce an event with an optional tag which gets persisted to the [EvtLog] and then applied to the event handler of the respective entity. The event handler may decide to save a snapshot which is used to speed up future spawning.
+Calling `spawn` results in a cloneable `EntityRef` which can be used to pass commands to the spawned entity by invoking `handle_cmd`. Commands are handled by the command handler of the spawned entity. They can be rejected by returning an error. Valid commands produce an event with an optional tag which gets persisted to the `EvtLog` and then applied to the event handler of the respective entity. The event handler may decide to save a snapshot which is used to speed up future spawning.
 
 Events can be queried from the event log by ID or by tag. These queries can be used to build read side projections.
 

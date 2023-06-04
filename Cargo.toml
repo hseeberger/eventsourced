@@ -7,6 +7,7 @@ members = [
   "examples/counter-nats",
   "examples/counter-postgres",
 ]
+resolver = "2"
 
 [workspace.package]
 edition       = "2021"

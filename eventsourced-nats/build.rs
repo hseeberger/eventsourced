@@ -19,14 +19,14 @@ fn compile_protos() -> Result<()> {
     config.bytes(["."]); // Use `Bytes` instead of `Vec<u8>` for PB type `bytes`.
     config
         .compile_protos(&protos, &[PROTOS])
-        .context("Cannot compile protos")
+        .context("compile protos")
 }
 
 fn list_protos(dir: &Path) -> Result<Vec<PathBuf>> {
     WalkDir::new(dir)
         .into_iter()
         .try_fold(vec![], |mut protos, entry| {
-            let entry = entry.context("Cannot read directory entry")?;
+            let entry = entry.context("read directory entry")?;
             let path = entry.path();
             if path.extension().and_then(OsStr::to_str) == Some("proto") {
                 protos.push(path.to_path_buf());
