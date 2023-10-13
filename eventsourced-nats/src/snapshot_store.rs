@@ -29,7 +29,12 @@ impl NatsSnapshotStore {
         debug!(?config, "Creating NatsSnapshotStore");
 
         let server_addr = config.server_addr;
-        let client = connect(&server_addr).await?;
+        let client = connect(&server_addr).await.map_err(|error| {
+            Error::Nats(
+                format!("cannot connect to NATS server at {server_addr})"),
+                error.into(),
+            )
+        })?;
         let jetstream = jetstream::new(client);
 
         // Setup bucket.
@@ -40,7 +45,9 @@ impl NatsSnapshotStore {
                     ..Default::default()
                 })
                 .await
-                .map_err(Error::CreateBucket)?;
+                .map_err(|error| {
+                    Error::Nats("cannot create NATS KV bucket".into(), error.into())
+                })?;
         }
 
         Ok(Self {
@@ -53,7 +60,7 @@ impl NatsSnapshotStore {
         self.jetstream
             .get_key_value(name)
             .await
-            .map_err(Error::GetBucket)
+            .map_err(|error| Error::Nats("cannot get NATS KV bucket".into(), error.into()))
     }
 }
 
@@ -82,7 +89,7 @@ impl SnapshotStore for NatsSnapshotStore {
     {
         let mut bytes = BytesMut::new();
         let state =
-            state_to_bytes(&state).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
+            state_to_bytes(&state).map_err(|error| Error::EvtsIntoBytes(Box::new(error)))?;
         let snapshot = proto::Snapshot {
             seq_no: seq_no.as_u64(),
             state,
@@ -93,7 +100,12 @@ impl SnapshotStore for NatsSnapshotStore {
             .await?
             .put(id.to_string(), bytes.into())
             .await
-            .map_err(Error::SaveSnapshot)?;
+            .map_err(|error| {
+                Error::Nats(
+                    "cannot store snapshot in NATS KV bucket".into(),
+                    error.into(),
+                )
+            })?;
         debug!(%id, %seq_no, "Saved snapshot");
 
         Ok(())
@@ -114,13 +126,18 @@ impl SnapshotStore for NatsSnapshotStore {
             .await?
             .get(id.to_string())
             .await
-            .map_err(Error::LoadSnapshot)?
+            .map_err(|error| {
+                Error::Nats(
+                    "cannot load snapshot from NATS KV bucket".into(),
+                    error.into(),
+                )
+            })?
             .map(|bytes| {
-                proto::Snapshot::decode(Bytes::from(bytes))
+                proto::Snapshot::decode(bytes)
                     .map_err(Error::DecodeSnapshot)
                     .and_then(|proto::Snapshot { seq_no, state }| {
                         state_from_bytes(state)
-                            .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                            .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
                             .and_then(|state| {
                                 seq_no
                                     .try_into()
@@ -204,7 +221,8 @@ mod tests {
     use super::*;
     use crate::tests::NATS_VERSION;
     use eventsourced::convert;
-    use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
+    use testcontainers::{clients::Cli, core::WaitFor};
+    use testcontainers_modules::testcontainers::GenericImage;
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
