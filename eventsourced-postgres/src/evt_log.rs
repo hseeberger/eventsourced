@@ -454,7 +454,8 @@ mod tests {
     use super::*;
     use eventsourced::convert;
     use std::future;
-    use testcontainers::{clients::Cli, images::postgres::Postgres};
+    use testcontainers::clients::Cli;
+    use testcontainers_modules::postgres::Postgres;
 
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {

@@ -7,8 +7,7 @@ use async_nats::{
         self,
         consumer::{pull, pull::Stream as MsgStream, AckPolicy, DeliverPolicy},
         context::Publish,
-        response,
-        stream::Stream as JetstreamStream,
+        stream::{LastRawMessageErrorKind, Stream as JetstreamStream},
         Context as Jetstream,
     },
 };
@@ -19,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
-    io,
     num::NonZeroUsize,
     time::Duration,
 };
@@ -40,7 +38,12 @@ impl NatsEvtLog {
         debug!(?config, "Creating NatsEvtLog");
 
         let server_addr = config.server_addr;
-        let client = connect(&server_addr).await?;
+        let client = connect(&server_addr).await.map_err(|error| {
+            Error::Nats(
+                format!("cannot connect to NATS server at {server_addr})"),
+                error.into(),
+            )
+        })?;
         let jetstream = jetstream::new(client);
 
         // Setup stream.
@@ -52,7 +55,9 @@ impl NatsEvtLog {
                     ..Default::default()
                 })
                 .await
-                .map_err(Error::CreateStream)?;
+                .map_err(|error| {
+                    Error::Nats("cannot create NATS 'evt' stream".into(), error.into())
+                })?;
         }
 
         Ok(Self {
@@ -65,7 +70,12 @@ impl NatsEvtLog {
         self.jetstream
             .get_stream(&self.stream_name)
             .await
-            .map_err(Error::GetStream)
+            .map_err(|error| {
+                Error::Nats(
+                    format!("cannot get NATS stream '{}'", self.stream_name),
+                    error.into(),
+                )
+            })
     }
 
     async fn get_msgs(
@@ -82,12 +92,17 @@ impl NatsEvtLog {
                 ..Default::default()
             })
             .await
-            .map_err(Error::CreateConsumer)?
+            .map_err(|error| Error::Nats("cannot create NATS consumer".into(), error.into()))?
             .stream()
-            .heartbeat(Duration::ZERO) // Important!
+            .heartbeat(Duration::ZERO) // Important! Even if I cannot remember why :-(
             .messages()
             .await
-            .map_err(Error::GetMessages)
+            .map_err(|error| {
+                Error::Nats(
+                    "cannot get message stream from NATS consumer".into(),
+                    error.into(),
+                )
+            })
     }
 }
 
@@ -115,7 +130,7 @@ impl EvtLog for NatsEvtLog {
         EvtToBytesError: StdError + Send + Sync + 'static,
     {
         // Convert event into bytes.
-        let bytes = evt_to_bytes(evt).map_err(|source| Error::EvtsIntoBytes(Box::new(source)))?;
+        let bytes = evt_to_bytes(evt).map_err(|error| Error::EvtsIntoBytes(Box::new(error)))?;
 
         // Publish event to NATS subject and await ACK.
         let subject = match tag {
@@ -126,9 +141,11 @@ impl EvtLog for NatsEvtLog {
         self.jetstream
             .send_publish(subject, publish)
             .await
-            .map_err(Error::PublishEvts)?
+            .map_err(|error| Error::Nats("cannot publish events".into(), error.into()))?
             .await
-            .map_err(Error::PublishEvtsAck)
+            .map_err(|error| {
+                Error::Nats("cannot get ACK for published events".into(), error.into())
+            })
             .and_then(|ack| ack.sequence.try_into().map_err(Error::InvalidSeqNo))
     }
 
@@ -140,19 +157,14 @@ impl EvtLog for NatsEvtLog {
             .await
             .map_or_else(
                 |error| {
-                    // TODO What the hell is this? Will async_nats improve error handling!
-                    let source = *error
-                        .downcast::<io::Error>()
-                        .expect("Cannot downcast async_nats error")
-                        .into_inner()
-                        .expect("Missing inner error")
-                        .downcast::<response::Error>()
-                        .expect("Cannot convert to async_nats response error");
-                    if source.code == 10037 {
-                        debug!(%id, "No last message found");
+                    if error.kind() == LastRawMessageErrorKind::NoMessageFound {
+                        debug!(%id, "no last message found");
                         Ok(None)
                     } else {
-                        Err(Error::GetLastMessage(Box::new(source)))
+                        Err(Error::Nats(
+                            "cannot get last message for NATS stream".into(),
+                            error.into(),
+                        ))
                     }
                 },
                 |msg| Some(msg.sequence.try_into().map_err(Error::InvalidSeqNo)).transpose(),
@@ -181,13 +193,18 @@ impl EvtLog for NatsEvtLog {
 
         // Transform message stream into event stream.
         let evts = msgs.map(move |msg| {
-            let msg = msg.map_err(|source| Error::GetMessage(source))?;
+            let msg = msg.map_err(|error| {
+                Error::Nats(
+                    "cannot get message from NATS message stream".into(),
+                    error.into(),
+                )
+            })?;
             let seq_no: SeqNo = msg
                 .info()
-                .map_err(|source| Error::GetMessageInfo(source))
+                .map_err(|error| Error::Nats("cannot get message info".into(), error))
                 .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
             evt_from_bytes(msg.message.payload)
-                .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
                 .map(|evt| (seq_no, evt))
         });
 
@@ -219,13 +236,18 @@ impl EvtLog for NatsEvtLog {
 
         // Transform message stream into event stream.
         let evts = msgs.map(move |msg| {
-            let msg = msg.map_err(|source| Error::GetMessage(source))?;
+            let msg = msg.map_err(|error| {
+                Error::Nats(
+                    "cannot get message from NATS message stream".into(),
+                    error.into(),
+                )
+            })?;
             let seq_no: SeqNo = msg
                 .info()
-                .map_err(|source| Error::GetMessageInfo(source))
+                .map_err(|error| Error::Nats("cannot get message info".into(), error))
                 .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
             evt_from_bytes(msg.message.payload)
-                .map_err(|source| Error::EvtsFromBytes(Box::new(source)))
+                .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
                 .map(|evt| (seq_no, evt))
         });
 
@@ -304,7 +326,8 @@ mod tests {
     use eventsourced::convert;
     use futures::TryStreamExt;
     use std::future;
-    use testcontainers::{clients::Cli, core::WaitFor, images::generic::GenericImage};
+    use testcontainers::{clients::Cli, core::WaitFor};
+    use testcontainers_modules::testcontainers::GenericImage;
 
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {

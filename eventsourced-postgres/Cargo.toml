@@ -25,6 +25,7 @@ tracing         = { workspace = true }
 uuid            = { workspace = true }
 
 [dev-dependencies]
-prost          = { workspace = true }
-testcontainers = { workspace = true }
-tokio          = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+prost                  = { workspace = true }
+testcontainers         = { workspace = true }
+testcontainers-modules = { workspace = true }
+tokio                  = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
