@@ -37,7 +37,7 @@ pub trait SnapshotStore: Clone + Send + 'static {
         FromBytesError: StdError + Send + Sync + 'static;
 }
 
-/// Snapshot state along with its sequence number and optional metadata.
+/// Snapshot state along with its sequence number.
 pub struct Snapshot<S> {
     pub seq_no: SeqNo,
     pub state: S,

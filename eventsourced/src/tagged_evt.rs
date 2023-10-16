@@ -4,8 +4,8 @@ pub struct TaggedEvt<E> {
     pub(crate) tag: Option<String>,
 }
 
-/// Used in an [EventSourced] command handler as impl trait in return position. Together with its
-/// blanket implementation for any event allows for returning plain events without boilerplate.
+/// Used in an [super::EventSourced] command handler as impl trait in return position. Together with
+/// its blanket implementation for any event allows for returning plain events without boilerplate.
 pub trait IntoTaggedEvt<E>: Send {
     fn into_tagged_evt(self) -> TaggedEvt<E>;
 }

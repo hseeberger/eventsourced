@@ -1,6 +1,6 @@
 [package]
 name          = "eventsourced"
-description   = "Event sourced entities"
+description   = "Event sourced entities in Rust."
 version       = "0.6.0"
 edition       = { workspace = true }
 authors       = { workspace = true }
