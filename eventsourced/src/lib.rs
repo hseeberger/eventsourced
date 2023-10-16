@@ -1,25 +1,19 @@
 //! Event sourced entities.
 
-#![allow(clippy::type_complexity)]
-#![allow(incomplete_features)]
-#![feature(async_fn_in_trait)]
-#![feature(return_position_impl_trait_in_trait)]
-#![feature(type_alias_impl_trait)]
-
 pub mod convert;
 mod evt_log;
+mod seq_no;
 mod snapshot_store;
+mod tagged_evt;
 
 pub use evt_log::*;
+pub use seq_no::*;
 pub use snapshot_store::*;
+pub use tagged_evt::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use std::{
-    error::Error as StdError,
-    fmt::{self, Debug, Display},
-    num::{NonZeroU64, NonZeroUsize},
-};
+use std::{error::Error as StdError, fmt::Debug, num::NonZeroUsize};
 use thiserror::Error;
 use tokio::{
     pin,
@@ -30,15 +24,15 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 /// Command and event handling for an event sourced entity.
-pub trait EventSourced: Sized + Send + Sync + 'static {
+pub trait EventSourced: Sized + Send + 'static {
     /// Command type.
-    type Cmd: Debug + Send + Sync + 'static;
+    type Cmd: Send + Sync;
 
     /// Event type.
-    type Evt: Debug + Send + Sync + 'static;
+    type Evt: Send + Sync;
 
     /// Snapshot state type.
-    type State: Send + Sync;
+    type State: Send;
 
     /// Error type for rejected (a.k.a. invalid) commands.
     type Error: StdError + Send + Sync + 'static;
@@ -46,66 +40,11 @@ pub trait EventSourced: Sized + Send + Sync + 'static {
     /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
 
-    /// Event handler, also returning whether to take a snapshot or not.
+    /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State>;
 
     /// Snapshot state handler.
     fn set_state(&mut self, state: Self::State);
-}
-
-/// An event and an optional tag. Typically not used direcly, but via [IntoTaggedEvt] or [EvtExt].
-#[derive(Debug, Clone)]
-pub struct TaggedEvt<E> {
-    evt: E,
-    tag: Option<String>,
-}
-
-/// Used in an [EventSourced] command handler as impl trait in return position. Together with its
-/// blanket implementation for any event allows for returning plain events without boilerplate.
-pub trait IntoTaggedEvt<E>: Send {
-    fn into_tagged_evt(self) -> TaggedEvt<E>;
-}
-
-impl<E> IntoTaggedEvt<E> for E
-where
-    E: Send,
-{
-    fn into_tagged_evt(self) -> TaggedEvt<E> {
-        TaggedEvt {
-            evt: self,
-            tag: None,
-        }
-    }
-}
-
-impl<E> IntoTaggedEvt<E> for TaggedEvt<E>
-where
-    E: Send,
-{
-    fn into_tagged_evt(self) -> TaggedEvt<E> {
-        self
-    }
-}
-
-/// Provide `with_tag` extension method for events. Together with its blanket implementation for any
-/// event allows for calling `with_tag` on any event.
-pub trait EvtExt: Sized {
-    /// Create a [TaggedEvt] with the given tag.
-    fn with_tag<T>(self, tag: T) -> TaggedEvt<Self>
-    where
-        T: Into<String>;
-}
-
-impl<E> EvtExt for E {
-    fn with_tag<T>(self, tag: T) -> TaggedEvt<E>
-    where
-        T: Into<String>,
-    {
-        TaggedEvt {
-            evt: self,
-            tag: Some(tag.into()),
-        }
-    }
 }
 
 /// Extension methods for types implementing [EventSourced].
@@ -124,6 +63,7 @@ pub trait EventSourcedExt {
     /// persisted to the [EvtLog] and then applied to the event handler of the respective
     /// entity. The event handler may decide to save a snapshot which is used to speed up future
     /// spawning.
+    #[allow(async_fn_in_trait)]
     async fn spawn<
         L,
         S,
@@ -169,9 +109,9 @@ pub trait EventSourcedExt {
         let snapshot_seq_no = snapshot_store
             .load::<Self::State, _, _>(id, state_from_bytes)
             .await
-            .map_err(|source| SpawnError::LoadSnapshot(source.into()))?
+            .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(%id, %seq_no, "Restoring snapshot");
+                debug!(%id, %seq_no, "restoring snapshot");
                 self.set_state(state);
                 seq_no
             });
@@ -180,7 +120,7 @@ pub trait EventSourcedExt {
         let last_seq_no = evt_log
             .last_seq_no(id)
             .await
-            .map_err(|source| SpawnError::LastSeqNo(source.into()))?;
+            .map_err(|error| SpawnError::LastSeqNo(error.into()))?;
         assert!(
             snapshot_seq_no <= last_seq_no,
             "snapshot_seq_no must be less than or equal to last_seq_no"
@@ -188,14 +128,14 @@ pub trait EventSourcedExt {
         if snapshot_seq_no < last_seq_no {
             let from_seq_no = snapshot_seq_no.unwrap_or(SeqNo::MIN);
             let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
-            debug!(%id, %from_seq_no, %to_seq_no , "Replaying evts");
+            debug!(%id, %from_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
                 .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, evt_from_bytes)
                 .await
-                .map_err(|source| SpawnError::EvtsById(source.into()))?;
+                .map_err(|error| SpawnError::EvtsById(error.into()))?;
             pin!(evts);
             while let Some(evt) = evts.next().await {
-                let (seq_no, evt) = evt.map_err(|source| SpawnError::NextEvt(source.into()))?;
+                let (seq_no, evt) = evt.map_err(|error| SpawnError::NextEvt(error.into()))?;
                 self.handle_evt(evt);
                 if seq_no == to_seq_no {
                     break;
@@ -212,7 +152,7 @@ pub trait EventSourcedExt {
             evt_to_bytes,
             state_to_bytes,
         };
-        debug!(%id, "EventSourced entity created");
+        debug!(%id, "entity created");
 
         let (cmd_in, mut cmd_out) = mpsc::channel::<(
             Self::Cmd,
@@ -225,16 +165,16 @@ pub trait EventSourcedExt {
                 match entity.handle_cmd(cmd).await {
                     Ok(result) => {
                         if result_sender.send(result).is_err() {
-                            error!(%id, "Cannot send command handler result");
+                            error!(%id, "cannot send command handler result");
                         };
                     }
                     Err(error) => {
-                        error!(%id, %error, "Cannot persist event");
+                        error!(%id, %error, "cannot persist event");
                         break;
                     }
                 }
             }
-            debug!(%id, "Eventsourced entity terminated");
+            debug!(%id, "entity terminated");
         });
 
         Ok(EntityRef { id, cmd_in })
@@ -243,28 +183,29 @@ pub trait EventSourcedExt {
 
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
-/// Errors from spawning an event sourced entity.
+/// Error from spawning an event sourced entity.
 #[derive(Debug, Error)]
 pub enum SpawnError {
     /// A snapshot cannot be loaded from the snapshot store.
-    #[error("Cannot load snapshot from snapshot store")]
+    #[error("cannot load snapshot from snapshot store")]
     LoadSnapshot(#[source] Box<dyn StdError + Send + Sync>),
 
     /// The last seqence number cannot be obtained from the event log.
-    #[error("Cannot get last seqence number from event log")]
+    #[error("cannot get last seqence number from event log")]
     LastSeqNo(#[source] Box<dyn StdError + Send + Sync>),
 
     /// Events by ID cannot be obtained from the event log.
-    #[error("Cannot get events by ID from event log")]
+    #[error("cannot get events by ID from event log")]
     EvtsById(#[source] Box<dyn StdError + Send + Sync>),
 
     /// The next event cannot be obtained from the event log.
-    #[error("Cannot get next event from event log")]
+    #[error("cannot get next event from event log")]
     NextEvt(#[source] Box<dyn StdError + Send + Sync>),
 }
 
 /// A handle for a spawned [EventSourced] entity which can be used to invoke its command handler.
 #[derive(Debug, Clone)]
+#[allow(clippy::type_complexity)]
 pub struct EntityRef<E>
 where
     E: EventSourced,
@@ -295,21 +236,21 @@ where
         self.cmd_in
             .send((cmd, result_in))
             .await
-            .map_err(|source| EntityRefError::SendCmd(source.into()))?;
+            .map_err(|error| EntityRefError::SendCmd(Box::new(error)))?;
         result_out.await.map_err(EntityRefError::RcvHandlerResult)
     }
 }
 
-/// Errors from an [EntityRef].
+/// Error from an [EntityRef].
 #[derive(Debug, Error)]
 pub enum EntityRefError {
     /// A command cannot be sent from an [EntityRef] to its entity.
-    #[error("Cannot send command to Entity")]
-    SendCmd(#[source] Box<dyn StdError + Send + Sync>),
+    #[error("cannot send command to Entity")]
+    SendCmd(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
     /// An [EntityRef] cannot receive the command handler result from its entity, potentially
     /// because its entity has terminated.
-    #[error("Cannot receive command handler result from Entity")]
+    #[error("cannot receive command handler result from Entity")]
     RcvHandlerResult(#[from] oneshot::error::RecvError),
 }
 
@@ -319,51 +260,6 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub evt_from_bytes: EvtFromBytes,
     pub state_to_bytes: StateToBytes,
     pub state_from_bytes: StateFromBytes,
-}
-
-/// Sequence number used for events by event log and snapshot store.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SeqNo(NonZeroU64);
-
-impl SeqNo {
-    #[allow(missing_docs)]
-    pub const MIN: SeqNo = Self(unsafe { NonZeroU64::new_unchecked(1) });
-
-    #[allow(missing_docs)]
-    pub const fn new(value: NonZeroU64) -> Self {
-        Self(value)
-    }
-
-    #[allow(missing_docs)]
-    pub const fn as_u64(&self) -> u64 {
-        self.0.get()
-    }
-
-    /// Get the successor of this sequence number.
-    pub fn succ(&self) -> Self {
-        let seq_no = self.0.checked_add(1).expect("overflow");
-        Self(seq_no)
-    }
-}
-
-impl TryFrom<u64> for SeqNo {
-    type Error = TrySeqNoFromZero;
-
-    fn try_from(value: u64) -> Result<Self, Self::Error> {
-        NonZeroU64::new(value)
-            .ok_or(TrySeqNoFromZero)
-            .map(Self::new)
-    }
-}
-
-#[derive(Debug, Error)]
-#[error("SeqNo must not be zero")]
-pub struct TrySeqNoFromZero;
-
-impl Display for SeqNo {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Display::fmt(&self.0, f)
-    }
 }
 
 struct Entity<E, L, S, EvtToBytes, StateToBytes> {
@@ -387,32 +283,30 @@ where
     StateToBytesError: StdError + Send + Sync + 'static,
 {
     async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
-        // Handle command.
-        match self.event_sourced.handle_cmd(cmd) {
+        let (seq_no, evt) = match self.event_sourced.handle_cmd(cmd) {
             Ok(tagged_evt) => {
                 let TaggedEvt { evt, tag } = tagged_evt.into_tagged_evt();
-                // Persist event.
                 let seq_no = self
                     .evt_log
-                    .persist(self.id, &evt, tag, &self.evt_to_bytes)
+                    .persist(&evt, tag, self.id, &self.evt_to_bytes)
                     .await?;
-
-                // Handle persisted event.
-                let state = self.event_sourced.handle_evt(evt);
-
-                // Persist latest snapshot if any.
-                if let Some(state) = state {
-                    debug!(id = %self.id, %seq_no, "Saving snapshot");
-                    self.snapshot_store
-                        .save(self.id, seq_no, state, &self.state_to_bytes)
-                        .await?;
-                }
-
-                Ok(Ok(()))
+                (seq_no, evt)
             }
 
-            Err(error) => Ok(Err(error)),
+            Err(error) => return Ok(Err(error)),
+        };
+
+        let state = self.event_sourced.handle_evt(evt);
+
+        // Persist latest snapshot if any.
+        if let Some(state) = state {
+            debug!(id = %self.id, %seq_no, "Saving snapshot");
+            self.snapshot_store
+                .save(self.id, seq_no, state, &self.state_to_bytes)
+                .await?;
         }
+
+        Ok(Ok(()))
     }
 }
 
@@ -421,7 +315,7 @@ mod tests {
     use super::*;
     use async_stream::stream;
     use bytes::BytesMut;
-    use futures::{stream, Stream};
+    use futures::Stream;
     use prost::Message;
     use std::convert::Infallible;
 
@@ -460,16 +354,16 @@ mod tests {
     impl EvtLog for TestEvtLog {
         type Error = TestEvtLogError;
 
-        async fn persist<'a, E, ToBytes, ToBytesError>(
-            &'a mut self,
-            _id: Uuid,
-            _evt: &'a E,
+        async fn persist<E, ToBytes, ToBytesError>(
+            &mut self,
+            _evt: &E,
             _tag: Option<String>,
-            _to_bytes: &'a ToBytes,
+            _id: Uuid,
+            _to_bytes: &ToBytes,
         ) -> Result<SeqNo, Self::Error>
         where
-            E: Send + Sync + 'a,
-            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Send + Sync,
+            E: Sync,
+            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
         {
             Ok(SeqNo(43.try_into().unwrap()))
@@ -479,16 +373,16 @@ mod tests {
             Ok(Some(SeqNo(42.try_into().unwrap())))
         }
 
-        async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
-            &'a self,
+        async fn evts_by_id<E, FromBytes, FromBytesError>(
+            &self,
             _id: Uuid,
             from_seq_no: SeqNo,
-            evt_from_bytes: EvtFromBytes,
+            evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
-            E: Send + 'a,
-            EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-            EvtFromBytesError: StdError + Send + Sync + 'static,
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+            FromBytesError: StdError + Send + Sync + 'static,
         {
             let evts = stream! {
                 for n in 0..666 {
@@ -496,8 +390,8 @@ mod tests {
                         let seq_no = (n * 3 + evt).try_into().unwrap();
                         if from_seq_no <= seq_no  {
                             let mut bytes = BytesMut::new();
-                            evt.encode(&mut bytes).map_err(|source| TestEvtLogError(source.into()))?;
-                            let evt = evt_from_bytes(bytes.into()).map_err(|source| TestEvtLogError(source.into()))?;
+                            evt.encode(&mut bytes).map_err(|error| TestEvtLogError(error.into()))?;
+                            let evt = evt_from_bytes(bytes.into()).map_err(|error| TestEvtLogError(error.into()))?;
                             yield Ok((seq_no, evt));
                         }
                     }
@@ -507,19 +401,32 @@ mod tests {
             Ok(evts)
         }
 
-        async fn evts_by_tag<'a, E, T, EvtFromBytes, EvtFromBytesError>(
-            &'a self,
-            _tag: T,
-            _from_seq_no: SeqNo,
-            _evt_from_bytes: EvtFromBytes,
+        async fn evts_by_tag<E, FromBytes, FromBytesError>(
+            &self,
+            _tag: String,
+            from_seq_no: SeqNo,
+            evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
-            E: Send + 'a,
-            EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-            EvtFromBytesError: StdError + Send + Sync + 'static,
-            T: Into<String> + Send,
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+            FromBytesError: StdError + Send + Sync + 'static,
         {
-            Ok(stream::empty())
+            let evts = stream! {
+                for n in 0..666 {
+                    for evt in 1..=3 {
+                        let seq_no = (n * 3 + evt).try_into().unwrap();
+                        if from_seq_no <= seq_no  {
+                            let mut bytes = BytesMut::new();
+                            evt.encode(&mut bytes).map_err(|error| TestEvtLogError(error.into()))?;
+                            let evt = evt_from_bytes(bytes.into()).map_err(|error| TestEvtLogError(error.into()))?;
+                            yield Ok((seq_no, evt));
+                        }
+                    }
+
+                }
+            };
+            Ok(evts)
         }
     }
 
@@ -533,31 +440,29 @@ mod tests {
     impl SnapshotStore for TestSnapshotStore {
         type Error = TestSnapshotStoreError;
 
-        async fn save<'a, S, StateToBytes, StateToBytesError>(
-            &'a mut self,
+        async fn save<S, ToBytes, ToBytesError>(
+            &mut self,
             _id: Uuid,
             _seq_no: SeqNo,
             _state: S,
-            _state_to_bytes: &'a StateToBytes,
+            _state_to_bytes: &ToBytes,
         ) -> Result<(), Self::Error>
         where
-            S: Send + Sync + 'a,
-            StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-            StateToBytesError: StdError + Send + Sync + 'static,
+            S: Send,
+            ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
+            ToBytesError: StdError,
         {
             Ok(())
         }
 
-        async fn load<'a, S, StateFromBytes, StateFromBytesError>(
-            &'a self,
+        async fn load<S, FromBytes, FromBytesError>(
+            &self,
             _id: Uuid,
-            state_from_bytes: StateFromBytes,
+            state_from_bytes: FromBytes,
         ) -> Result<Option<Snapshot<S>>, Self::Error>
         where
-            S: 'a,
-            StateFromBytes:
-                Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
-            StateFromBytesError: StdError + Send + Sync + 'static,
+            FromBytes: Fn(Bytes) -> Result<S, FromBytesError>,
+            FromBytesError: StdError,
         {
             let mut bytes = BytesMut::new();
             42.encode(&mut bytes).unwrap();

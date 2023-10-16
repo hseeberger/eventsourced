@@ -13,30 +13,29 @@ pub struct NoopSnapshotStore;
 impl SnapshotStore for NoopSnapshotStore {
     type Error = Infallible;
 
-    async fn save<'a, S, StateToBytes, StateToBytesError>(
-        &'a mut self,
+    async fn save<S, ToBytes, ToBytesError>(
+        &mut self,
         _id: Uuid,
         _seq_no: SeqNo,
         _state: S,
-        _state_to_bytes: &'a StateToBytes,
+        _state_to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
     where
-        S: Send + Sync + 'a,
-        StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-        StateToBytesError: StdError + Send + Sync + 'static,
+        S: Send,
+        ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
+        ToBytesError: StdError,
     {
         Ok(())
     }
 
-    async fn load<'a, S, StateFromBytes, StateFromBytesError>(
-        &'a self,
+    async fn load<S, FromBytes, FromBytesError>(
+        &self,
         _id: Uuid,
-        _state_from_bytes: StateFromBytes,
+        _state_from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
-        S: 'a,
-        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
-        StateFromBytesError: StdError + Send + Sync + 'static,
+        FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
+        FromBytesError: StdError + Send,
     {
         Ok(None)
     }

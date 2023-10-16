@@ -7,6 +7,8 @@ use bytes::Bytes;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{from_slice, to_value, Error};
 
+/// Create a serde_json based [Binarizer].
+#[allow(clippy::type_complexity)]
 pub fn binarizer<E, S>() -> Binarizer<
     for<'a> fn(&'a E) -> Result<Bytes, Error>,
     fn(Bytes) -> Result<E, Error>,
