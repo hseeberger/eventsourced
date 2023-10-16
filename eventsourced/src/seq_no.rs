@@ -6,7 +6,7 @@ use thiserror::Error;
 
 /// Sequence number used for events by event log and snapshot store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SeqNo(NonZeroU64);
+pub struct SeqNo(pub(crate) NonZeroU64);
 
 impl SeqNo {
     #[allow(missing_docs)]

@@ -10,31 +10,31 @@ use std::{error::Error as StdError, future::Future};
 use uuid::Uuid;
 
 /// Persistence for snapshots.
-pub trait SnapshotStore: Send + 'static {
-    type Error: StdError;
+pub trait SnapshotStore: Clone + Send + 'static {
+    type Error: StdError + Send + Sync + 'static;
 
     /// Save the given snapshot state for the given entity ID and sequence number.
-    fn save<S, StateToBytes, StateToBytesError>(
+    fn save<S, ToBytes, ToBytesError>(
         &mut self,
         id: Uuid,
         seq_no: SeqNo,
         state: S,
-        state_to_bytes: &StateToBytes,
+        state_to_bytes: &ToBytes,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send
     where
         S: Send,
-        StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Sync,
-        StateToBytesError: StdError;
+        ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
+        ToBytesError: StdError;
 
     /// Find and possibly load the [Snapshot] for the given entity ID.
-    fn load<S, StateFromBytes, StateFromBytesError>(
+    fn load<S, FromBytes, FromBytesError>(
         &self,
         id: Uuid,
-        state_from_bytes: StateFromBytes,
-    ) -> impl Future<Output = Result<Option<Snapshot<S>>, Self::Error>>
+        state_from_bytes: FromBytes,
+    ) -> impl Future<Output = Result<Option<Snapshot<S>>, Self::Error>> + Send
     where
-        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError>,
-        StateFromBytesError: StdError;
+        FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
+        FromBytesError: StdError + Send + Sync + 'static;
 }
 
 /// Snapshot state along with its sequence number and optional metadata.

@@ -7,8 +7,8 @@ use std::{error::Error as StdError, future::Future, num::NonZeroU64};
 use uuid::Uuid;
 
 /// Persistence for events.
-pub trait EvtLog: Send + 'static {
-    type Error: StdError;
+pub trait EvtLog: Clone + Send + 'static {
+    type Error: StdError + Send + Sync + 'static;
 
     /// The maximum value for sequence numbers. Defaults to `u64::MAX` unless overriden by an
     /// implementation.
@@ -16,41 +16,49 @@ pub trait EvtLog: Send + 'static {
 
     /// Persist the given event and optional tag for the given entity ID and return the sequence
     /// number for the persisted event.
-    fn persist<E, EvtToBytes, EvtToBytesError>(
+    fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
         tag: Option<String>,
         id: Uuid,
-        evt_to_bytes: &EvtToBytes,
+        evt_to_bytes: &ToBytes,
     ) -> impl Future<Output = Result<SeqNo, Self::Error>> + Send
     where
-        EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError>,
-        EvtToBytesError: StdError;
+        E: Sync,
+        ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
+        ToBytesError: StdError;
 
     /// Get the last sequence number for the given entity ID.
-    fn last_seq_no(&self, id: Uuid) -> impl Future<Output = Result<Option<SeqNo>, Self::Error>>;
+    fn last_seq_no(
+        &self,
+        id: Uuid,
+    ) -> impl Future<Output = Result<Option<SeqNo>, Self::Error>> + Send;
 
     /// Get the events for the given entity ID starting with the given sequence number.
-    fn evts_by_id<E, EvtFromBytes, EvtFromBytesError>(
+    fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         id: Uuid,
         from_seq_no: SeqNo,
-        evt_from_bytes: EvtFromBytes,
-    ) -> impl Future<Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>>, Self::Error>>
+        evt_from_bytes: FromBytes,
+    ) -> impl Future<
+        Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>,
+    > + Send
     where
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError>,
-        EvtFromBytesError: StdError;
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+        FromBytesError: StdError + Send + Sync + 'static;
 
     /// Get the events for the given tag starting with the given sequence number.
-    fn evts_by_tag<E, EvtFromBytes, EvtFromBytesError>(
+    fn evts_by_tag<E, FromBytes, FromBytesError>(
         &self,
         tag: String,
         from_seq_no: SeqNo,
-        evt_from_bytes: EvtFromBytes,
+        evt_from_bytes: FromBytes,
     ) -> impl Future<
         Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>,
-    >
+    > + Send
     where
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError>,
-        EvtFromBytesError: StdError;
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+        FromBytesError: StdError + Send + Sync + 'static;
 }
