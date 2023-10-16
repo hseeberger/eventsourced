@@ -75,17 +75,17 @@ impl Debug for NatsSnapshotStore {
 impl SnapshotStore for NatsSnapshotStore {
     type Error = Error;
 
-    async fn save<'a, S, StateToBytes, StateToBytesError>(
-        &'a mut self,
+    async fn save<S, ToBytes, ToBytesError>(
+        &mut self,
         id: Uuid,
         seq_no: SeqNo,
         state: S,
-        state_to_bytes: &'a StateToBytes,
+        state_to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
     where
-        S: Send + Sync + 'a,
-        StateToBytes: Fn(&S) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-        StateToBytesError: StdError + Send + Sync + 'static,
+        S: Send,
+        ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
+        ToBytesError: StdError + Send + Sync + 'static,
     {
         let mut bytes = BytesMut::new();
         let state =
@@ -111,15 +111,14 @@ impl SnapshotStore for NatsSnapshotStore {
         Ok(())
     }
 
-    async fn load<'a, S, StateFromBytes, StateFromBytesError>(
-        &'a self,
+    async fn load<S, FromBytes, FromBytesError>(
+        &self,
         id: Uuid,
-        state_from_bytes: StateFromBytes,
+        state_from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
-        S: 'a,
-        StateFromBytes: Fn(Bytes) -> Result<S, StateFromBytesError> + Copy + Send + Sync + 'static,
-        StateFromBytesError: StdError + Send + Sync + 'static,
+        FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
+        FromBytesError: StdError + Send + Sync + 'static,
     {
         let snapshot = self
             .get_bucket(&self.bucket)

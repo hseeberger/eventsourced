@@ -5,6 +5,8 @@ use crate::Binarizer;
 use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 
+/// Create a prost based [Binarizer].
+#[allow(clippy::type_complexity)]
 pub fn binarizer<E, S>() -> Binarizer<
     for<'a> fn(&'a E) -> Result<Bytes, EncodeError>,
     fn(Bytes) -> Result<E, DecodeError>,

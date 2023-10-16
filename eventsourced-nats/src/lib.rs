@@ -1,10 +1,6 @@
 //! [EvtLog](eventsourced::EvtLog) and [SnapshotStore](eventsourced::SnapshotStore) implementations
 //! based upon [NATS](https://nats.io/).
 
-#![allow(incomplete_features)]
-#![feature(async_fn_in_trait)]
-#![feature(return_position_impl_trait_in_trait)]
-
 mod evt_log;
 mod snapshot_store;
 
@@ -23,23 +19,23 @@ pub enum Error {
     Nats(String, #[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// Event cannot be converted into bytes.
-    #[error("Cannot convert event to bytes")]
+    #[error("cannot convert event to bytes")]
     EvtsIntoBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
     /// Bytes cannot be converted to event.
-    #[error("Cannot convert bytes to event")]
+    #[error("cannot convert bytes to event")]
     EvtsFromBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
     /// Snapshot cannot be encoded as Protocol Buffers.
-    #[error("Cannot encode snapshot as Protocol Buffers")]
+    #[error("cannot encode snapshot as Protocol Buffers")]
     EncodeSnapshot(#[from] EncodeError),
 
     /// Snapshot cannot be decoded from Protocol Buffers.
-    #[error("Cannot decode snapshot from Protocol Buffers")]
+    #[error("cannot decode snapshot from Protocol Buffers")]
     DecodeSnapshot(#[from] DecodeError),
 
     /// Invalid sequence number.
-    #[error("Invalid sequence number")]
+    #[error("invalid sequence number")]
     InvalidSeqNo(#[source] TrySeqNoFromZero),
 }
 

@@ -24,7 +24,7 @@ pub trait SnapshotStore: Clone + Send + 'static {
     where
         S: Send,
         ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
-        ToBytesError: StdError;
+        ToBytesError: StdError + Send + Sync + 'static;
 
     /// Find and possibly load the [Snapshot] for the given entity ID.
     fn load<S, FromBytes, FromBytesError>(

@@ -117,20 +117,20 @@ impl Debug for NatsEvtLog {
 impl EvtLog for NatsEvtLog {
     type Error = Error;
 
-    async fn persist<'a, E, EvtToBytes, EvtToBytesError>(
-        &'a mut self,
-        id: Uuid,
-        evt: &'a E,
+    async fn persist<E, ToBytes, ToBytesError>(
+        &mut self,
+        evt: &E,
         tag: Option<String>,
-        evt_to_bytes: &'a EvtToBytes,
+        id: Uuid,
+        to_bytes: &ToBytes,
     ) -> Result<SeqNo, Self::Error>
     where
-        E: Debug + Send + Sync + 'a,
-        EvtToBytes: Fn(&E) -> Result<Bytes, EvtToBytesError> + Send + Sync,
-        EvtToBytesError: StdError + Send + Sync + 'static,
+        E: Sync,
+        ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
+        ToBytesError: StdError + Send + Sync + 'static,
     {
         // Convert event into bytes.
-        let bytes = evt_to_bytes(evt).map_err(|error| Error::EvtsIntoBytes(Box::new(error)))?;
+        let bytes = to_bytes(evt).map_err(|error| Error::EvtsIntoBytes(error.into()))?;
 
         // Publish event to NATS subject and await ACK.
         let subject = match tag {
@@ -171,18 +171,18 @@ impl EvtLog for NatsEvtLog {
             )
     }
 
-    async fn evts_by_id<'a, E, EvtFromBytes, EvtFromBytesError>(
-        &'a self,
+    async fn evts_by_id<E, FromBytes, FromBytesError>(
+        &self,
         id: Uuid,
         from_seq_no: SeqNo,
-        evt_from_bytes: EvtFromBytes,
+        from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
     where
-        E: Debug + Send + 'a,
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: StdError + Send + Sync + 'static,
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+        FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, %from_seq_no, "Building events by ID stream");
+        debug!(%id, %from_seq_no, "building events by ID stream");
 
         // Get message stream.
         let subject = format!("{}.{id}.*", self.stream_name);
@@ -203,7 +203,7 @@ impl EvtLog for NatsEvtLog {
                 .info()
                 .map_err(|error| Error::Nats("cannot get message info".into(), error))
                 .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
-            evt_from_bytes(msg.message.payload)
+            from_bytes(msg.message.payload)
                 .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
                 .map(|evt| (seq_no, evt))
         });
@@ -211,21 +211,18 @@ impl EvtLog for NatsEvtLog {
         Ok(evts)
     }
 
-    async fn evts_by_tag<'a, E, T, EvtFromBytes, EvtFromBytesError>(
-        &'a self,
-        tag: T,
+    async fn evts_by_tag<E, FromBytes, FromBytesError>(
+        &self,
+        tag: String,
         from_seq_no: SeqNo,
-        evt_from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send + '_, Self::Error>
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
     where
-        E: Send + 'a,
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: StdError + Send + Sync + 'static,
-        T: Into<String> + Send,
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        FromBytesError: StdError + Send + Sync + 'static,
     {
-        let tag = tag.into();
-
-        debug!(tag, %from_seq_no, "Building events by tag stream");
+        debug!(tag, %from_seq_no, "building events by tag stream");
 
         // Get message stream.
         let subject = format!("{}.*.{tag}", self.stream_name);
@@ -246,7 +243,7 @@ impl EvtLog for NatsEvtLog {
                 .info()
                 .map_err(|error| Error::Nats("cannot get message info".into(), error))
                 .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
-            evt_from_bytes(msg.message.payload)
+            from_bytes(msg.message.payload)
                 .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
                 .map(|evt| (seq_no, evt))
         });
@@ -350,13 +347,13 @@ mod tests {
         assert_eq!(last_seq_no, None);
 
         evt_log
-            .persist(id, &1, Some("tag".to_string()), &convert::prost::to_bytes)
+            .persist(&1, Some("tag".to_string()), id, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &2, None, &convert::prost::to_bytes)
+            .persist(&2, None, id, &convert::prost::to_bytes)
             .await?;
         evt_log
-            .persist(id, &3, Some("tag".to_string()), &convert::prost::to_bytes)
+            .persist(&3, Some("tag".to_string()), id, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, Some(3.try_into().unwrap()));
@@ -371,7 +368,7 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _, _>("tag", SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
             .await?;
         let sum = evts_by_tag
             .take(2)
@@ -384,16 +381,16 @@ mod tests {
             .await?;
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _, _>("tag", SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
             .await?;
 
         evt_log
             .clone()
-            .persist(id, &4, None, &convert::prost::to_bytes)
+            .persist(&4, None, id, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist(id, &5, Some("tag".to_string()), &convert::prost::to_bytes)
+            .persist(&5, Some("tag".to_string()), id, &convert::prost::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, Some(5.try_into().unwrap()));

@@ -63,6 +63,7 @@ pub trait EventSourcedExt {
     /// persisted to the [EvtLog] and then applied to the event handler of the respective
     /// entity. The event handler may decide to save a snapshot which is used to speed up future
     /// spawning.
+    #[allow(async_fn_in_trait)]
     async fn spawn<
         L,
         S,
@@ -204,6 +205,7 @@ pub enum SpawnError {
 
 /// A handle for a spawned [EventSourced] entity which can be used to invoke its command handler.
 #[derive(Debug, Clone)]
+#[allow(clippy::type_complexity)]
 pub struct EntityRef<E>
 where
     E: EventSourced,
@@ -362,7 +364,7 @@ mod tests {
         where
             E: Sync,
             ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
-            ToBytesError: StdError,
+            ToBytesError: StdError + Send + Sync + 'static,
         {
             Ok(SeqNo(43.try_into().unwrap()))
         }
@@ -379,7 +381,7 @@ mod tests {
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             let evts = stream! {
@@ -407,7 +409,7 @@ mod tests {
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             let evts = stream! {

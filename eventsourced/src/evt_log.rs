@@ -26,7 +26,7 @@ pub trait EvtLog: Clone + Send + 'static {
     where
         E: Sync,
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
-        ToBytesError: StdError;
+        ToBytesError: StdError + Send + Sync + 'static;
 
     /// Get the last sequence number for the given entity ID.
     fn last_seq_no(
@@ -45,7 +45,7 @@ pub trait EvtLog: Clone + Send + 'static {
     > + Send
     where
         E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
         FromBytesError: StdError + Send + Sync + 'static;
 
     /// Get the events for the given tag starting with the given sequence number.
@@ -59,6 +59,6 @@ pub trait EvtLog: Clone + Send + 'static {
     > + Send
     where
         E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static;
 }
