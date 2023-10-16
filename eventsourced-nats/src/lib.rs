@@ -41,5 +41,5 @@ pub enum Error {
 
 #[cfg(test)]
 pub mod tests {
-    pub const NATS_VERSION: &str = "2.9.11";
+    pub const NATS_VERSION: &str = "2.10.3";
 }

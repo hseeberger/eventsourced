@@ -1,2 +1,0 @@
-pre-release-commit-message = "release"
-tag-message                = "release[{{crate_name}}]: {{version}}"

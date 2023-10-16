@@ -80,7 +80,7 @@ impl EventSourced for Counter {
 
     fn set_state(&mut self, _state: Self::State) {
         // This method cannot be called as long as `handle_evt` always returns `None`.
-        panic!("No snapshots");
+        panic!("no snapshots");
     }
 }
 ```
@@ -101,7 +101,7 @@ let counter = counter
         convert::serde_json::binarizer(),
     )
     .await
-    .context("Cannot spawn entity")?;
+    .context("cannot spawn entity")?;
 
 tasks.spawn(async move {
     for n in 0..config.evt_count / 2 {
@@ -111,9 +111,9 @@ tasks.spawn(async move {
         counter
             .handle_cmd(Cmd::Inc(n as u64))
             .await
-            .context("Cannot handle Inc command")
+            .context("cannot handle Inc command")
             .unwrap()
-            .context("Invalid command")
+            .context("invalid command")
             .unwrap();
         ...
     }

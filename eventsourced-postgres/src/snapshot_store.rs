@@ -13,6 +13,7 @@ use tokio_postgres::NoTls;
 use tracing::debug;
 use uuid::Uuid;
 
+/// A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
 pub struct PostgresSnapshotStore {
     cnn_pool: CnnPool<NoTls>,
@@ -21,7 +22,7 @@ pub struct PostgresSnapshotStore {
 impl PostgresSnapshotStore {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "Creating PostgresSnapshotStore");
+        debug!(?config, "creating PostgresSnapshotStore");
 
         // Create connection pool.
         let tls = NoTls;
@@ -76,7 +77,7 @@ impl SnapshotStore for PostgresSnapshotStore {
         ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, %seq_no, "Saving snapshot");
+        debug!(%id, %seq_no, "saving snapshot");
 
         let bytes = state_to_bytes(&state).map_err(|source| Error::ToBytes(Box::new(source)))?;
         self.cnn()
@@ -99,7 +100,7 @@ impl SnapshotStore for PostgresSnapshotStore {
         FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, "Loading snapshot");
+        debug!(%id, "loading snapshot");
 
         self.cnn()
             .await?

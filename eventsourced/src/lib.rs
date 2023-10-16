@@ -254,7 +254,7 @@ pub enum EntityRefError {
     RcvHandlerResult(#[from] oneshot::error::RecvError),
 }
 
-/// Collection of conversion functions from and to [Bytes](bytes::Bytes) for events and snapshots.
+/// Collection of conversion functions from and to [Bytes] for events and snapshots.
 pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub evt_to_bytes: EvtToBytes,
     pub evt_from_bytes: EvtFromBytes,
@@ -300,7 +300,7 @@ where
 
         // Persist latest snapshot if any.
         if let Some(state) = state {
-            debug!(id = %self.id, %seq_no, "Saving snapshot");
+            debug!(id = %self.id, %seq_no, "saving snapshot");
             self.snapshot_store
                 .save(self.id, seq_no, state, &self.state_to_bytes)
                 .await?;

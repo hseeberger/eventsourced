@@ -1,6 +1,6 @@
 [package]
 name          = "eventsourced-nats"
-description   = "NATS implementation for eventsourced EvtLog and SnapshotStore"
+description   = "NATS implementation for eventsourced EvtLog and SnapshotStore."
 version       = "0.6.0"
 edition       = { workspace = true }
 authors       = { workspace = true }
@@ -11,7 +11,7 @@ repository    = { workspace = true }
 documentation = { workspace = true }
 
 [dependencies]
-eventsourced = { path = "../eventsourced", version = "0.6.0" }
+eventsourced = { path = "../eventsourced" }
 async-nats   = { workspace = true }
 bytes        = { workspace = true }
 futures      = { workspace = true }

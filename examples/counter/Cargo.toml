@@ -2,7 +2,6 @@
 name          = "counter"
 description   = "eventsourced example base"
 version       = "0.3.0"
-publish       = false
 edition       = { workspace = true }
 authors       = { workspace = true }
 license       = { workspace = true }
@@ -10,6 +9,7 @@ readme        = { workspace = true }
 homepage      = { workspace = true }
 repository    = { workspace = true }
 documentation = { workspace = true }
+publish       = false
 
 [dependencies]
 eventsourced = { path = "../../eventsourced", default-features = false, features = [ "serde_json" ] }

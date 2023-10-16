@@ -28,7 +28,7 @@ pub struct PostgresEvtLog {
 impl PostgresEvtLog {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "Creating PostgresEvtLog");
+        debug!(?config, "creating PostgresEvtLog");
 
         // Create connection pool.
         let tls = NoTls;
@@ -113,7 +113,7 @@ impl PostgresEvtLog {
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
         EvtFromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(tag, %from_seq_no, "Querying events");
+        debug!(tag, %from_seq_no, "querying events");
 
         let params: [&(dyn ToSql + Sync); 2] = [&tag, &(from_seq_no.as_u64() as i64)];
         let evts = self
