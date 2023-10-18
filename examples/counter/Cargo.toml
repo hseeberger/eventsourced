@@ -12,11 +12,10 @@ documentation = { workspace = true }
 publish       = false
 
 [dependencies]
-eventsourced = { path = "../../eventsourced", default-features = false, features = [ "serde_json" ] }
+eventsourced = { path = "../../eventsourced", features = [ "serde_json" ] }
 anyhow       = { workspace = true }
 bytes        = { workspace = true }
 serde        = { workspace = true }
-prost        = { workspace = true }
 tokio        = { workspace = true, features = [ "rt-multi-thread" ] }
 thiserror    = { workspace = true }
 tracing      = { workspace = true }

@@ -18,5 +18,5 @@ eventsourced-nats  = { path = "../../eventsourced-nats" }
 anyhow             = { workspace = true }
 configured         = { workspace = true }
 serde              = { workspace = true }
-tokio              = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+tokio              = { workspace = true, features = [ "macros" ] }
 tracing-subscriber = { workspace = true }
