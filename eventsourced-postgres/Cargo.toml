@@ -18,14 +18,15 @@ bytes           = { workspace = true }
 futures         = { workspace = true }
 humantime-serde = { workspace = true }
 serde           = { workspace = true }
-tokio           = { workspace = true, features = [ "time" ] }
 thiserror       = { workspace = true }
+tokio           = { workspace = true }
 tokio-postgres  = { workspace = true }
 tracing         = { workspace = true }
 uuid            = { workspace = true }
 
 [dev-dependencies]
+eventsourced           = { path = "../eventsourced", version = "0.7.0", features = [ "prost" ] }
 prost                  = { workspace = true }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }
-tokio                  = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+tokio                  = { workspace = true, features = [ "macros" ] }

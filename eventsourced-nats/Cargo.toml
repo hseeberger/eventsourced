@@ -24,11 +24,11 @@ tracing      = { workspace = true }
 uuid         = { workspace = true }
 
 [dev-dependencies]
-anyhow                 = { workspace = true }
+eventsourced           = { path = "../eventsourced", version = "0.7.0", features = [ "prost" ] }
 prost                  = { workspace = true }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }
-tokio                  = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+tokio                  = { workspace = true, features = [ "macros" ] }
 
 [build-dependencies]
 anyhow      = { workspace = true }
