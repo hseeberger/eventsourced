@@ -15,4 +15,7 @@ lint:
 test:
 	cargo test --all-features
 
+doc:
+	cargo doc --all-features
+
 all: fmt check lint test

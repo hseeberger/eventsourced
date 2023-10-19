@@ -1,4 +1,4 @@
-//! Conversion to and from [bytes::Bytes] for any type that implements [prost::Message] based upon
+//! Conversion to and from [Bytes] for any type that implements [Message] based upon
 //! [prost](https://github.com/tokio-rs/prost).
 
 use crate::Binarizer;
