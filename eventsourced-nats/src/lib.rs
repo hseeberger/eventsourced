@@ -7,7 +7,7 @@ mod snapshot_store;
 pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
 pub use snapshot_store::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore};
 
-use eventsourced::TrySeqNoFromZero;
+use eventsourced::ZeroSeqNoError;
 use prost::{DecodeError, EncodeError};
 use std::error::Error as StdError;
 use thiserror::Error;
@@ -36,7 +36,7 @@ pub enum Error {
 
     /// Invalid sequence number.
     #[error("invalid sequence number")]
-    InvalidSeqNo(#[source] TrySeqNoFromZero),
+    InvalidSeqNo(#[source] ZeroSeqNoError),
 }
 
 #[cfg(test)]

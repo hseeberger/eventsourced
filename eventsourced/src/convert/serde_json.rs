@@ -1,6 +1,5 @@
-//! Conversion to [bytes::Bytes] for any type that implements [serde::Serialize] and from any type
-//!  that implements [serde::de::DeserializeOwned] based upon
-//! [serde_json](https://docs.rs/serde_json/latest/serde_json).
+//! Conversion to [Bytes] for any type that implements [Serialize] and from any type that implements
+//! [DeserializeOwned] based upon [serde_json](https://docs.rs/serde_json/latest/serde_json).
 
 use crate::Binarizer;
 use bytes::Bytes;

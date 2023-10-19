@@ -11,7 +11,7 @@ use bb8_postgres::{
     bb8::{Pool, PooledConnection},
     PostgresConnectionManager,
 };
-use eventsourced::TrySeqNoFromZero;
+use eventsourced::ZeroSeqNoError;
 use thiserror::Error;
 
 type CnnPool<T> = Pool<PostgresConnectionManager<T>>;
@@ -55,5 +55,5 @@ pub enum Error {
 
     /// Invalid sequence number.
     #[error("invalid sequence number")]
-    InvalidSeqNo(#[source] TrySeqNoFromZero),
+    InvalidSeqNo(#[source] ZeroSeqNoError),
 }
