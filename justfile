@@ -16,6 +16,6 @@ test:
 	cargo test --all-features
 
 doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --all-features
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
 all: fmt check lint test doc
