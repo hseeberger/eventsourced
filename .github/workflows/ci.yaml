@@ -46,3 +46,6 @@ jobs:
 
       - name: Run tests
         run: just test
+
+      - name: Run doc
+        run: just doc
