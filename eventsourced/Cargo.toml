@@ -1,7 +1,7 @@
 [package]
 name          = "eventsourced"
 description   = "Event sourced entities in Rust."
-version       = "0.7.0"
+version       = "0.7.1"
 edition       = { workspace = true }
 authors       = { workspace = true }
 license       = { workspace = true }
@@ -18,7 +18,7 @@ prost            = { workspace = true, optional = true }
 serde            = { workspace = true }
 serde_json       = { workspace = true, optional = true }
 thiserror        = { workspace = true }
-tokio            = { workspace = true }
+tokio            = { workspace = true, features = [ "rt-multi-thread" ] }
 tracing          = { workspace = true }
 uuid             = { workspace = true }
 
