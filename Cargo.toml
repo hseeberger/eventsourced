@@ -23,7 +23,7 @@ async-nats             = { version = "0.32" }
 async-stream           = { version = "0.3" }
 bb8-postgres           = { version = "0.8" }
 bytes                  = { version = "1.5" }
-configured             = { version = "0.5" }
+configured             = { version = "0.6" }
 futures                = { version = "0.3" }
 humantime-serde        = { version = "1.1" }
 pin-project-lite       = { version = "0.2" }
