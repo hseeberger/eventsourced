@@ -15,6 +15,9 @@ lint:
 test:
 	cargo test --all-features
 
+fix:
+	cargo fix --allow-dirty --allow-staged --all-features
+
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
