@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced-postgres"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "async-stream",
  "bb8-postgres",
