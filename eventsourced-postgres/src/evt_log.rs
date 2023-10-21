@@ -270,7 +270,7 @@ impl EvtLog for PostgresEvtLog {
         let last_seq_no = self
             .cnn()
             .await?
-            .query_one("SELECT COALESCE(MAX(seq_no), 0) FROM evts", &[])
+            .query_one("SELECT COALESCE(MAX(seq_no), 1) FROM evts", &[])
             .await
             .map_err(Error::ExecuteQuery)
             .and_then(|row| {
