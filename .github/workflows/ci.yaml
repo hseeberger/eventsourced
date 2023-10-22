@@ -6,10 +6,15 @@ on:
       - main
     tags-ignore:
       - v*
-
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+  schedule:
+    - cron: 0 4/8 * * *
+
+env:
+  IS_SCHEDULE: ${{ github.event_name == 'schedule' && 'true' || '' }}
 
 jobs:
   ci:
@@ -18,12 +23,20 @@ jobs:
       - name: Check out
         uses: actions/checkout@v3
 
+      - name: Determine toolchain
+        run: |
+          if [ -z $IS_SCHEDULE ]; then
+            toolchain=$(grep channel rust-toolchain.toml | sed -r 's/channel = "(.*)"/\1/')
+          else
+            toolchain='nightly'
+          fi
+          echo "setting RUSTUP_TOOLCHAIN to $toolchain"
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
       - name: Install Rust toolchain
         run: |
-          rustup update
-          rustup toolchain install nightly --profile minimal
-          rustup component add rustfmt --toolchain nightly
-          rustup component add clippy --toolchain nightly
+          rustup toolchain install $RUSTUP_TOOLCHAIN
+          rustup component add clippy
 
       - name: Install just
         uses: taiki-e/install-action@v2
