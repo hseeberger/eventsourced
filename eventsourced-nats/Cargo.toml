@@ -1,11 +1,11 @@
 [package]
 name          = "eventsourced-nats"
-description   = "NATS implementation for eventsourced EvtLog and SnapshotStore."
+description   = "NATS implementation for EventSourced EvtLog and SnapshotStore."
 version       = "0.7.1"
+readme        = "README.md"
 edition       = { workspace = true }
 authors       = { workspace = true }
 license       = { workspace = true }
-readme        = { workspace = true }
 homepage      = { workspace = true }
 repository    = { workspace = true }
 documentation = "https://docs.rs/eventsourced-nats/latest/eventsourced-nats"

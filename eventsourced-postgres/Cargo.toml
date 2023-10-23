@@ -1,11 +1,11 @@
 [package]
 name          = "eventsourced-postgres"
-description   = "Postgres implementation for eventsourced EvtLog and SnapshotStore."
+description   = "Postgres implementation for EventSourced EvtLog and SnapshotStore."
 version       = "0.7.2"
+readme        = "README.md"
 edition       = { workspace = true }
 authors       = { workspace = true }
 license       = { workspace = true }
-readme        = { workspace = true }
 homepage      = { workspace = true }
 repository    = { workspace = true }
 documentation = "https://docs.rs/eventsourced-postgres/latest/eventsourced-postgres"
