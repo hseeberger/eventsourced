@@ -2,10 +2,10 @@
 name          = "eventsourced"
 description   = "Event sourced entities in Rust."
 version       = "0.7.1"
+readme        = "README.md"
 edition       = { workspace = true }
 authors       = { workspace = true }
 license       = { workspace = true }
-readme        = { workspace = true }
 homepage      = { workspace = true }
 repository    = { workspace = true }
 documentation = "https://docs.rs/eventsourced/latest/eventsourced"
