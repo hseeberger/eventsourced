@@ -11,7 +11,7 @@ repository  = { workspace = true }
 publish     = false
 
 [dependencies]
-eventsourced = { path = "../../eventsourced", features = [ "serde_json" ] }
+eventsourced = { path = "../../eventsourced", features = [ "serde-json" ] }
 anyhow       = { workspace = true }
 bytes        = { workspace = true }
 serde        = { workspace = true }

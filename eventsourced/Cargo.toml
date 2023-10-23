@@ -25,3 +25,6 @@ uuid             = { workspace = true }
 [dev-dependencies]
 async-stream = { workspace = true }
 tokio        = { workspace = true, features = [ "macros", "rt-multi-thread" ] }
+
+[features]
+serde-json = [ "dep:serde_json" ]

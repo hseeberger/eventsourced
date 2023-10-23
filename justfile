@@ -2,7 +2,10 @@ set shell := ["bash", "-uc"]
 
 check:
 	@echo "using toolchain $RUSTUP_TOOLCHAIN"
-	cargo check --tests --all-features
+	cargo check --tests --package eventsourced --features prost
+	cargo check --tests --package eventsourced --features serde-json
+	cargo check --tests --package eventsourced-nats
+	cargo check --tests --package eventsourced-postgres
 
 fmt:
 	@echo "using toolchain $RUSTUP_TOOLCHAIN"

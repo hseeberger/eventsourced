@@ -1,4 +1,4 @@
 #[cfg(feature = "prost")]
 pub mod prost;
-#[cfg(feature = "serde_json")]
+#[cfg(feature = "serde-json")]
 pub mod serde_json;
