@@ -21,7 +21,7 @@ pub trait EvtLog: Clone + Send + 'static {
         evt: &E,
         tag: Option<String>,
         id: Uuid,
-        evt_to_bytes: &ToBytes,
+        to_bytes: &ToBytes,
     ) -> impl Future<Output = Result<SeqNo, Self::Error>> + Send
     where
         E: Sync,
@@ -39,7 +39,7 @@ pub trait EvtLog: Clone + Send + 'static {
         &self,
         id: Uuid,
         from_seq_no: SeqNo,
-        evt_from_bytes: FromBytes,
+        from_bytes: FromBytes,
     ) -> impl Future<
         Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>,
     > + Send
@@ -53,7 +53,7 @@ pub trait EvtLog: Clone + Send + 'static {
         &self,
         tag: String,
         from_seq_no: SeqNo,
-        evt_from_bytes: FromBytes,
+        from_bytes: FromBytes,
     ) -> impl Future<
         Output = Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>,
     > + Send

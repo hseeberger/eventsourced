@@ -1,7 +1,6 @@
 //! A [SnapshotStore] implementation that does nothing.
 
-use super::{Snapshot, SnapshotStore};
-use crate::SeqNo;
+use crate::{SeqNo, Snapshot, SnapshotStore};
 use bytes::Bytes;
 use std::{convert::Infallible, error::Error as StdError, fmt::Debug};
 use uuid::Uuid;
@@ -18,7 +17,7 @@ impl SnapshotStore for NoopSnapshotStore {
         _id: Uuid,
         _seq_no: SeqNo,
         _state: S,
-        _state_to_bytes: &ToBytes,
+        _to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
     where
         S: Send,
@@ -31,7 +30,7 @@ impl SnapshotStore for NoopSnapshotStore {
     async fn load<S, FromBytes, FromBytesError>(
         &self,
         _id: Uuid,
-        _state_from_bytes: FromBytes,
+        _from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
         FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
