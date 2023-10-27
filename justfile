@@ -30,4 +30,4 @@ doc:
 	@echo "using toolchain ${RUSTUP_TOOLCHAIN:-NONE}"
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
-all: fmt check lint test doc
+all: check fmt lint test doc
