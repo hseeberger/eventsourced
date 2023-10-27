@@ -131,13 +131,20 @@ impl SnapshotStore for PostgresSnapshotStore {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     host: String,
+
     port: u16,
+
     user: String,
+
     password: String,
+
     dbname: String,
+
     sslmode: String,
+
     #[serde(default = "snapshots_table_default")]
     snapshots_table: String,
+
     #[serde(default)]
     setup: bool,
 }

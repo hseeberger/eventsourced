@@ -45,7 +45,7 @@ pub trait EvtLog: Clone + Send + 'static {
     > + Send
     where
         E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static;
 
     /// Get the events for the given tag starting with the given sequence number.

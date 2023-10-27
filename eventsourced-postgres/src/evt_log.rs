@@ -210,7 +210,7 @@ impl EvtLog for PostgresEvtLog {
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
     where
         E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%id, %from_seq_no, "building events by ID stream");
@@ -316,17 +316,26 @@ impl EvtLog for PostgresEvtLog {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     host: String,
+
     port: u16,
+
     user: String,
+
     password: String,
+
     dbname: String,
+
     sslmode: String,
+
     #[serde(default = "evts_table_default")]
     evts_table: String,
+
     #[serde(default = "poll_interval_default", with = "humantime_serde")]
     poll_interval: Duration,
+
     #[serde(default = "id_broadcast_capacity_default")]
     id_broadcast_capacity: NonZeroUsize,
+
     #[serde(default)]
     setup: bool,
 }
