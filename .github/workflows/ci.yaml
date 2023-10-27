@@ -11,7 +11,7 @@ on:
       - main
   workflow_dispatch:
   schedule:
-    - cron: 0 4/8 * * *
+    - cron: 0 4/12 * * *
 
 env:
   IS_SCHEDULE: ${{ github.event_name == 'schedule' && 'true' || '' }}
@@ -35,8 +35,10 @@ jobs:
 
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install $RUSTUP_TOOLCHAIN
-          rustup component add clippy
+          rm /home/runner/.cargo/bin/rustfmt
+          rustup toolchain install --profile minimal $RUSTUP_TOOLCHAIN
+          rustup component add --toolchain $RUSTUP_TOOLCHAIN rustfmt
+          rustup component add --toolchain $RUSTUP_TOOLCHAIN clippy
 
       - name: Install just
         uses: taiki-e/install-action@v2
@@ -51,8 +53,11 @@ jobs:
       - name: Set up Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Build
+        run: just check
+
       - name: Check code format
-        run: just fmt_check
+        run: just fmt-check
 
       - name: Run linter
         run: just lint

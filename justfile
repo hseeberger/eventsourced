@@ -10,9 +10,9 @@ fmt:
 	@echo "using toolchain ${RUSTUP_TOOLCHAIN:-NONE}"
 	cargo fmt
 
-fmt_check:
+fmt-check:
 	@echo "using toolchain ${RUSTUP_TOOLCHAIN:-NONE}"
-	cargo check
+	cargo fmt --check
 
 lint:
 	@echo "using toolchain ${RUSTUP_TOOLCHAIN:-NONE}"
