@@ -80,7 +80,7 @@ impl SnapshotStore for NatsSnapshotStore {
         id: Uuid,
         seq_no: SeqNo,
         state: S,
-        state_to_bytes: &ToBytes,
+        to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
     where
         S: Send,
@@ -88,8 +88,7 @@ impl SnapshotStore for NatsSnapshotStore {
         ToBytesError: StdError + Send + Sync + 'static,
     {
         let mut bytes = BytesMut::new();
-        let state =
-            state_to_bytes(&state).map_err(|error| Error::EvtsIntoBytes(Box::new(error)))?;
+        let state = to_bytes(&state).map_err(|error| Error::EvtsIntoBytes(Box::new(error)))?;
         let snapshot = proto::Snapshot {
             seq_no: seq_no.as_u64(),
             state,
@@ -114,7 +113,7 @@ impl SnapshotStore for NatsSnapshotStore {
     async fn load<S, FromBytes, FromBytesError>(
         &self,
         id: Uuid,
-        state_from_bytes: FromBytes,
+        from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
         FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
@@ -135,7 +134,7 @@ impl SnapshotStore for NatsSnapshotStore {
                 proto::Snapshot::decode(bytes)
                     .map_err(Error::DecodeSnapshot)
                     .and_then(|proto::Snapshot { seq_no, state }| {
-                        state_from_bytes(state)
+                        from_bytes(state)
                             .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
                             .and_then(|state| {
                                 seq_no

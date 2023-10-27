@@ -19,7 +19,7 @@ pub trait SnapshotStore: Clone + Send + 'static {
         id: Uuid,
         seq_no: SeqNo,
         state: S,
-        state_to_bytes: &ToBytes,
+        to_bytes: &ToBytes,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send
     where
         S: Send,
@@ -30,7 +30,7 @@ pub trait SnapshotStore: Clone + Send + 'static {
     fn load<S, FromBytes, FromBytesError>(
         &self,
         id: Uuid,
-        state_from_bytes: FromBytes,
+        from_bytes: FromBytes,
     ) -> impl Future<Output = Result<Option<Snapshot<S>>, Self::Error>> + Send
     where
         FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,

@@ -70,7 +70,7 @@ impl SnapshotStore for PostgresSnapshotStore {
         id: Uuid,
         seq_no: SeqNo,
         state: S,
-        state_to_bytes: &ToBytes,
+        to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
     where
         S: Send,
@@ -79,7 +79,7 @@ impl SnapshotStore for PostgresSnapshotStore {
     {
         debug!(%id, %seq_no, "saving snapshot");
 
-        let bytes = state_to_bytes(&state).map_err(|source| Error::ToBytes(Box::new(source)))?;
+        let bytes = to_bytes(&state).map_err(|source| Error::ToBytes(Box::new(source)))?;
         self.cnn()
             .await?
             .execute(
@@ -94,7 +94,7 @@ impl SnapshotStore for PostgresSnapshotStore {
     async fn load<S, FromBytes, FromBytesError>(
         &self,
         id: Uuid,
-        state_from_bytes: FromBytes,
+        from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
         FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
@@ -118,7 +118,7 @@ impl SnapshotStore for PostgresSnapshotStore {
                     .map_err(Error::InvalidSeqNo)?;
                 let bytes = row.get::<_, &[u8]>(1);
                 let bytes = Bytes::copy_from_slice(bytes);
-                state_from_bytes(bytes)
+                from_bytes(bytes)
                     .map_err(|source| Error::FromBytes(Box::new(source)))
                     .map(|state| Snapshot::new(seq_no, state))
             })

@@ -66,7 +66,7 @@ impl PostgresEvtLog {
         &self,
         id: Uuid,
         from_seq_no: SeqNo,
-        evt_from_bytes: FromBytes,
+        from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
     where
         E: Send,
@@ -93,7 +93,7 @@ impl PostgresEvtLog {
                         .map_err(Error::InvalidSeqNo)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
-                    evt_from_bytes(bytes)
+                    from_bytes(bytes)
                         .map_err(|source| Error::FromBytes(Box::new(source)))
                         .map(|evt| (seq_no, evt))
                 })
@@ -106,7 +106,7 @@ impl PostgresEvtLog {
         &self,
         tag: &str,
         from_seq_no: SeqNo,
-        evt_from_bytes: EvtFromBytes,
+        from_bytes: EvtFromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
     where
         E: Send,
@@ -133,7 +133,7 @@ impl PostgresEvtLog {
                         .map_err(Error::InvalidSeqNo)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
-                    evt_from_bytes(bytes)
+                    from_bytes(bytes)
                         .map_err(|source| Error::FromBytes(Box::new(source)))
                         .map(|evt| (seq_no, evt))
                 })
