@@ -88,7 +88,7 @@ impl SnapshotStore for NatsSnapshotStore {
         ToBytesError: StdError + Send + Sync + 'static,
     {
         let mut bytes = BytesMut::new();
-        let state = to_bytes(&state).map_err(|error| Error::EvtsIntoBytes(Box::new(error)))?;
+        let state = to_bytes(&state).map_err(|error| Error::IntoBytes(Box::new(error)))?;
         let snapshot = proto::Snapshot {
             seq_no: seq_no.as_u64(),
             state,
@@ -135,7 +135,7 @@ impl SnapshotStore for NatsSnapshotStore {
                     .map_err(Error::DecodeSnapshot)
                     .and_then(|proto::Snapshot { seq_no, state }| {
                         from_bytes(state)
-                            .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
+                            .map_err(|error| Error::FromBytes(Box::new(error)))
                             .and_then(|state| {
                                 seq_no
                                     .try_into()
@@ -161,8 +161,10 @@ impl SnapshotStore for NatsSnapshotStore {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     server_addr: String,
+
     #[serde(default = "bucket_default")]
     bucket: String,
+
     #[serde(default)]
     setup: bool,
 }

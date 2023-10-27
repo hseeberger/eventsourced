@@ -5,7 +5,7 @@ use async_nats::{
     connect,
     jetstream::{
         self,
-        consumer::{pull, pull::Stream as MsgStream, AckPolicy, DeliverPolicy},
+        consumer::{pull, AckPolicy, DeliverPolicy},
         context::Publish,
         stream::{LastRawMessageErrorKind, Stream as JetstreamStream},
         Context as Jetstream,
@@ -35,7 +35,7 @@ pub struct NatsEvtLog {
 impl NatsEvtLog {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "Creating NatsEvtLog");
+        debug!(?config, "creating NatsEvtLog");
 
         let server_addr = config.server_addr;
         let client = connect(&server_addr).await.map_err(|error| {
@@ -48,15 +48,18 @@ impl NatsEvtLog {
 
         // Setup stream.
         if config.setup {
-            let _ = jetstream
+            jetstream
                 .create_stream(jetstream::stream::Config {
-                    name: "evts".to_string(),
-                    subjects: vec!["evts.>".to_string()],
+                    name: config.stream_name.clone(),
+                    subjects: vec![format!("{}.>", config.stream_name)],
                     ..Default::default()
                 })
                 .await
                 .map_err(|error| {
-                    Error::Nats("cannot create NATS 'evt' stream".into(), error.into())
+                    Error::Nats(
+                        format!("cannot create NATS '{}' stream", config.stream_name),
+                        error.into(),
+                    )
                 })?;
         }
 
@@ -82,7 +85,7 @@ impl NatsEvtLog {
         &self,
         subject: String,
         deliver_policy: DeliverPolicy,
-    ) -> Result<MsgStream, Error> {
+    ) -> Result<pull::Stream, Error> {
         self.get_stream()
             .await?
             .create_consumer(pull::Config {
@@ -130,12 +133,14 @@ impl EvtLog for NatsEvtLog {
         ToBytesError: StdError + Send + Sync + 'static,
     {
         // Convert event into bytes.
-        let bytes = to_bytes(evt).map_err(|error| Error::EvtsIntoBytes(error.into()))?;
+        let bytes = to_bytes(evt).map_err(|error| Error::IntoBytes(error.into()))?;
 
         // Publish event to NATS subject and await ACK.
+        // <TAG-*-LESS> is needed to be able to select events by id via `{}.{id}.*` (see below),
+        // because there is no `{}.{id}*`.
         let subject = match tag {
             Some(tag) => format!("{}.{id}.{tag}", self.stream_name),
-            None => format!("{}.{id}.NOTAG", self.stream_name),
+            None => format!("{}.{id}.<TAG-*-LESS>", self.stream_name),
         };
         let publish = Publish::build().payload(bytes);
         self.jetstream
@@ -162,7 +167,10 @@ impl EvtLog for NatsEvtLog {
                         Ok(None)
                     } else {
                         Err(Error::Nats(
-                            "cannot get last message for NATS stream".into(),
+                            format!(
+                                "cannot get last message for NATS stream '{}'",
+                                self.stream_name
+                            ),
                             error.into(),
                         ))
                     }
@@ -174,47 +182,7 @@ impl EvtLog for NatsEvtLog {
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         id: Uuid,
-        from_seq_no: SeqNo,
-        from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
-    where
-        E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
-        FromBytesError: StdError + Send + Sync + 'static,
-    {
-        debug!(%id, %from_seq_no, "building events by ID stream");
-
-        // Get message stream.
-        let subject = format!("{}.{id}.*", self.stream_name);
-        let deliver_policy = DeliverPolicy::ByStartSequence {
-            start_sequence: from_seq_no.as_u64(),
-        };
-        let msgs = self.get_msgs(subject, deliver_policy).await?;
-
-        // Transform message stream into event stream.
-        let evts = msgs.map(move |msg| {
-            let msg = msg.map_err(|error| {
-                Error::Nats(
-                    "cannot get message from NATS message stream".into(),
-                    error.into(),
-                )
-            })?;
-            let seq_no: SeqNo = msg
-                .info()
-                .map_err(|error| Error::Nats("cannot get message info".into(), error))
-                .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
-            from_bytes(msg.message.payload)
-                .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
-                .map(|evt| (seq_no, evt))
-        });
-
-        Ok(evts)
-    }
-
-    async fn evts_by_tag<E, FromBytes, FromBytesError>(
-        &self,
-        tag: String,
-        from_seq_no: SeqNo,
+        from: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
     where
@@ -222,33 +190,29 @@ impl EvtLog for NatsEvtLog {
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(tag, %from_seq_no, "building events by tag stream");
+        debug!(%id, %from, "building events by ID stream");
 
-        // Get message stream.
+        let subject = format!("{}.{id}.*", self.stream_name);
+        let msgs = self.get_msgs(subject, deliver_policy(from)).await?;
+        to_evt_stream(msgs, from_bytes).await
+    }
+
+    async fn evts_by_tag<E, FromBytes, FromBytesError>(
+        &self,
+        tag: String,
+        from: SeqNo,
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    where
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        FromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(tag, %from, "building events by tag stream");
+
         let subject = format!("{}.*.{tag}", self.stream_name);
-        let deliver_policy = DeliverPolicy::ByStartSequence {
-            start_sequence: from_seq_no.as_u64(),
-        };
-        let msgs = self.get_msgs(subject, deliver_policy).await?;
-
-        // Transform message stream into event stream.
-        let evts = msgs.map(move |msg| {
-            let msg = msg.map_err(|error| {
-                Error::Nats(
-                    "cannot get message from NATS message stream".into(),
-                    error.into(),
-                )
-            })?;
-            let seq_no: SeqNo = msg
-                .info()
-                .map_err(|error| Error::Nats("cannot get message info".into(), error))
-                .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
-            from_bytes(msg.message.payload)
-                .map_err(|error| Error::EvtsFromBytes(Box::new(error)))
-                .map(|evt| (seq_no, evt))
-        });
-
-        Ok(evts)
+        let msgs = self.get_msgs(subject, deliver_policy(from)).await?;
+        to_evt_stream(msgs, from_bytes).await
     }
 }
 
@@ -257,10 +221,13 @@ impl EvtLog for NatsEvtLog {
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     server_addr: String,
+
     #[serde(default = "stream_name_default")]
     stream_name: String,
+
     #[serde(default = "id_broadcast_capacity_default")]
     id_broadcast_capacity: NonZeroUsize,
+
     #[serde(default)]
     setup: bool,
 }
@@ -314,6 +281,42 @@ fn stream_name_default() -> String {
 
 const fn id_broadcast_capacity_default() -> NonZeroUsize {
     NonZeroUsize::MIN
+}
+
+fn deliver_policy(from: SeqNo) -> DeliverPolicy {
+    DeliverPolicy::ByStartSequence {
+        start_sequence: from.as_u64(),
+    }
+}
+
+async fn to_evt_stream<E, FromBytes, FromBytesError>(
+    msgs: pull::Stream,
+    from_bytes: FromBytes,
+) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
+where
+    E: Send,
+    FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+    FromBytesError: StdError + Send + Sync + 'static,
+{
+    let evts = msgs.map(move |msg| {
+        let msg = msg.map_err(|error| {
+            Error::Nats(
+                "cannot get message from NATS message stream".into(),
+                error.into(),
+            )
+        })?;
+
+        let seq_no = msg
+            .info()
+            .map_err(|error| Error::Nats("cannot get message info".into(), error))
+            .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
+
+        from_bytes(msg.message.payload)
+            .map_err(|error| Error::FromBytes(error.into()))
+            .map(|evt| (seq_no, evt))
+    });
+
+    Ok(evts)
 }
 
 #[cfg(test)]

@@ -20,11 +20,11 @@ pub enum Error {
 
     /// Event cannot be converted into bytes.
     #[error("cannot convert event to bytes")]
-    EvtsIntoBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
+    IntoBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
     /// Bytes cannot be converted to event.
     #[error("cannot convert bytes to event")]
-    EvtsFromBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
+    FromBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
 
     /// Snapshot cannot be encoded as Protocol Buffers.
     #[error("cannot encode snapshot as Protocol Buffers")]
