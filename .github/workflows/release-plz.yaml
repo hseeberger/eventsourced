@@ -22,6 +22,11 @@ jobs:
       - name: Install Rust toolchain
         run: rustup update
 
+      - name: Install protoc
+        uses: arduino/setup-protoc@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run release-plz
         uses: MarcoIeni/release-plz-action@v0.5
         env:
