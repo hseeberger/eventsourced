@@ -9,12 +9,14 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
   schedule:
     - cron: 0 4/12 * * *
-
-env:
-  IS_SCHEDULE: ${{ github.event_name == 'schedule' && 'true' || '' }}
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: Use latest nightly
+        required: true
+        type: boolean
 
 jobs:
   ci:
@@ -23,22 +25,23 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
-      - name: Determine toolchain
+      - name: Install Rust toolchain
+        env:
+          nightly: ${{ (github.event.inputs.nightly == 'true' || github.event_name == 'schedule') && 'true' || '' }}
         run: |
-          if [ -z $IS_SCHEDULE ]; then
+          if [ -z $nightly ]; then
             toolchain=$(grep channel rust-toolchain.toml | sed -r 's/channel = "(.*)"/\1/')
+            echo "installing toolchain $toolchain from rust-toolchain.toml"
           else
             toolchain='nightly'
+            echo "installing toolchain nightly"
+            echo "also setting RUSTUP_TOOLCHAIN to nightly"
+            echo "RUSTUP_TOOLCHAIN=nightly" >> "$GITHUB_ENV"
           fi
-          echo "setting RUSTUP_TOOLCHAIN to $toolchain"
-          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
-
-      - name: Install Rust toolchain
-        run: |
           rm /home/runner/.cargo/bin/rustfmt
-          rustup toolchain install --profile minimal $RUSTUP_TOOLCHAIN
-          rustup component add --toolchain $RUSTUP_TOOLCHAIN rustfmt
-          rustup component add --toolchain $RUSTUP_TOOLCHAIN clippy
+          rustup toolchain install $toolchain --profile minimal
+          rustup component add --toolchain $toolchain rustfmt
+          rustup component add --toolchain $toolchain clippy
 
       - name: Install just
         uses: taiki-e/install-action@v2
