@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.7.3...eventsourced-postgres-v0.8.0) - 2023-11-23
+
+### Added
+- verify last sequence number on persisting an event ([#71](https://github.com/hseeberger/eventsourced/pull/71))
+
 ## [0.7.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.7.2...eventsourced-postgres-v0.7.3) - 2023-11-05
 
 ### Other

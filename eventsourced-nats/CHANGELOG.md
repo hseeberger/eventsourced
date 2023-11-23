@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.7.2...eventsourced-nats-v0.7.3) - 2023-11-23
+
+### Added
+- verify last sequence number on persisting an event ([#71](https://github.com/hseeberger/eventsourced/pull/71))
+
 ## [0.7.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.7.1...eventsourced-nats-v0.7.2) - 2023-11-05
 
 ### Other
