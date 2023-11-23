@@ -27,11 +27,13 @@ impl PostgresSnapshotStore {
         // Create connection pool.
         let tls = NoTls;
         let cnn_manager = PostgresConnectionManager::new_from_stringlike(config.cnn_config(), tls)
-            .map_err(Error::ConnectionManager)?;
+            .map_err(|error| {
+                Error::Postgres("cannot create connection manager".to_string(), error)
+            })?;
         let cnn_pool = Pool::builder()
             .build(cnn_manager)
             .await
-            .map_err(Error::ConnectionPool)?;
+            .map_err(|error| Error::Postgres("cannot create connection pool".to_string(), error))?;
 
         // Setup tables.
         if config.setup {
@@ -45,7 +47,7 @@ impl PostgresSnapshotStore {
                     &[],
                 )
                 .await
-                .map_err(Error::ExecuteQuery)?;
+                .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?;
         }
 
         Ok(Self { cnn_pool })
@@ -87,7 +89,7 @@ impl SnapshotStore for PostgresSnapshotStore {
                 &[&id, &(seq_no.as_u64() as i64), &bytes.as_ref()],
             )
             .await
-            .map_err(Error::ExecuteQuery)
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .map(|_| ())
     }
 
@@ -111,11 +113,11 @@ impl SnapshotStore for PostgresSnapshotStore {
                 &[&id],
             )
             .await
-            .map_err(Error::ExecuteQuery)?
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
             .map(move |row| {
                 let seq_no = (row.get::<_, i64>(0) as u64)
                     .try_into()
-                    .map_err(Error::InvalidSeqNo)?;
+                    .map_err(|_| Error::ZeroSeqNo)?;
                 let bytes = row.get::<_, &[u8]>(1);
                 let bytes = Bytes::copy_from_slice(bytes);
                 from_bytes(bytes)

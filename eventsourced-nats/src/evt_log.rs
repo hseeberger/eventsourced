@@ -8,27 +8,27 @@ use async_nats::{
         consumer::{pull, AckPolicy, DeliverPolicy},
         context::Publish,
         stream::{LastRawMessageErrorKind, Stream as JetstreamStream},
-        Context as Jetstream,
+        Context as Jetstream, Message,
     },
 };
 use bytes::Bytes;
 use eventsourced::{EvtLog, SeqNo};
-use futures::{Stream, StreamExt};
+use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
-    num::NonZeroUsize,
     time::Duration,
 };
-
 use tracing::debug;
 use uuid::Uuid;
+
+const TAG: &str = "EventSourced-Tag";
 
 /// An [EvtLog] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
 pub struct NatsEvtLog {
-    stream_name: String,
+    evt_stream_name: String,
     jetstream: Jetstream,
 }
 
@@ -50,69 +50,54 @@ impl NatsEvtLog {
         if config.setup {
             jetstream
                 .create_stream(jetstream::stream::Config {
-                    name: config.stream_name.clone(),
-                    subjects: vec![format!("{}.>", config.stream_name)],
+                    name: config.evt_stream_name.clone(),
+                    subjects: vec![format!("{}.*", config.evt_stream_name)],
                     ..Default::default()
                 })
                 .await
                 .map_err(|error| {
                     Error::Nats(
-                        format!("cannot create NATS '{}' stream", config.stream_name),
+                        format!("cannot create tag stream '{}'", config.evt_stream_name),
                         error.into(),
                     )
                 })?;
         }
 
         Ok(Self {
-            stream_name: config.stream_name,
+            evt_stream_name: config.evt_stream_name,
             jetstream,
         })
     }
 
-    async fn get_stream(&self) -> Result<JetstreamStream, Error> {
-        self.jetstream
-            .get_stream(&self.stream_name)
-            .await
-            .map_err(|error| {
-                Error::Nats(
-                    format!("cannot get NATS stream '{}'", self.stream_name),
-                    error.into(),
-                )
-            })
-    }
-
-    async fn get_msgs(
+    async fn evts<E, F, FromBytes, FromBytesError>(
         &self,
         subject: String,
-        deliver_policy: DeliverPolicy,
-    ) -> Result<pull::Stream, Error> {
-        self.get_stream()
-            .await?
-            .create_consumer(pull::Config {
-                filter_subject: subject,
-                ack_policy: AckPolicy::None, // Important!
-                deliver_policy,
-                ..Default::default()
-            })
-            .await
-            .map_err(|error| Error::Nats("cannot create NATS consumer".into(), error.into()))?
-            .stream()
-            .heartbeat(Duration::ZERO) // Important! Even if I cannot remember why :-(
-            .messages()
-            .await
-            .map_err(|error| {
-                Error::Nats(
-                    "cannot get message stream from NATS consumer".into(),
-                    error.into(),
-                )
-            })
+        from: SeqNo,
+        filter: F,
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
+    where
+        E: Send,
+        F: Fn(&Message) -> bool + Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        FromBytesError: StdError + Send + Sync + 'static,
+    {
+        let msgs = msgs(
+            &self.jetstream,
+            &self.evt_stream_name,
+            subject,
+            from_seq_no_policy(from),
+        )
+        .await?;
+
+        Ok(evts(msgs, filter, from_bytes).await)
     }
 }
 
 impl Debug for NatsEvtLog {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("NatsEvtLog")
-            .field("stream_name", &self.stream_name)
+            .field("stream_name", &self.evt_stream_name)
             .finish()
     }
 }
@@ -123,8 +108,9 @@ impl EvtLog for NatsEvtLog {
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
-        tag: Option<String>,
+        tag: Option<&str>,
         id: Uuid,
+        last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
     ) -> Result<SeqNo, Self::Error>
     where
@@ -132,31 +118,26 @@ impl EvtLog for NatsEvtLog {
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        // Convert event into bytes.
         let bytes = to_bytes(evt).map_err(|error| Error::IntoBytes(error.into()))?;
-
-        // Publish event to NATS subject and await ACK.
-        // <TAG-*-LESS> is needed to be able to select events by id via `{}.{id}.*` (see below),
-        // because there is no `{}.{id}*`.
-        let subject = match tag {
-            Some(tag) => format!("{}.{id}.{tag}", self.stream_name),
-            None => format!("{}.{id}.<TAG-*-LESS>", self.stream_name),
-        };
         let publish = Publish::build().payload(bytes);
+        let publish = tag.into_iter().fold(publish, |p, tag| p.header(TAG, tag));
+        let publish = last_seq_no.into_iter().fold(publish, |p, last_seq_no| {
+            p.expected_last_subject_sequence(last_seq_no.as_u64())
+        });
+
+        let subject = format!("{}.{id}", self.evt_stream_name);
         self.jetstream
             .send_publish(subject, publish)
             .await
-            .map_err(|error| Error::Nats("cannot publish events".into(), error.into()))?
+            .map_err(|error| Error::Nats("cannot publish event".into(), error.into()))?
             .await
-            .map_err(|error| {
-                Error::Nats("cannot get ACK for published events".into(), error.into())
-            })
+            .map_err(|error| Error::Nats("cannot get ACK for published event".into(), error.into()))
             .and_then(|ack| ack.sequence.try_into().map_err(Error::InvalidSeqNo))
     }
 
     async fn last_seq_no(&self, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
-        let subject = format!("{}.{id}.*", self.stream_name);
-        self.get_stream()
+        let subject = format!("{}.{id}", self.evt_stream_name);
+        stream(&self.jetstream, &self.evt_stream_name)
             .await?
             .get_last_raw_message_by_subject(&subject)
             .await
@@ -169,7 +150,7 @@ impl EvtLog for NatsEvtLog {
                         Err(Error::Nats(
                             format!(
                                 "cannot get last message for NATS stream '{}'",
-                                self.stream_name
+                                self.evt_stream_name
                             ),
                             error.into(),
                         ))
@@ -191,10 +172,8 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%id, %from, "building events by ID stream");
-
-        let subject = format!("{}.{id}.*", self.stream_name);
-        let msgs = self.get_msgs(subject, deliver_policy(from)).await?;
-        to_evt_stream(msgs, from_bytes).await
+        let subject = format!("{}.{id}", self.evt_stream_name);
+        self.evts(subject, from, |_| true, from_bytes).await
     }
 
     async fn evts_by_tag<E, FromBytes, FromBytesError>(
@@ -209,10 +188,9 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(tag, %from, "building events by tag stream");
-
-        let subject = format!("{}.*.{tag}", self.stream_name);
-        let msgs = self.get_msgs(subject, deliver_policy(from)).await?;
-        to_evt_stream(msgs, from_bytes).await
+        let subject = format!("{}.*", self.evt_stream_name);
+        self.evts(subject, from, move |msg| has_tag(msg, &tag), from_bytes)
+            .await
     }
 }
 
@@ -222,11 +200,11 @@ impl EvtLog for NatsEvtLog {
 pub struct Config {
     server_addr: String,
 
-    #[serde(default = "stream_name_default")]
-    stream_name: String,
+    #[serde(default = "evt_stream_name_default")]
+    evt_stream_name: String,
 
-    #[serde(default = "id_broadcast_capacity_default")]
-    id_broadcast_capacity: NonZeroUsize,
+    #[serde(default = "tag_stream_name_default")]
+    tag_stream_name: String,
 
     #[serde(default)]
     setup: bool,
@@ -252,7 +230,7 @@ impl Config {
     {
         let stream_name = stream_name.into();
         Self {
-            stream_name,
+            evt_stream_name: stream_name,
             ..self
         }
     }
@@ -264,59 +242,118 @@ impl Config {
 }
 
 impl Default for Config {
-    /// Use "localhost:4222" for `server_addr` and "evts" for `stream_name`.
+    /// The default values used are:
     fn default() -> Self {
         Self {
             server_addr: "localhost:4222".into(),
-            stream_name: "evts".into(),
-            id_broadcast_capacity: id_broadcast_capacity_default(),
+            evt_stream_name: evt_stream_name_default(),
+            tag_stream_name: tag_stream_name_default(),
             setup: false,
         }
     }
 }
 
-fn stream_name_default() -> String {
-    "evts".to_string()
+async fn evts<E, F, FromBytes, FromBytesError>(
+    msgs: impl Stream<Item = Result<Message, Error>> + Send,
+    filter: F,
+    from_bytes: FromBytes,
+) -> impl Stream<Item = Result<(SeqNo, E), Error>> + Send
+where
+    E: Send,
+    F: Fn(&Message) -> bool + Send,
+    FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+    FromBytesError: StdError + Send + Sync + 'static,
+{
+    msgs.filter_map(move |msg| {
+        let evt = match msg {
+            Ok(msg) if filter(&msg) => {
+                let evt = seq_no(&msg).and_then(|seq_no| {
+                    from_bytes(msg.message.payload)
+                        .map_err(|error| Error::FromBytes(error.into()))
+                        .map(|evt| (seq_no, evt))
+                });
+                Some(evt)
+            }
+
+            Ok(_) => None,
+
+            Err(err) => Some(Err(err)),
+        };
+        ready(evt)
+    })
 }
 
-const fn id_broadcast_capacity_default() -> NonZeroUsize {
-    NonZeroUsize::MIN
+async fn msgs(
+    jetstream: &Jetstream,
+    stream_name: &str,
+    subject: String,
+    deliver_policy: DeliverPolicy,
+) -> Result<impl Stream<Item = Result<Message, Error>> + Send, Error> {
+    stream(jetstream, stream_name)
+        .await?
+        .create_consumer(pull::Config {
+            filter_subject: subject,
+            ack_policy: AckPolicy::None, // Important!
+            deliver_policy,
+            ..Default::default()
+        })
+        .await
+        .map_err(|error| Error::Nats("cannot create NATS consumer".into(), error.into()))?
+        .stream()
+        .heartbeat(Duration::ZERO) // Important! Even if I cannot remember why :-(
+        .messages()
+        .await
+        .map_err(|error| {
+            Error::Nats(
+                "cannot get message stream from NATS consumer".into(),
+                error.into(),
+            )
+        })
+        .map(|stream| {
+            stream.map_err(|error| {
+                Error::Nats(
+                    "cannot get message from NATS message stream".into(),
+                    error.into(),
+                )
+            })
+        })
 }
 
-fn deliver_policy(from: SeqNo) -> DeliverPolicy {
+async fn stream(jetstream: &Jetstream, stream_name: &str) -> Result<JetstreamStream, Error> {
+    jetstream.get_stream(stream_name).await.map_err(|error| {
+        Error::Nats(
+            format!("cannot get NATS stream '{stream_name}'"),
+            error.into(),
+        )
+    })
+}
+
+fn from_seq_no_policy(from: SeqNo) -> DeliverPolicy {
     DeliverPolicy::ByStartSequence {
         start_sequence: from.as_u64(),
     }
 }
 
-async fn to_evt_stream<E, FromBytes, FromBytesError>(
-    msgs: pull::Stream,
-    from_bytes: FromBytes,
-) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
-where
-    E: Send,
-    FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
-    FromBytesError: StdError + Send + Sync + 'static,
-{
-    let evts = msgs.map(move |msg| {
-        let msg = msg.map_err(|error| {
-            Error::Nats(
-                "cannot get message from NATS message stream".into(),
-                error.into(),
-            )
-        })?;
+fn seq_no(msg: &Message) -> Result<SeqNo, Error> {
+    msg.info()
+        .map_err(|error| Error::Nats("cannot get message info".into(), error))
+        .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))
+}
 
-        let seq_no = msg
-            .info()
-            .map_err(|error| Error::Nats("cannot get message info".into(), error))
-            .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))?;
+fn has_tag(msg: &Message, tag: &str) -> bool {
+    msg.headers
+        .as_ref()
+        .and_then(|headers| headers.get(TAG))
+        .map(|value| value.as_str() == tag)
+        .unwrap_or_default()
+}
 
-        from_bytes(msg.message.payload)
-            .map_err(|error| Error::FromBytes(error.into()))
-            .map(|evt| (seq_no, evt))
-    });
+fn evt_stream_name_default() -> String {
+    "evts".to_string()
+}
 
-    Ok(evts)
+fn tag_stream_name_default() -> String {
+    "tags".to_string()
 }
 
 #[cfg(test)]
@@ -349,20 +386,41 @@ mod tests {
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, None);
 
-        evt_log
-            .persist(&1, Some("tag".to_string()), id, &convert::prost::to_bytes)
+        let last_seq_no = evt_log
+            .persist(&1, Some("tag"), id, None, &convert::prost::to_bytes)
             .await?;
-        evt_log
-            .persist(&2, None, id, &convert::prost::to_bytes)
+        assert!(last_seq_no.as_u64() == 1);
+
+        let last_seq_no = evt_log
+            .persist(&2, None, id, Some(last_seq_no), &convert::prost::to_bytes)
             .await?;
+
+        let result = evt_log
+            .persist(
+                &3,
+                Some("tag"),
+                id,
+                Some(last_seq_no.succ()),
+                &convert::prost::to_bytes,
+            )
+            .await;
+        assert!(result.is_err());
+
         evt_log
-            .persist(&3, Some("tag".to_string()), id, &convert::prost::to_bytes)
+            .persist(
+                &3,
+                Some("tag"),
+                id,
+                Some(last_seq_no),
+                &convert::prost::to_bytes,
+            )
             .await?;
+
         let last_seq_no = evt_log.last_seq_no(id).await?;
-        assert_eq!(last_seq_no, Some(3.try_into().unwrap()));
+        assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2.try_into().unwrap(), convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(id, 2.try_into()?, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -380,23 +438,29 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1.try_into().unwrap(), convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log
             .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
             .await?;
 
-        evt_log
+        let last_seq_no = evt_log
             .clone()
-            .persist(&4, None, id, &convert::prost::to_bytes)
+            .persist(&4, None, id, last_seq_no, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist(&5, Some("tag".to_string()), id, &convert::prost::to_bytes)
+            .persist(
+                &5,
+                Some("tag"),
+                id,
+                Some(last_seq_no),
+                &convert::prost::to_bytes,
+            )
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
-        assert_eq!(last_seq_no, Some(5.try_into().unwrap()));
+        assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts
             .take(5)
@@ -409,6 +473,7 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 9);
+
         Ok(())
     }
 }

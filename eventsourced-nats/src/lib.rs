@@ -1,7 +1,7 @@
 //! [EvtLog](eventsourced::EvtLog) and [SnapshotStore](eventsourced::SnapshotStore) implementations
 //! based upon [NATS](https://nats.io/).
 
-mod evt_log;
+pub mod evt_log;
 mod snapshot_store;
 
 pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
@@ -41,5 +41,5 @@ pub enum Error {
 
 #[cfg(test)]
 pub mod tests {
-    pub const NATS_VERSION: &str = "2.10.3";
+    pub const NATS_VERSION: &str = "2.10.5";
 }
