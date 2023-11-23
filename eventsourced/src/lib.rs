@@ -177,6 +177,7 @@ pub trait EventSourcedExt {
         let mut entity = Entity {
             event_sourced: self,
             id,
+            last_seq_no,
             evt_log,
             snapshot_store,
             evt_to_bytes,
@@ -295,6 +296,7 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
 struct Entity<E, L, S, EvtToBytes, StateToBytes> {
     event_sourced: E,
     id: Uuid,
+    last_seq_no: Option<SeqNo>,
     evt_log: L,
     snapshot_store: S,
     evt_to_bytes: EvtToBytes,
@@ -318,8 +320,15 @@ where
                 let TaggedEvt { evt, tag } = tagged_evt.into_tagged_evt();
                 let seq_no = self
                     .evt_log
-                    .persist(&evt, tag, self.id, &self.evt_to_bytes)
+                    .persist(
+                        &evt,
+                        tag.as_deref(),
+                        self.id,
+                        self.last_seq_no,
+                        &self.evt_to_bytes,
+                    )
                     .await?;
+                self.last_seq_no = Some(seq_no);
                 (seq_no, evt)
             }
 
@@ -387,8 +396,9 @@ mod tests {
         async fn persist<E, ToBytes, ToBytesError>(
             &mut self,
             _evt: &E,
-            _tag: Option<String>,
+            _tag: Option<&str>,
             _id: Uuid,
+            _last_seq_no: Option<SeqNo>,
             _to_bytes: &ToBytes,
         ) -> Result<SeqNo, Self::Error>
         where

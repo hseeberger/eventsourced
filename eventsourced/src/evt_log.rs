@@ -19,8 +19,9 @@ pub trait EvtLog: Clone + Send + 'static {
     fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
-        tag: Option<String>,
+        tag: Option<&str>,
         id: Uuid,
+        last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
     ) -> impl Future<Output = Result<SeqNo, Self::Error>> + Send
     where

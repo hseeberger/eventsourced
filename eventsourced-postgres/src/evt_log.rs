@@ -33,11 +33,13 @@ impl PostgresEvtLog {
         // Create connection pool.
         let tls = NoTls;
         let cnn_manager = PostgresConnectionManager::new_from_stringlike(config.cnn_config(), tls)
-            .map_err(Error::ConnectionManager)?;
+            .map_err(|error| {
+                Error::Postgres("cannot create connection manager".to_string(), error)
+            })?;
         let cnn_pool = Pool::builder()
             .build(cnn_manager)
             .await
-            .map_err(Error::ConnectionPool)?;
+            .map_err(|error| Error::Postgres("cannot create connection pool".to_string(), error))?;
 
         // Setup tables.
         if config.setup {
@@ -49,7 +51,7 @@ impl PostgresEvtLog {
                     &include_str!("create_evt_log.sql").replace("evts", &config.evts_table),
                 )
                 .await
-                .map_err(Error::ExecuteQuery)?;
+                .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?;
         }
 
         Ok(Self {
@@ -84,13 +86,13 @@ impl PostgresEvtLog {
                 params,
             )
             .await
-            .map_err(Error::ExecuteQuery)?
-            .map_err(Error::NextRow)
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
+            .map_err(|error| Error::Postgres("cannot get next row".to_string(), error))
             .map(move |row| {
                 row.and_then(|row| {
                     let seq_no = (row.get::<_, i64>(0) as u64)
                         .try_into()
-                        .map_err(Error::InvalidSeqNo)?;
+                        .map_err(|_| Error::ZeroSeqNo)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
@@ -124,13 +126,13 @@ impl PostgresEvtLog {
                 params,
             )
             .await
-            .map_err(Error::ExecuteQuery)?
-            .map_err(Error::NextRow)
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
+            .map_err(|error| Error::Postgres("cannot get next row".to_string(), error))
             .map(move |row| {
                 row.and_then(|row| {
                     let seq_no = (row.get::<_, i64>(0) as u64)
                         .try_into()
-                        .map_err(Error::InvalidSeqNo)?;
+                        .map_err(|_| Error::ZeroSeqNo)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
@@ -159,8 +161,9 @@ impl EvtLog for PostgresEvtLog {
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
-        tag: Option<String>,
+        tag: Option<&str>,
         id: Uuid,
+        last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
     ) -> Result<SeqNo, Self::Error>
     where
@@ -170,21 +173,47 @@ impl EvtLog for PostgresEvtLog {
     {
         debug!(%id, "persisting event");
 
-        // Persist event.
-        let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(Box::new(error)))?;
-        self.cnn()
-            .await?
-            .query_one(
-                "INSERT INTO evts (id, evt, tag) VALUES ($1, $2, $3) RETURNING seq_no",
-                &[&id, &bytes.as_ref(), &tag],
-            )
+        let mut cnn = self.cnn().await?;
+        let tx = cnn
+            .transaction()
             .await
-            .map_err(Error::ExecuteQuery)
+            .map_err(|error| Error::Postgres("cannot start transaction".to_string(), error))?;
+
+        let stored_last_seq_no = tx
+            .query_one("SELECT MAX(seq_no) FROM evts WHERE id = $1", &[&id])
+            .await
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .and_then(|row| {
-                (row.get::<_, i64>(0) as u64)
-                    .try_into()
-                    .map_err(Error::InvalidSeqNo)
-            })
+                // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
+                row.try_get::<_, i64>(0)
+                    .ok()
+                    .map(|seq_no| SeqNo::try_from(seq_no as u64).map_err(|_| Error::ZeroSeqNo))
+                    .transpose()
+            })?;
+
+        if stored_last_seq_no == last_seq_no {
+            let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(Box::new(error)))?;
+            let seq_no = tx
+                .query_one(
+                    "INSERT INTO evts (id, evt, tag) VALUES ($1, $2, $3) RETURNING seq_no",
+                    &[&id, &bytes.as_ref(), &tag],
+                )
+                .await
+                .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
+                .and_then(|row| {
+                    (row.get::<_, i64>(0) as u64)
+                        .try_into()
+                        .map_err(|_| Error::ZeroSeqNo)
+                })?;
+
+            tx.commit()
+                .await
+                .map_err(|error| Error::Postgres("cannot commit transaction".to_string(), error))?;
+
+            Ok(seq_no)
+        } else {
+            Err(Error::InvalidLastSeqNo(last_seq_no, stored_last_seq_no))
+        }
     }
 
     async fn last_seq_no(&self, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
@@ -192,12 +221,12 @@ impl EvtLog for PostgresEvtLog {
             .await?
             .query_one("SELECT MAX(seq_no) FROM evts WHERE id = $1", &[&id])
             .await
-            .map_err(Error::ExecuteQuery)
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .and_then(|row| {
                 // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
                 row.try_get::<_, i64>(0)
                     .ok()
-                    .map(|seq_no| (seq_no as u64).try_into().map_err(Error::InvalidSeqNo))
+                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
                     .transpose()
             })
     }
@@ -272,11 +301,11 @@ impl EvtLog for PostgresEvtLog {
             .await?
             .query_one("SELECT COALESCE(MAX(seq_no), 1) FROM evts", &[])
             .await
-            .map_err(Error::ExecuteQuery)
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .and_then(|row| {
                 (row.get::<_, i64>(0) as u64)
                     .try_into()
-                    .map_err(Error::InvalidSeqNo)
+                    .map_err(|_| Error::ZeroSeqNo)
             })?;
 
         let mut current_from_seq_no = from_seq_no;
@@ -479,20 +508,41 @@ mod tests {
         let last_seq_no = evt_log.last_seq_no(id).await?;
         assert_eq!(last_seq_no, None);
 
-        evt_log
-            .persist(&1, Some("tag".to_string()), id, &convert::prost::to_bytes)
+        let last_seq_no = evt_log
+            .persist(&1, Some("tag"), id, None, &convert::prost::to_bytes)
             .await?;
-        evt_log
-            .persist(&2, None, id, &convert::prost::to_bytes)
+        assert!(last_seq_no.as_u64() == 1);
+
+        let last_seq_no = evt_log
+            .persist(&2, None, id, Some(last_seq_no), &convert::prost::to_bytes)
             .await?;
+
+        let result = evt_log
+            .persist(
+                &3,
+                Some("tag"),
+                id,
+                Some(last_seq_no.succ()),
+                &convert::prost::to_bytes,
+            )
+            .await;
+        assert!(result.is_err());
+
         evt_log
-            .persist(&3, Some("tag".to_string()), id, &convert::prost::to_bytes)
+            .persist(
+                &3,
+                Some("tag"),
+                id,
+                Some(last_seq_no),
+                &convert::prost::to_bytes,
+            )
             .await?;
+
         let last_seq_no = evt_log.last_seq_no(id).await?;
-        assert_eq!(last_seq_no, Some(3.try_into().unwrap()));
+        assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2.try_into().unwrap(), convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(id, 2.try_into()?, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -510,23 +560,29 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1.try_into().unwrap(), convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log
             .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
             .await?;
 
-        evt_log
+        let last_seq_no = evt_log
             .clone()
-            .persist(&4, None, id, &convert::prost::to_bytes)
+            .persist(&4, None, id, last_seq_no, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist(&5, Some("tag".to_string()), id, &convert::prost::to_bytes)
+            .persist(
+                &5,
+                Some("tag"),
+                id,
+                Some(last_seq_no),
+                &convert::prost::to_bytes,
+            )
             .await?;
         let last_seq_no = evt_log.last_seq_no(id).await?;
-        assert_eq!(last_seq_no, Some(5.try_into().unwrap()));
+        assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts
             .take(5)

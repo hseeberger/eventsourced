@@ -18,11 +18,11 @@ repository = "https://github.com/hseeberger/eventsourced"
 
 [workspace.dependencies]
 anyhow                 = { version = "1.0" }
-async-nats             = { version = "0.32" }
+async-nats             = { version = "0.33" }
 async-stream           = { version = "0.3" }
 bb8-postgres           = { version = "0.8" }
 bytes                  = { version = "1.5" }
-configured             = { version = "0.6" }
+configured             = { version = "0.7" }
 futures                = { version = "0.3" }
 humantime-serde        = { version = "1.1" }
 pin-project-lite       = { version = "0.2" }
@@ -35,7 +35,7 @@ testcontainers-modules = { version = "0.1", features = [ "postgres" ] }
 thiserror              = { version = "1.0" }
 tokio                  = { version = "1", features = [ "sync" ] }
 tokio-postgres         = { version = "0.7", features = [ "with-uuid-1" ] }
-tracing                = { version = "0.1", default-features = false }
-tracing-subscriber     = { version = "0.3", default-features = false, features = [ "fmt", "env-filter" ] }
-uuid                   = { version = "1.4", features = [ "serde", "v7" ] }
+tracing                = { version = "0.1" }
+tracing-subscriber     = { version = "0.3", features = [ "env-filter" ] }
+uuid                   = { version = "1.5", features = [ "serde", "v7" ] }
 walkdir                = { version = "2.4" }

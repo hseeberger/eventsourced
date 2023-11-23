@@ -11,7 +11,7 @@ use bb8_postgres::{
     bb8::{Pool, PooledConnection},
     PostgresConnectionManager,
 };
-use eventsourced::ZeroSeqNoError;
+use eventsourced::SeqNo;
 use thiserror::Error;
 
 type CnnPool<T> = Pool<PostgresConnectionManager<T>>;
@@ -21,21 +21,13 @@ type Cnn<'a, T> = PooledConnection<'a, PostgresConnectionManager<T>>;
 /// Errors from the [PostgresEvtLog] or [PostgresSnapshotStore].
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Cannot create connection manager.
-    #[error("cannot create connection manager")]
-    ConnectionManager(#[source] tokio_postgres::Error),
-
-    /// Cannot create connection pool.
-    #[error("cannot create connection pool")]
-    ConnectionPool(#[source] tokio_postgres::Error),
+    /// Postgres error.
+    #[error("Postgres error: {0}")]
+    Postgres(String, #[source] tokio_postgres::Error),
 
     /// Cannot get connection from pool.
     #[error("cannot get connection from pool")]
     GetConnection(#[source] bb8_postgres::bb8::RunError<tokio_postgres::Error>),
-
-    /// Cannot execute query.
-    #[error("cannot execute query")]
-    ExecuteQuery(#[source] tokio_postgres::Error),
 
     /// Cannot convert an event to bytes.
     #[error("cannot convert an event to bytes")]
@@ -45,15 +37,11 @@ pub enum Error {
     #[error("cannot convert bytes to an event")]
     FromBytes(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
 
-    /// Cannot get next row.
-    #[error("cannot get next row")]
-    NextRow(#[source] tokio_postgres::Error),
+    /// Sequence number must not be zero.
+    #[error("sequence number must not be zero")]
+    ZeroSeqNo,
 
-    /// Cannot get column as Uuid.
-    #[error("cannot get column as Uuid")]
-    ColumnAsUuid(#[source] tokio_postgres::Error),
-
-    /// Invalid sequence number.
-    #[error("invalid sequence number")]
-    InvalidSeqNo(#[source] ZeroSeqNoError),
+    /// Sequence number must not be zero.
+    #[error("invalid last sequence number: {0:?} {1:?}")]
+    InvalidLastSeqNo(Option<SeqNo>, Option<SeqNo>),
 }
