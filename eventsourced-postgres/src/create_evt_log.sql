@@ -1,6 +1,6 @@
 CREATE TABLE
   IF NOT EXISTS evts (
-    seq_no bigserial,
+    seq_no bigint,
     id uuid,
     evt bytea,
     tag text,

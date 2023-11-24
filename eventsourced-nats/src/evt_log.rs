@@ -391,7 +391,7 @@ mod tests {
             .await?;
         assert!(last_seq_no.as_u64() == 1);
 
-        let last_seq_no = evt_log
+        evt_log
             .persist(&2, None, id, Some(last_seq_no), &convert::prost::to_bytes)
             .await?;
 
@@ -400,7 +400,7 @@ mod tests {
                 &3,
                 Some("tag"),
                 id,
-                Some(last_seq_no.succ()),
+                Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
             .await;
@@ -411,7 +411,7 @@ mod tests {
                 &3,
                 Some("tag"),
                 id,
-                Some(last_seq_no),
+                Some(last_seq_no.succ()),
                 &convert::prost::to_bytes,
             )
             .await?;

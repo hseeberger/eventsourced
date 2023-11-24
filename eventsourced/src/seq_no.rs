@@ -4,12 +4,12 @@ use std::{
 };
 use thiserror::Error;
 
-/// Sequence number used for events by event log and snapshot store.
+/// Non-zero 64-bit sequence number used for events by event log and snapshot store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SeqNo(pub(crate) NonZeroU64);
 
 impl SeqNo {
-    #[allow(missing_docs)]
+    /// The number one (`1`).
     pub const MIN: SeqNo = Self(unsafe { NonZeroU64::new_unchecked(1) });
 
     #[allow(missing_docs)]
@@ -23,6 +23,9 @@ impl SeqNo {
     }
 
     /// Get the successor of this sequence number.
+    ///
+    /// # Panics
+    /// Panics on overflow, which is highly unlikely in practice (64-bit).
     pub fn succ(&self) -> Self {
         let seq_no = self.0.checked_add(1).expect("overflow");
         Self(seq_no)

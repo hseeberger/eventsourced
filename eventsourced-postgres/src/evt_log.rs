@@ -173,47 +173,26 @@ impl EvtLog for PostgresEvtLog {
     {
         debug!(%id, "persisting event");
 
-        let mut cnn = self.cnn().await?;
-        let tx = cnn
-            .transaction()
-            .await
-            .map_err(|error| Error::Postgres("cannot start transaction".to_string(), error))?;
+        let seq_no = last_seq_no
+            .map(|seq_no| seq_no.succ())
+            .unwrap_or(SeqNo::MIN)
+            .as_u64() as i64;
 
-        let stored_last_seq_no = tx
-            .query_one("SELECT MAX(seq_no) FROM evts WHERE id = $1", &[&id])
+        let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(Box::new(error)))?;
+
+        self.cnn()
+            .await?
+            .query_one(
+                "INSERT INTO evts (seq_no, id, evt, tag) VALUES ($1, $2, $3, $4) RETURNING seq_no",
+                &[&seq_no, &id, &bytes.as_ref(), &tag],
+            )
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .and_then(|row| {
-                // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
-                row.try_get::<_, i64>(0)
-                    .ok()
-                    .map(|seq_no| SeqNo::try_from(seq_no as u64).map_err(|_| Error::ZeroSeqNo))
-                    .transpose()
-            })?;
-
-        if stored_last_seq_no == last_seq_no {
-            let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(Box::new(error)))?;
-            let seq_no = tx
-                .query_one(
-                    "INSERT INTO evts (id, evt, tag) VALUES ($1, $2, $3) RETURNING seq_no",
-                    &[&id, &bytes.as_ref(), &tag],
-                )
-                .await
-                .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
-                .and_then(|row| {
-                    (row.get::<_, i64>(0) as u64)
-                        .try_into()
-                        .map_err(|_| Error::ZeroSeqNo)
-                })?;
-
-            tx.commit()
-                .await
-                .map_err(|error| Error::Postgres("cannot commit transaction".to_string(), error))?;
-
-            Ok(seq_no)
-        } else {
-            Err(Error::InvalidLastSeqNo(last_seq_no, stored_last_seq_no))
-        }
+                (row.get::<_, i64>(0) as u64)
+                    .try_into()
+                    .map_err(|_| Error::ZeroSeqNo)
+            })
     }
 
     async fn last_seq_no(&self, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
@@ -513,7 +492,7 @@ mod tests {
             .await?;
         assert!(last_seq_no.as_u64() == 1);
 
-        let last_seq_no = evt_log
+        evt_log
             .persist(&2, None, id, Some(last_seq_no), &convert::prost::to_bytes)
             .await?;
 
@@ -522,7 +501,7 @@ mod tests {
                 &3,
                 Some("tag"),
                 id,
-                Some(last_seq_no.succ()),
+                Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
             .await;
@@ -533,7 +512,7 @@ mod tests {
                 &3,
                 Some("tag"),
                 id,
-                Some(last_seq_no),
+                Some(last_seq_no.succ()),
                 &convert::prost::to_bytes,
             )
             .await?;
