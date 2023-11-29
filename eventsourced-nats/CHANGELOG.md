@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.8.3...eventsourced-nats-v0.8.4) - 2023-11-29
+
+### Other
+- use ToString instead of Into<String> ([#84](https://github.com/hseeberger/eventsourced/pull/84))
+
 ## [0.8.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.8.2...eventsourced-nats-v0.8.3) - 2023-11-29
 
 ### Other
