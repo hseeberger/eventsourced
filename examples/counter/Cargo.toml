@@ -6,7 +6,7 @@ edition     = { workspace = true }
 publish     = false
 
 [dependencies]
-eventsourced = { path = "../../eventsourced", features = [ "serde-json" ] }
+eventsourced = { path = "../../eventsourced", features = [ "serde_json" ] }
 anyhow       = { workspace = true }
 bytes        = { workspace = true }
 serde        = { workspace = true }
