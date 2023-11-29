@@ -214,9 +214,9 @@ impl Config {
     /// Change the `server_addr`.
     pub fn with_server_addr<T>(self, server_addr: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let server_addr = server_addr.into();
+        let server_addr = server_addr.to_string();
         Self {
             server_addr,
             ..self
@@ -226,9 +226,9 @@ impl Config {
     /// Change the `stream_name`.
     pub fn with_stream_name<T>(self, stream_name: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let stream_name = stream_name.into();
+        let stream_name = stream_name.to_string();
         Self {
             evt_stream_name: stream_name,
             ..self

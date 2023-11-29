@@ -173,9 +173,9 @@ impl Config {
     /// Change the `server_addr`.
     pub fn with_server_addr<T>(self, server_addr: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let server_addr = server_addr.into();
+        let server_addr = server_addr.to_string();
         Self {
             server_addr,
             ..self
@@ -185,9 +185,9 @@ impl Config {
     /// Change the `bucket`.
     pub fn with_bucket<T>(self, bucket: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let bucket = bucket.into();
+        let bucket = bucket.to_string();
         Self { bucket, ..self }
     }
 

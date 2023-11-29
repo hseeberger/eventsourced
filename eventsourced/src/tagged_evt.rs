@@ -38,17 +38,17 @@ pub trait EvtExt: Sized {
     /// Create a [TaggedEvt] with the given tag.
     fn with_tag<T>(self, tag: T) -> TaggedEvt<Self>
     where
-        T: Into<String>;
+        T: ToString;
 }
 
 impl<E> EvtExt for E {
     fn with_tag<T>(self, tag: T) -> TaggedEvt<E>
     where
-        T: Into<String>,
+        T: ToString,
     {
         TaggedEvt {
             evt: self,
-            tag: Some(tag.into()),
+            tag: Some(tag.to_string()),
         }
     }
 }

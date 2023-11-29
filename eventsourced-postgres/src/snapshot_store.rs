@@ -155,9 +155,9 @@ impl Config {
     /// Change the `host`.
     pub fn with_host<T>(self, host: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let host = host.into();
+        let host = host.to_string();
         Self { host, ..self }
     }
 
@@ -169,36 +169,36 @@ impl Config {
     /// Change the `user`.
     pub fn with_user<T>(self, user: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let user = user.into();
+        let user = user.to_string();
         Self { user, ..self }
     }
 
     /// Change the `password`.
     pub fn with_password<T>(self, password: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let password = password.into();
+        let password = password.to_string();
         Self { password, ..self }
     }
 
     /// Change the `dbname`.
     pub fn with_dbname<T>(self, dbname: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let dbname = dbname.into();
+        let dbname = dbname.to_string();
         Self { dbname, ..self }
     }
 
     /// Change the `sslmode`.
     pub fn with_sslmode<T>(self, sslmode: T) -> Self
     where
-        T: Into<String>,
+        T: ToString,
     {
-        let sslmode = sslmode.into();
+        let sslmode = sslmode.to_string();
         Self { sslmode, ..self }
     }
 
