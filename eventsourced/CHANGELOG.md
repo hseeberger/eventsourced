@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.8.2...eventsourced-v0.8.3) - 2023-11-29
+
+### Other
+- *(eventsourced)* rename feature serde-json serde_json ([#82](https://github.com/hseeberger/eventsourced/pull/82))
+
 ## [0.8.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.8.1...eventsourced-v0.8.2) - 2023-11-24
 
 ### Fixed
