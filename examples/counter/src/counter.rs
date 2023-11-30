@@ -2,6 +2,7 @@ use anyhow::Result;
 use eventsourced::{EventSourced, IntoTaggedEvt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Default)]
 pub struct Counter {
@@ -36,7 +37,11 @@ impl EventSourced for Counter {
     type Error = Error;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+    fn handle_cmd(
+        &self,
+        _id: Uuid,
+        cmd: Self::Cmd,
+    ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
         let value = self.value;
 
         match cmd {
