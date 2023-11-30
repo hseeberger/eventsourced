@@ -68,7 +68,11 @@ pub trait EventSourced: Sized + Send + 'static {
     type Error: StdError + Send + Sync + 'static;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(&self, cmd: Self::Cmd) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
+    fn handle_cmd(
+        &self,
+        id: Uuid,
+        cmd: Self::Cmd,
+    ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
 
     /// Event handler, returning whether to take a snapshot or not.
     fn handle_evt(&mut self, evt: Self::Evt) -> Option<Self::State>;
@@ -315,7 +319,7 @@ where
     StateToBytesError: StdError + Send + Sync + 'static,
 {
     async fn handle_cmd(&mut self, cmd: E::Cmd) -> Result<Result<(), E::Error>, Box<dyn StdError>> {
-        let (seq_no, evt) = match self.event_sourced.handle_cmd(cmd) {
+        let (seq_no, evt) = match self.event_sourced.handle_cmd(self.id, cmd) {
             Ok(tagged_evt) => {
                 let TaggedEvt { evt, tag } = tagged_evt.into_tagged_evt();
                 let seq_no = self
@@ -372,6 +376,7 @@ mod tests {
 
         fn handle_cmd(
             &self,
+            _id: Uuid,
             _cmd: Self::Cmd,
         ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
             Ok(((1 << 32) + self.0).with_tag("tag"))
