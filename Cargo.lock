@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "async-stream",
  "bytes",
@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced-nats"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced-postgres"
-version = "0.8.4"
+version = "0.8.5"
 dependencies = [
  "async-stream",
  "bb8-postgres",
