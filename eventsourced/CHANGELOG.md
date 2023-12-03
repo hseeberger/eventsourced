@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.8.5...eventsourced-v0.8.6) - 2023-12-03
+
+### Other
+- Fix examples link in eventsourced/README.md ([#88](https://github.com/hseeberger/eventsourced/pull/88))
+
 ## [0.8.5](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.8.4...eventsourced-v0.8.5) - 2023-11-30
 
 ### Added
