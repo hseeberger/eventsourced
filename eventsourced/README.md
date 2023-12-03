@@ -112,7 +112,7 @@ tasks.spawn(async move {
 ...
 ```
 
-Take a look at the [examples](examples) directory for more details.
+Take a look at the [examples](../examples) directory for more details.
 
 ### Running the counter-nats example
 
