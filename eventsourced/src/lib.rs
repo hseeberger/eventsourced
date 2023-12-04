@@ -43,6 +43,7 @@ pub use tagged_evt::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::{error::Error as StdError, fmt::Debug, num::NonZeroUsize};
 use thiserror::Error;
 use tokio::{
@@ -265,34 +266,35 @@ where
     }
 
     /// Invoke the command handler of the entity.
-    ///
-    /// The returned (outer) `Result` signals, whether the command could be sent to the entity and
-    /// the command handler result could be received, i.e. an `Err` signals a technical failure.
-    ///
-    /// The (outer) `Ok` variant contains another (inner) `Result`, which signals whether the
-    /// command was valid or rejected. If it was valid, the persisted event is returned, else the
-    /// rejection error.
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, EntityRefError> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E>> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
             .await
-            .map_err(|error| EntityRefError::SendCmd(Box::new(error)))?;
-        result_out.await.map_err(EntityRefError::RcvHandlerResult)
+            .map_err(|_| HandleCmdError::Internal("cannot send command".to_string()))?;
+        result_out
+            .await
+            .map_err(|_| {
+                HandleCmdError::Internal("cannot receive command handler result".to_string())
+            })?
+            .map_err(HandleCmdError::Handler)
     }
 }
 
 /// Error from an [EntityRef].
-#[derive(Debug, Error)]
-pub enum EntityRefError {
-    /// A command cannot be sent from an [EntityRef] to its entity.
-    #[error("cannot send command to Entity")]
-    SendCmd(#[source] Box<dyn StdError + Send + Sync + 'static>),
+#[derive(Debug, Error, Serialize, Deserialize)]
+pub enum HandleCmdError<E>
+where
+    E: EventSourced,
+{
+    /// A command cannot be sent from an [EntityRef] to its entity or the result cannot be received
+    /// from its entity.
+    #[error("{0}")]
+    Internal(String),
 
-    /// An [EntityRef] cannot receive the command handler result from its entity, potentially
-    /// because its entity has terminated.
-    #[error("cannot receive command handler result from Entity")]
-    RcvHandlerResult(#[from] oneshot::error::RecvError),
+    /// Command handler result.
+    #[error(transparent)]
+    Handler(E::Error),
 }
 
 /// Collection of conversion functions from and to [Bytes] for events and snapshots.
@@ -559,7 +561,7 @@ mod tests {
         let snapshot_store = TestSnapshotStore;
 
         let entity = spawn(evt_log, snapshot_store).await?;
-        entity.handle_cmd(()).await??;
+        entity.handle_cmd(()).await?;
 
         Ok(())
     }

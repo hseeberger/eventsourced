@@ -55,15 +55,11 @@ where
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
                     .context("handle Inc command")
-                    .unwrap()
-                    .context("invalid Inc command")
                     .unwrap();
                 counter
                     .handle_cmd(Cmd::Dec(n as u64))
                     .await
                     .context("handle Dec command")
-                    .unwrap()
-                    .context("invalid Dec command")
                     .unwrap();
             }
         });
