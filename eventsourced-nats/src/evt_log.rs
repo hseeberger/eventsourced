@@ -51,7 +51,7 @@ impl NatsEvtLog {
             jetstream
                 .create_stream(jetstream::stream::Config {
                     name: config.evt_stream_name.clone(),
-                    subjects: vec![format!("{}.*", config.evt_stream_name)],
+                    subjects: vec![format!("{}.>", config.evt_stream_name)],
                     ..Default::default()
                 })
                 .await
@@ -109,6 +109,7 @@ impl EvtLog for NatsEvtLog {
         &mut self,
         evt: &E,
         tag: Option<&str>,
+        r#type: &str,
         id: Uuid,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
@@ -125,7 +126,7 @@ impl EvtLog for NatsEvtLog {
             p.expected_last_subject_sequence(last_seq_no.as_u64())
         });
 
-        let subject = format!("{}.{id}", self.evt_stream_name);
+        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
         self.jetstream
             .send_publish(subject, publish)
             .await
@@ -135,8 +136,8 @@ impl EvtLog for NatsEvtLog {
             .and_then(|ack| ack.sequence.try_into().map_err(Error::InvalidSeqNo))
     }
 
-    async fn last_seq_no(&self, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
-        let subject = format!("{}.{id}", self.evt_stream_name);
+    async fn last_seq_no(&self, r#type: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
         stream(&self.jetstream, &self.evt_stream_name)
             .await?
             .get_last_raw_message_by_subject(&subject)
@@ -172,7 +173,23 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%id, %from, "building events by ID stream");
-        let subject = format!("{}.{id}", self.evt_stream_name);
+        let subject = format!("{}.*.{id}", self.evt_stream_name);
+        self.evts(subject, from, |_| true, from_bytes).await
+    }
+
+    async fn evts_by_type<E, FromBytes, FromBytesError>(
+        &self,
+        r#type: &str,
+        from: SeqNo,
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    where
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        FromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(r#type, %from, "building events by type stream");
+        let subject = format!("{}.{type}.*", self.evt_stream_name);
         self.evts(subject, from, |_| true, from_bytes).await
     }
 
@@ -188,7 +205,7 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(tag, %from, "building events by tag stream");
-        let subject = format!("{}.*", self.evt_stream_name);
+        let subject = format!("{}.*.*", self.evt_stream_name);
         self.evts(subject, from, move |msg| has_tag(msg, &tag), from_bytes)
             .await
     }
@@ -383,22 +400,30 @@ mod tests {
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", id).await?;
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(&1, Some("tag"), id, None, &convert::prost::to_bytes)
+            .persist(&1, Some("tag"), "test", id, None, &convert::prost::to_bytes)
             .await?;
         assert!(last_seq_no.as_u64() == 1);
 
         evt_log
-            .persist(&2, None, id, Some(last_seq_no), &convert::prost::to_bytes)
+            .persist(
+                &2,
+                None,
+                "test",
+                id,
+                Some(last_seq_no),
+                &convert::prost::to_bytes,
+            )
             .await?;
 
         let result = evt_log
             .persist(
                 &3,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
@@ -410,13 +435,14 @@ mod tests {
             .persist(
                 &3,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no.succ()),
                 &convert::prost::to_bytes,
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
@@ -447,19 +473,20 @@ mod tests {
 
         let last_seq_no = evt_log
             .clone()
-            .persist(&4, None, id, last_seq_no, &convert::prost::to_bytes)
+            .persist(&4, None, "test", id, last_seq_no, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
             .persist(
                 &5,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts
