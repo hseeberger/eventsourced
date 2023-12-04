@@ -132,89 +132,26 @@ impl SnapshotStore for PostgresSnapshotStore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    host: String,
+    pub host: String,
 
-    port: u16,
+    pub port: u16,
 
-    user: String,
+    pub user: String,
 
-    password: String,
+    pub password: String,
 
-    dbname: String,
+    pub dbname: String,
 
-    sslmode: String,
+    pub sslmode: String,
 
     #[serde(default = "snapshots_table_default")]
-    snapshots_table: String,
+    pub snapshots_table: String,
 
     #[serde(default)]
-    setup: bool,
+    pub setup: bool,
 }
 
 impl Config {
-    /// Change the `host`.
-    pub fn with_host<T>(self, host: T) -> Self
-    where
-        T: ToString,
-    {
-        let host = host.to_string();
-        Self { host, ..self }
-    }
-
-    /// Change the `port`.
-    pub fn with_port(self, port: u16) -> Self {
-        Self { port, ..self }
-    }
-
-    /// Change the `user`.
-    pub fn with_user<T>(self, user: T) -> Self
-    where
-        T: ToString,
-    {
-        let user = user.to_string();
-        Self { user, ..self }
-    }
-
-    /// Change the `password`.
-    pub fn with_password<T>(self, password: T) -> Self
-    where
-        T: ToString,
-    {
-        let password = password.to_string();
-        Self { password, ..self }
-    }
-
-    /// Change the `dbname`.
-    pub fn with_dbname<T>(self, dbname: T) -> Self
-    where
-        T: ToString,
-    {
-        let dbname = dbname.to_string();
-        Self { dbname, ..self }
-    }
-
-    /// Change the `sslmode`.
-    pub fn with_sslmode<T>(self, sslmode: T) -> Self
-    where
-        T: ToString,
-    {
-        let sslmode = sslmode.to_string();
-        Self { sslmode, ..self }
-    }
-
-    /// Change the `snapshots_table`.
-    pub fn with_snapshots_table(self, snapshots_table: String) -> Self {
-        Self {
-            snapshots_table,
-            ..self
-        }
-    }
-
-    /// Change the `setup` flag.
-    pub fn with_setup(self, setup: bool) -> Self {
-        Self { setup, ..self }
-    }
-
     fn cnn_config(&self) -> String {
         format!(
             "host={} port={} user={} password={} dbname={} sslmode={}",
@@ -256,7 +193,11 @@ mod tests {
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = Config::default().with_port(port).with_setup(true);
+        let config = Config {
+            port,
+            setup: true,
+            ..Default::default()
+        };
         let mut snapshot_store = PostgresSnapshotStore::new(config).await?;
 
         let id = Uuid::now_v7();

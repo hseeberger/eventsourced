@@ -160,41 +160,13 @@ impl SnapshotStore for NatsSnapshotStore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    server_addr: String,
+    pub server_addr: String,
 
     #[serde(default = "bucket_default")]
-    bucket: String,
+    pub bucket: String,
 
     #[serde(default)]
-    setup: bool,
-}
-
-impl Config {
-    /// Change the `server_addr`.
-    pub fn with_server_addr<T>(self, server_addr: T) -> Self
-    where
-        T: ToString,
-    {
-        let server_addr = server_addr.to_string();
-        Self {
-            server_addr,
-            ..self
-        }
-    }
-
-    /// Change the `bucket`.
-    pub fn with_bucket<T>(self, bucket: T) -> Self
-    where
-        T: ToString,
-    {
-        let bucket = bucket.to_string();
-        Self { bucket, ..self }
-    }
-
-    /// Change the `setup` flag.
-    pub fn with_setup(self, setup: bool) -> Self {
-        Self { setup, ..self }
-    }
+    pub setup: bool,
 }
 
 impl Default for Config {
@@ -232,9 +204,11 @@ mod tests {
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config::default()
-            .with_server_addr(server_addr)
-            .with_setup(true);
+        let config = Config {
+            server_addr,
+            setup: true,
+            ..Default::default()
+        };
         let mut snapshot_store = NatsSnapshotStore::new(config).await?;
 
         let id = Uuid::now_v7();

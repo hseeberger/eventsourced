@@ -216,47 +216,16 @@ impl EvtLog for NatsEvtLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    server_addr: String,
+    pub server_addr: String,
 
     #[serde(default = "evt_stream_name_default")]
-    evt_stream_name: String,
+    pub evt_stream_name: String,
 
     #[serde(default = "tag_stream_name_default")]
-    tag_stream_name: String,
+    pub tag_stream_name: String,
 
     #[serde(default)]
-    setup: bool,
-}
-
-impl Config {
-    /// Change the `server_addr`.
-    pub fn with_server_addr<T>(self, server_addr: T) -> Self
-    where
-        T: ToString,
-    {
-        let server_addr = server_addr.to_string();
-        Self {
-            server_addr,
-            ..self
-        }
-    }
-
-    /// Change the `stream_name`.
-    pub fn with_stream_name<T>(self, stream_name: T) -> Self
-    where
-        T: ToString,
-    {
-        let stream_name = stream_name.to_string();
-        Self {
-            evt_stream_name: stream_name,
-            ..self
-        }
-    }
-
-    /// Change the `setup` flag.
-    pub fn with_setup(self, setup: bool) -> Self {
-        Self { setup, ..self }
-    }
+    pub setup: bool,
 }
 
 impl Default for Config {
@@ -392,9 +361,11 @@ mod tests {
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config::default()
-            .with_server_addr(server_addr)
-            .with_setup(true);
+        let config = Config {
+            server_addr,
+            setup: true,
+            ..Default::default()
+        };
         let mut evt_log = NatsEvtLog::new(config).await?;
 
         let id = Uuid::now_v7();

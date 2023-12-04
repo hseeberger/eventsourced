@@ -426,108 +426,32 @@ impl EvtLog for PostgresEvtLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    host: String,
+    pub host: String,
 
-    port: u16,
+    pub port: u16,
 
-    user: String,
+    pub user: String,
 
-    password: String,
+    pub password: String,
 
-    dbname: String,
+    pub dbname: String,
 
-    sslmode: String,
+    pub sslmode: String,
 
     #[serde(default = "evts_table_default")]
-    evts_table: String,
+    pub evts_table: String,
 
     #[serde(default = "poll_interval_default", with = "humantime_serde")]
-    poll_interval: Duration,
+    pub poll_interval: Duration,
 
     #[serde(default = "id_broadcast_capacity_default")]
-    id_broadcast_capacity: NonZeroUsize,
+    pub id_broadcast_capacity: NonZeroUsize,
 
     #[serde(default)]
-    setup: bool,
+    pub setup: bool,
 }
 
 impl Config {
-    /// Change the `host`.
-    pub fn with_host<T>(self, host: T) -> Self
-    where
-        T: ToString,
-    {
-        let host = host.to_string();
-        Self { host, ..self }
-    }
-
-    /// Change the `port`.
-    pub fn with_port(self, port: u16) -> Self {
-        Self { port, ..self }
-    }
-
-    /// Change the `user`.
-    pub fn with_user<T>(self, user: T) -> Self
-    where
-        T: ToString,
-    {
-        let user = user.to_string();
-        Self { user, ..self }
-    }
-
-    /// Change the `password`.
-    pub fn with_password<T>(self, password: T) -> Self
-    where
-        T: ToString,
-    {
-        let password = password.to_string();
-        Self { password, ..self }
-    }
-
-    /// Change the `dbname`.
-    pub fn with_dbname<T>(self, dbname: T) -> Self
-    where
-        T: ToString,
-    {
-        let dbname = dbname.to_string();
-        Self { dbname, ..self }
-    }
-
-    /// Change the `sslmode`.
-    pub fn with_sslmode<T>(self, sslmode: T) -> Self
-    where
-        T: ToString,
-    {
-        let sslmode = sslmode.to_string();
-        Self { sslmode, ..self }
-    }
-
-    /// Change the `evts_table`.
-    pub fn with_evts_table(self, evts_table: String) -> Self {
-        Self { evts_table, ..self }
-    }
-
-    /// Change the `poll_interval`.
-    pub fn with_poll_interval(self, poll_interval: Duration) -> Self {
-        Self {
-            poll_interval,
-            ..self
-        }
-    }
-
-    /// Change the `id_broadcast_capacity`.
-    pub fn with_id_broadcast_capacity(self, id_broadcast_capacity: NonZeroUsize) -> Self {
-        Self {
-            id_broadcast_capacity,
-            ..self
-        }
-    }
-
-    /// Change the `setup` flag.
-    pub fn with_setup(self, setup: bool) -> Self {
-        Self { setup, ..self }
-    }
-
     fn cnn_config(&self) -> String {
         format!(
             "host={} port={} user={} password={} dbname={} sslmode={}",
@@ -580,7 +504,11 @@ mod tests {
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = Config::default().with_port(port).with_setup(true);
+        let config = Config {
+            port,
+            setup: true,
+            ..Default::default()
+        };
         let mut evt_log = PostgresEvtLog::new(config).await?;
 
         let id = Uuid::now_v7();
