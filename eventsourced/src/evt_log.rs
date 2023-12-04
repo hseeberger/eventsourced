@@ -41,6 +41,7 @@ pub trait EvtLog: Clone + Send + 'static {
     /// Get the events for the given entity ID starting with the given sequence number.
     fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
+        r#type: &str,
         id: Uuid,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,

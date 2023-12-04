@@ -163,6 +163,7 @@ impl EvtLog for NatsEvtLog {
 
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
+        r#type: &str,
         id: Uuid,
         from: SeqNo,
         from_bytes: FromBytes,
@@ -173,7 +174,7 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%id, %from, "building events by ID stream");
-        let subject = format!("{}.*.{id}", self.evt_stream_name);
+        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
         self.evts(subject, from, |_| true, from_bytes).await
     }
 
@@ -446,7 +447,7 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", id, 2.try_into()?, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -464,7 +465,7 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log

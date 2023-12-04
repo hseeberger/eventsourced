@@ -169,7 +169,7 @@ pub trait EventSourcedExt {
             let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
             debug!(%id, %from_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(&r#type, id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
             pin!(evts);
@@ -433,6 +433,7 @@ mod tests {
 
         async fn evts_by_id<E, FromBytes, FromBytesError>(
             &self,
+            _type: &str,
             _id: Uuid,
             _from_seq_no: SeqNo,
             _evt_from_bytes: FromBytes,
@@ -464,29 +465,15 @@ mod tests {
         async fn evts_by_type<E, FromBytes, FromBytesError>(
             &self,
             _type: &str,
-            from_seq_no: SeqNo,
-            evt_from_bytes: FromBytes,
+            _from_seq_no: SeqNo,
+            _evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
             FromBytesError: StdError + Send + Sync + 'static,
         {
-            let evts = stream! {
-                for n in 0..666 {
-                    for evt in 1..=3 {
-                        let seq_no = (n * 3 + evt).try_into().unwrap();
-                        if from_seq_no <= seq_no  {
-                            let mut bytes = BytesMut::new();
-                            evt.encode(&mut bytes).map_err(|error| TestEvtLogError(error.into()))?;
-                            let evt = evt_from_bytes(bytes.into()).map_err(|error| TestEvtLogError(error.into()))?;
-                            yield Ok((seq_no, evt));
-                        }
-                    }
-
-                }
-            };
-            Ok(evts)
+            Ok(stream::empty())
         }
 
         async fn evts_by_tag<E, FromBytes, FromBytesError>(
