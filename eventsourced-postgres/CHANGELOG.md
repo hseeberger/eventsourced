@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.8.5...eventsourced-postgres-v0.9.0) - 2023-12-08
+
+### Added
+- introduce entity type ([#90](https://github.com/hseeberger/eventsourced/pull/90))
+
 ## [0.8.5](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.8.4...eventsourced-postgres-v0.8.5) - 2023-11-30
 
 ### Other
