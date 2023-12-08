@@ -36,6 +36,7 @@ where
         let counter = Counter::default();
         let counter = counter
             .spawn(
+                "counter",
                 id,
                 NonZeroUsize::new(42).expect("42 is not zero"),
                 evt_log,
@@ -54,15 +55,11 @@ where
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
                     .context("handle Inc command")
-                    .unwrap()
-                    .context("invalid Inc command")
                     .unwrap();
                 counter
                     .handle_cmd(Cmd::Dec(n as u64))
                     .await
                     .context("handle Dec command")
-                    .unwrap()
-                    .context("invalid Dec command")
                     .unwrap();
             }
         });
@@ -86,6 +83,7 @@ where
         tasks.spawn(async move {
             let _counter = Counter::default()
                 .spawn(
+                    "counter",
                     id,
                     NonZeroUsize::new(42).expect("42 is not zero"),
                     evt_log,

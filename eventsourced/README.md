@@ -103,8 +103,6 @@ tasks.spawn(async move {
             .handle_cmd(Cmd::Inc(n as u64))
             .await
             .context("cannot handle Inc command")
-            .unwrap()
-            .context("invalid command")
             .unwrap();
         ...
     }

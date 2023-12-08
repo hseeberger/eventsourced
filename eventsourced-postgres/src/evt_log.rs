@@ -104,6 +104,46 @@ impl PostgresEvtLog {
         Ok(evts)
     }
 
+    async fn next_evts_by_type<E, FromBytes, FromBytesError>(
+        &self,
+        r#type: &str,
+        from_seq_no: SeqNo,
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
+    where
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+        FromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(%r#type, %from_seq_no, "querying events");
+
+        let params: [&(dyn ToSql + Sync); 2] = [&r#type, &(from_seq_no.as_u64() as i64)];
+        let evts = self
+            .cnn()
+            .await?
+            .query_raw(
+                "SELECT seq_no, evt FROM evts WHERE type = $1 AND seq_no >= $2",
+                params,
+            )
+            .await
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
+            .map_err(|error| Error::Postgres("cannot get next row".to_string(), error))
+            .map(move |row| {
+                row.and_then(|row| {
+                    let seq_no = (row.get::<_, i64>(0) as u64)
+                        .try_into()
+                        .map_err(|_| Error::ZeroSeqNo)?;
+                    let bytes = row.get::<_, &[u8]>(1);
+                    let bytes = Bytes::copy_from_slice(bytes);
+                    from_bytes(bytes)
+                        .map_err(|source| Error::FromBytes(Box::new(source)))
+                        .map(|evt| (seq_no, evt))
+                })
+            });
+
+        Ok(evts)
+    }
+
     async fn next_evts_by_tag<E, EvtFromBytes, EvtFromBytesError>(
         &self,
         tag: &str,
@@ -143,6 +183,21 @@ impl PostgresEvtLog {
 
         Ok(evts)
     }
+
+    async fn last_seq_no_by_type(&self, r#type: &str) -> Result<Option<SeqNo>, Error> {
+        self.cnn()
+            .await?
+            .query_one("SELECT MAX(seq_no) FROM evts WHERE type = $1", &[&r#type])
+            .await
+            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
+            .and_then(|row| {
+                // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
+                row.try_get::<_, i64>(0)
+                    .ok()
+                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
+                    .transpose()
+            })
+    }
 }
 
 impl Debug for PostgresEvtLog {
@@ -162,6 +217,7 @@ impl EvtLog for PostgresEvtLog {
         &mut self,
         evt: &E,
         tag: Option<&str>,
+        r#type: &str,
         id: Uuid,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
@@ -183,8 +239,8 @@ impl EvtLog for PostgresEvtLog {
         self.cnn()
             .await?
             .query_one(
-                "INSERT INTO evts (seq_no, id, evt, tag) VALUES ($1, $2, $3, $4) RETURNING seq_no",
-                &[&seq_no, &id, &bytes.as_ref(), &tag],
+                "INSERT INTO evts (seq_no, type, id, evt, tag) VALUES ($1, $2, $3, $4, $5) RETURNING seq_no",
+                &[&seq_no, &r#type, &id, &bytes.as_ref(), &tag],
             )
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
@@ -195,7 +251,7 @@ impl EvtLog for PostgresEvtLog {
             })
     }
 
-    async fn last_seq_no(&self, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+    async fn last_seq_no(&self, _type: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
         self.cnn()
             .await?
             .query_one("SELECT MAX(seq_no) FROM evts WHERE id = $1", &[&id])
@@ -212,6 +268,7 @@ impl EvtLog for PostgresEvtLog {
 
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
+        _type: &str,
         id: Uuid,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
@@ -223,13 +280,59 @@ impl EvtLog for PostgresEvtLog {
     {
         debug!(%id, %from_seq_no, "building events by ID stream");
 
-        let last_seq_no = self.last_seq_no(id).await?;
+        let last_seq_no = self.last_seq_no("", id).await?;
 
         let mut current_from_seq_no = from_seq_no;
         let evts = stream! {
             'outer: loop {
                 let evts = self
                     .next_evts_by_id(id, current_from_seq_no, from_bytes)
+                    .await?;
+
+                for await evt in evts {
+                    match evt {
+                        Ok(evt @ (seq_no, _)) => {
+                            current_from_seq_no = seq_no.succ();
+                            yield Ok(evt);
+                        }
+
+                        Err(error) => {
+                            yield Err(error);
+                            break 'outer;
+                        }
+                    }
+                }
+
+                // Only sleep if requesting future events.
+                if Some(current_from_seq_no) >= last_seq_no {
+                    sleep(self.poll_interval).await;
+                }
+            }
+        };
+
+        Ok(evts)
+    }
+
+    async fn evts_by_type<E, FromBytes, FromBytesError>(
+        &self,
+        r#type: &str,
+        from_seq_no: SeqNo,
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    where
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        FromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(r#type, %from_seq_no, "building events by type stream");
+
+        let last_seq_no = self.last_seq_no_by_type(r#type).await?;
+
+        let mut current_from_seq_no = from_seq_no;
+        let evts = stream! {
+            'outer: loop {
+                let evts = self
+                    .next_evts_by_type(r#type, current_from_seq_no, from_bytes)
                     .await?;
 
                 for await evt in evts {
@@ -323,108 +426,32 @@ impl EvtLog for PostgresEvtLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    host: String,
+    pub host: String,
 
-    port: u16,
+    pub port: u16,
 
-    user: String,
+    pub user: String,
 
-    password: String,
+    pub password: String,
 
-    dbname: String,
+    pub dbname: String,
 
-    sslmode: String,
+    pub sslmode: String,
 
     #[serde(default = "evts_table_default")]
-    evts_table: String,
+    pub evts_table: String,
 
     #[serde(default = "poll_interval_default", with = "humantime_serde")]
-    poll_interval: Duration,
+    pub poll_interval: Duration,
 
     #[serde(default = "id_broadcast_capacity_default")]
-    id_broadcast_capacity: NonZeroUsize,
+    pub id_broadcast_capacity: NonZeroUsize,
 
     #[serde(default)]
-    setup: bool,
+    pub setup: bool,
 }
 
 impl Config {
-    /// Change the `host`.
-    pub fn with_host<T>(self, host: T) -> Self
-    where
-        T: ToString,
-    {
-        let host = host.to_string();
-        Self { host, ..self }
-    }
-
-    /// Change the `port`.
-    pub fn with_port(self, port: u16) -> Self {
-        Self { port, ..self }
-    }
-
-    /// Change the `user`.
-    pub fn with_user<T>(self, user: T) -> Self
-    where
-        T: ToString,
-    {
-        let user = user.to_string();
-        Self { user, ..self }
-    }
-
-    /// Change the `password`.
-    pub fn with_password<T>(self, password: T) -> Self
-    where
-        T: ToString,
-    {
-        let password = password.to_string();
-        Self { password, ..self }
-    }
-
-    /// Change the `dbname`.
-    pub fn with_dbname<T>(self, dbname: T) -> Self
-    where
-        T: ToString,
-    {
-        let dbname = dbname.to_string();
-        Self { dbname, ..self }
-    }
-
-    /// Change the `sslmode`.
-    pub fn with_sslmode<T>(self, sslmode: T) -> Self
-    where
-        T: ToString,
-    {
-        let sslmode = sslmode.to_string();
-        Self { sslmode, ..self }
-    }
-
-    /// Change the `evts_table`.
-    pub fn with_evts_table(self, evts_table: String) -> Self {
-        Self { evts_table, ..self }
-    }
-
-    /// Change the `poll_interval`.
-    pub fn with_poll_interval(self, poll_interval: Duration) -> Self {
-        Self {
-            poll_interval,
-            ..self
-        }
-    }
-
-    /// Change the `id_broadcast_capacity`.
-    pub fn with_id_broadcast_capacity(self, id_broadcast_capacity: NonZeroUsize) -> Self {
-        Self {
-            id_broadcast_capacity,
-            ..self
-        }
-    }
-
-    /// Change the `setup` flag.
-    pub fn with_setup(self, setup: bool) -> Self {
-        Self { setup, ..self }
-    }
-
     fn cnn_config(&self) -> String {
         format!(
             "host={} port={} user={} password={} dbname={} sslmode={}",
@@ -477,29 +504,41 @@ mod tests {
         let container = client.run(Postgres::default());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = Config::default().with_port(port).with_setup(true);
+        let config = Config {
+            port,
+            setup: true,
+            ..Default::default()
+        };
         let mut evt_log = PostgresEvtLog::new(config).await?;
 
         let id = Uuid::now_v7();
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("", id).await?;
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(&1, Some("tag"), id, None, &convert::prost::to_bytes)
+            .persist(&1, Some("tag"), "test", id, None, &convert::prost::to_bytes)
             .await?;
         assert!(last_seq_no.as_u64() == 1);
 
         evt_log
-            .persist(&2, None, id, Some(last_seq_no), &convert::prost::to_bytes)
+            .persist(
+                &2,
+                None,
+                "test",
+                id,
+                Some(last_seq_no),
+                &convert::prost::to_bytes,
+            )
             .await?;
 
         let result = evt_log
             .persist(
                 &3,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
@@ -511,17 +550,18 @@ mod tests {
             .persist(
                 &3,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no.succ()),
                 &convert::prost::to_bytes,
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("", id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", id, 2.try_into()?, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -539,7 +579,7 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log
@@ -548,19 +588,20 @@ mod tests {
 
         let last_seq_no = evt_log
             .clone()
-            .persist(&4, None, id, last_seq_no, &convert::prost::to_bytes)
+            .persist(&4, None, "test", id, last_seq_no, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
             .persist(
                 &5,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("", id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts

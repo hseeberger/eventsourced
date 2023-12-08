@@ -43,6 +43,7 @@ pub use tagged_evt::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
+use serde::{Deserialize, Serialize};
 use std::{error::Error as StdError, fmt::Debug, num::NonZeroUsize};
 use thiserror::Error;
 use tokio::{
@@ -99,6 +100,7 @@ pub trait EventSourcedExt {
     /// spawning.
     #[allow(async_fn_in_trait)]
     async fn spawn<
+        T,
         L,
         S,
         EvtToBytes,
@@ -111,6 +113,7 @@ pub trait EventSourcedExt {
         StateFromBytesError,
     >(
         mut self,
+        r#type: T,
         id: Uuid,
         cmd_buffer: NonZeroUsize,
         evt_log: L,
@@ -119,6 +122,7 @@ pub trait EventSourcedExt {
     ) -> Result<EntityRef<Self>, SpawnError>
     where
         Self: EventSourced,
+        T: ToString,
         L: EvtLog,
         S: SnapshotStore,
         EvtToBytes: Fn(&Self::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
@@ -132,6 +136,8 @@ pub trait EventSourcedExt {
             Fn(Bytes) -> Result<Self::State, StateFromBytesError> + Copy + Send + Sync + 'static,
         StateFromBytesError: StdError + Send + Sync + 'static,
     {
+        let r#type = r#type.to_string();
+
         let Binarizer {
             evt_to_bytes,
             evt_from_bytes,
@@ -152,7 +158,7 @@ pub trait EventSourcedExt {
 
         // Replay latest events.
         let last_seq_no = evt_log
-            .last_seq_no(id)
+            .last_seq_no(&r#type, id)
             .await
             .map_err(|error| SpawnError::LastSeqNo(error.into()))?;
         assert!(
@@ -164,7 +170,7 @@ pub trait EventSourcedExt {
             let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
             debug!(%id, %from_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(id, from_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(&r#type, id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
             pin!(evts);
@@ -180,6 +186,7 @@ pub trait EventSourcedExt {
         // Create entity.
         let mut entity = Entity {
             event_sourced: self,
+            r#type,
             id,
             last_seq_no,
             evt_log,
@@ -203,6 +210,7 @@ pub trait EventSourcedExt {
                             error!(%id, "cannot send command handler result");
                         };
                     }
+
                     Err(error) => {
                         error!(%id, %error, "cannot persist event");
                         break;
@@ -259,34 +267,35 @@ where
     }
 
     /// Invoke the command handler of the entity.
-    ///
-    /// The returned (outer) `Result` signals, whether the command could be sent to the entity and
-    /// the command handler result could be received, i.e. an `Err` signals a technical failure.
-    ///
-    /// The (outer) `Ok` variant contains another (inner) `Result`, which signals whether the
-    /// command was valid or rejected. If it was valid, the persisted event is returned, else the
-    /// rejection error.
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, EntityRefError> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E>> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
             .await
-            .map_err(|error| EntityRefError::SendCmd(Box::new(error)))?;
-        result_out.await.map_err(EntityRefError::RcvHandlerResult)
+            .map_err(|_| HandleCmdError::Internal("cannot send command".to_string()))?;
+        result_out
+            .await
+            .map_err(|_| {
+                HandleCmdError::Internal("cannot receive command handler result".to_string())
+            })?
+            .map_err(HandleCmdError::Handler)
     }
 }
 
 /// Error from an [EntityRef].
-#[derive(Debug, Error)]
-pub enum EntityRefError {
-    /// A command cannot be sent from an [EntityRef] to its entity.
-    #[error("cannot send command to Entity")]
-    SendCmd(#[source] Box<dyn StdError + Send + Sync + 'static>),
+#[derive(Debug, Error, Serialize, Deserialize)]
+pub enum HandleCmdError<E>
+where
+    E: EventSourced,
+{
+    /// A command cannot be sent from an [EntityRef] to its entity or the result cannot be received
+    /// from its entity.
+    #[error("{0}")]
+    Internal(String),
 
-    /// An [EntityRef] cannot receive the command handler result from its entity, potentially
-    /// because its entity has terminated.
-    #[error("cannot receive command handler result from Entity")]
-    RcvHandlerResult(#[from] oneshot::error::RecvError),
+    /// Command handler result.
+    #[error(transparent)]
+    Handler(E::Error),
 }
 
 /// Collection of conversion functions from and to [Bytes] for events and snapshots.
@@ -299,6 +308,7 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
 
 struct Entity<E, L, S, EvtToBytes, StateToBytes> {
     event_sourced: E,
+    r#type: String,
     id: Uuid,
     last_seq_no: Option<SeqNo>,
     evt_log: L,
@@ -327,6 +337,7 @@ where
                     .persist(
                         &evt,
                         tag.as_deref(),
+                        &self.r#type,
                         self.id,
                         self.last_seq_no,
                         &self.evt_to_bytes,
@@ -358,7 +369,7 @@ mod tests {
     use super::*;
     use async_stream::stream;
     use bytes::BytesMut;
-    use futures::Stream;
+    use futures::{stream, Stream};
     use prost::Message;
     use std::convert::Infallible;
 
@@ -402,6 +413,7 @@ mod tests {
             &mut self,
             _evt: &E,
             _tag: Option<&str>,
+            _type: &str,
             _id: Uuid,
             _last_seq_no: Option<SeqNo>,
             _to_bytes: &ToBytes,
@@ -414,36 +426,57 @@ mod tests {
             Ok(SeqNo(43.try_into().unwrap()))
         }
 
-        async fn last_seq_no(&self, _entity_id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+        async fn last_seq_no(
+            &self,
+            _type: &str,
+            _entity_id: Uuid,
+        ) -> Result<Option<SeqNo>, Self::Error> {
             Ok(Some(SeqNo(42.try_into().unwrap())))
         }
 
         async fn evts_by_id<E, FromBytes, FromBytesError>(
             &self,
+            _type: &str,
             _id: Uuid,
-            from_seq_no: SeqNo,
-            evt_from_bytes: FromBytes,
+            _from_seq_no: SeqNo,
+            _evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
             FromBytesError: StdError + Send + Sync + 'static,
         {
-            let evts = stream! {
-                for n in 0..666 {
-                    for evt in 1..=3 {
-                        let seq_no = (n * 3 + evt).try_into().unwrap();
-                        if from_seq_no <= seq_no  {
-                            let mut bytes = BytesMut::new();
-                            evt.encode(&mut bytes).map_err(|error| TestEvtLogError(error.into()))?;
-                            let evt = evt_from_bytes(bytes.into()).map_err(|error| TestEvtLogError(error.into()))?;
-                            yield Ok((seq_no, evt));
-                        }
-                    }
+            Ok(stream::empty())
+            // let evts = stream! {
+            //     for n in 0..666 {
+            //         for evt in 1..=3 {
+            //             let seq_no = (n * 3 + evt).try_into().unwrap();
+            //             if from_seq_no <= seq_no  {
+            //                 let mut bytes = BytesMut::new();
+            //                 evt.encode(&mut bytes).map_err(|error|
+            // TestEvtLogError(error.into()))?;                 let evt =
+            // evt_from_bytes(bytes.into()).map_err(|error| TestEvtLogError(error.into()))?;
+            //                 yield Ok((seq_no, evt));
+            //             }
+            //         }
 
-                }
-            };
-            Ok(evts)
+            //     }
+            // };
+            // Ok(evts)
+        }
+
+        async fn evts_by_type<E, FromBytes, FromBytesError>(
+            &self,
+            _type: &str,
+            _from_seq_no: SeqNo,
+            _evt_from_bytes: FromBytes,
+        ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+        where
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+            FromBytesError: StdError + Send + Sync + 'static,
+        {
+            Ok(stream::empty())
         }
 
         async fn evts_by_tag<E, FromBytes, FromBytesError>(
@@ -529,7 +562,7 @@ mod tests {
         let snapshot_store = TestSnapshotStore;
 
         let entity = spawn(evt_log, snapshot_store).await?;
-        entity.handle_cmd(()).await??;
+        entity.handle_cmd(()).await?;
 
         Ok(())
     }
@@ -547,6 +580,7 @@ mod tests {
         let entity = task::spawn(async move {
             Simple(0)
                 .spawn(
+                    "simple",
                     Uuid::now_v7(),
                     unsafe { NonZeroUsize::new_unchecked(1) },
                     evt_log,

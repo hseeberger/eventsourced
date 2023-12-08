@@ -51,7 +51,7 @@ impl NatsEvtLog {
             jetstream
                 .create_stream(jetstream::stream::Config {
                     name: config.evt_stream_name.clone(),
-                    subjects: vec![format!("{}.*", config.evt_stream_name)],
+                    subjects: vec![format!("{}.>", config.evt_stream_name)],
                     ..Default::default()
                 })
                 .await
@@ -109,6 +109,7 @@ impl EvtLog for NatsEvtLog {
         &mut self,
         evt: &E,
         tag: Option<&str>,
+        r#type: &str,
         id: Uuid,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
@@ -125,7 +126,7 @@ impl EvtLog for NatsEvtLog {
             p.expected_last_subject_sequence(last_seq_no.as_u64())
         });
 
-        let subject = format!("{}.{id}", self.evt_stream_name);
+        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
         self.jetstream
             .send_publish(subject, publish)
             .await
@@ -135,8 +136,8 @@ impl EvtLog for NatsEvtLog {
             .and_then(|ack| ack.sequence.try_into().map_err(Error::InvalidSeqNo))
     }
 
-    async fn last_seq_no(&self, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
-        let subject = format!("{}.{id}", self.evt_stream_name);
+    async fn last_seq_no(&self, r#type: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
         stream(&self.jetstream, &self.evt_stream_name)
             .await?
             .get_last_raw_message_by_subject(&subject)
@@ -162,6 +163,7 @@ impl EvtLog for NatsEvtLog {
 
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
+        r#type: &str,
         id: Uuid,
         from: SeqNo,
         from_bytes: FromBytes,
@@ -172,7 +174,23 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%id, %from, "building events by ID stream");
-        let subject = format!("{}.{id}", self.evt_stream_name);
+        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
+        self.evts(subject, from, |_| true, from_bytes).await
+    }
+
+    async fn evts_by_type<E, FromBytes, FromBytesError>(
+        &self,
+        r#type: &str,
+        from: SeqNo,
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    where
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        FromBytesError: StdError + Send + Sync + 'static,
+    {
+        debug!(r#type, %from, "building events by type stream");
+        let subject = format!("{}.{type}.*", self.evt_stream_name);
         self.evts(subject, from, |_| true, from_bytes).await
     }
 
@@ -188,7 +206,7 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(tag, %from, "building events by tag stream");
-        let subject = format!("{}.*", self.evt_stream_name);
+        let subject = format!("{}.*.*", self.evt_stream_name);
         self.evts(subject, from, move |msg| has_tag(msg, &tag), from_bytes)
             .await
     }
@@ -198,47 +216,16 @@ impl EvtLog for NatsEvtLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    server_addr: String,
+    pub server_addr: String,
 
     #[serde(default = "evt_stream_name_default")]
-    evt_stream_name: String,
+    pub evt_stream_name: String,
 
     #[serde(default = "tag_stream_name_default")]
-    tag_stream_name: String,
+    pub tag_stream_name: String,
 
     #[serde(default)]
-    setup: bool,
-}
-
-impl Config {
-    /// Change the `server_addr`.
-    pub fn with_server_addr<T>(self, server_addr: T) -> Self
-    where
-        T: ToString,
-    {
-        let server_addr = server_addr.to_string();
-        Self {
-            server_addr,
-            ..self
-        }
-    }
-
-    /// Change the `stream_name`.
-    pub fn with_stream_name<T>(self, stream_name: T) -> Self
-    where
-        T: ToString,
-    {
-        let stream_name = stream_name.to_string();
-        Self {
-            evt_stream_name: stream_name,
-            ..self
-        }
-    }
-
-    /// Change the `setup` flag.
-    pub fn with_setup(self, setup: bool) -> Self {
-        Self { setup, ..self }
-    }
+    pub setup: bool,
 }
 
 impl Default for Config {
@@ -374,31 +361,41 @@ mod tests {
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config::default()
-            .with_server_addr(server_addr)
-            .with_setup(true);
+        let config = Config {
+            server_addr,
+            setup: true,
+            ..Default::default()
+        };
         let mut evt_log = NatsEvtLog::new(config).await?;
 
         let id = Uuid::now_v7();
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", id).await?;
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(&1, Some("tag"), id, None, &convert::prost::to_bytes)
+            .persist(&1, Some("tag"), "test", id, None, &convert::prost::to_bytes)
             .await?;
         assert!(last_seq_no.as_u64() == 1);
 
         evt_log
-            .persist(&2, None, id, Some(last_seq_no), &convert::prost::to_bytes)
+            .persist(
+                &2,
+                None,
+                "test",
+                id,
+                Some(last_seq_no),
+                &convert::prost::to_bytes,
+            )
             .await?;
 
         let result = evt_log
             .persist(
                 &3,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
@@ -410,17 +407,18 @@ mod tests {
             .persist(
                 &3,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no.succ()),
                 &convert::prost::to_bytes,
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 2.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", id, 2.try_into()?, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -438,7 +436,7 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(id, 1.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log
@@ -447,19 +445,20 @@ mod tests {
 
         let last_seq_no = evt_log
             .clone()
-            .persist(&4, None, id, last_seq_no, &convert::prost::to_bytes)
+            .persist(&4, None, "test", id, last_seq_no, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
             .persist(
                 &5,
                 Some("tag"),
+                "test",
                 id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no(id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts
