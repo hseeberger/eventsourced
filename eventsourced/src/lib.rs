@@ -210,6 +210,7 @@ pub trait EventSourcedExt {
                             error!(%id, "cannot send command handler result");
                         };
                     }
+
                     Err(error) => {
                         error!(%id, %error, "cannot persist event");
                         break;
