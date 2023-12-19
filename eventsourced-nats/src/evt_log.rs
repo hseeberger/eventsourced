@@ -109,7 +109,7 @@ impl EvtLog for NatsEvtLog {
         &mut self,
         evt: &E,
         tag: Option<&str>,
-        r#type: &str,
+        type_name: &str,
         id: Uuid,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
@@ -126,7 +126,7 @@ impl EvtLog for NatsEvtLog {
             p.expected_last_subject_sequence(last_seq_no.as_u64())
         });
 
-        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
+        let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
         self.jetstream
             .send_publish(subject, publish)
             .await
@@ -136,8 +136,8 @@ impl EvtLog for NatsEvtLog {
             .and_then(|ack| ack.sequence.try_into().map_err(Error::InvalidSeqNo))
     }
 
-    async fn last_seq_no(&self, r#type: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
-        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
+    async fn last_seq_no(&self, type_name: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+        let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
         stream(&self.jetstream, &self.evt_stream_name)
             .await?
             .get_last_raw_message_by_subject(&subject)
@@ -163,7 +163,7 @@ impl EvtLog for NatsEvtLog {
 
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
-        r#type: &str,
+        type_name: &str,
         id: Uuid,
         from: SeqNo,
         from_bytes: FromBytes,
@@ -174,13 +174,13 @@ impl EvtLog for NatsEvtLog {
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%id, %from, "building events by ID stream");
-        let subject = format!("{}.{type}.{id}", self.evt_stream_name);
+        let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
         self.evts(subject, from, |_| true, from_bytes).await
     }
 
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
-        r#type: &str,
+        type_name: &str,
         from: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
@@ -189,8 +189,8 @@ impl EvtLog for NatsEvtLog {
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(r#type, %from, "building events by type stream");
-        let subject = format!("{}.{type}.*", self.evt_stream_name);
+        debug!(type_name, %from, "building events by type stream");
+        let subject = format!("{}.{type_name}.*", self.evt_stream_name);
         self.evts(subject, from, |_| true, from_bytes).await
     }
 

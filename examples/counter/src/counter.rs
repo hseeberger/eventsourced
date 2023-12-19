@@ -36,6 +36,8 @@ impl EventSourced for Counter {
     type State = u64;
     type Error = Error;
 
+    const TYPE_NAME: &'static str = "counter";
+
     /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(
         &self,

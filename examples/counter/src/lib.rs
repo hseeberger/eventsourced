@@ -36,7 +36,6 @@ where
         let counter = Counter::default();
         let counter = counter
             .spawn(
-                "counter",
                 id,
                 NonZeroUsize::new(42).expect("42 is not zero"),
                 evt_log,
@@ -83,7 +82,6 @@ where
         tasks.spawn(async move {
             let _counter = Counter::default()
                 .spawn(
-                    "counter",
                     id,
                     NonZeroUsize::new(42).expect("42 is not zero"),
                     evt_log,
