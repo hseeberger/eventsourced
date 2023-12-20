@@ -21,7 +21,7 @@ pub trait EvtLog: Clone + Send + 'static {
         &mut self,
         evt: &E,
         tag: Option<&str>,
-        r#type: &str,
+        type_name: &str,
         id: Uuid,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
@@ -34,14 +34,14 @@ pub trait EvtLog: Clone + Send + 'static {
     /// Get the last sequence number for the given entity type and ID.
     fn last_seq_no(
         &self,
-        r#type: &str,
+        type_name: &str,
         id: Uuid,
     ) -> impl Future<Output = Result<Option<SeqNo>, Self::Error>> + Send;
 
     /// Get the events for the given entity ID starting with the given sequence number.
     fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
-        r#type: &str,
+        type_name: &str,
         id: Uuid,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
@@ -56,7 +56,7 @@ pub trait EvtLog: Clone + Send + 'static {
     /// Get the events for the given entity type starting with the given sequence number.
     fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
-        r#type: &str,
+        type_name: &str,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
     ) -> impl Future<

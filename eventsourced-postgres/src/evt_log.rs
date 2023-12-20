@@ -106,7 +106,7 @@ impl PostgresEvtLog {
 
     async fn next_evts_by_type<E, FromBytes, FromBytesError>(
         &self,
-        r#type: &str,
+        type_name: &str,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
@@ -115,9 +115,9 @@ impl PostgresEvtLog {
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%r#type, %from_seq_no, "querying events");
+        debug!(%type_name, %from_seq_no, "querying events");
 
-        let params: [&(dyn ToSql + Sync); 2] = [&r#type, &(from_seq_no.as_u64() as i64)];
+        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &(from_seq_no.as_u64() as i64)];
         let evts = self
             .cnn()
             .await?
@@ -184,10 +184,13 @@ impl PostgresEvtLog {
         Ok(evts)
     }
 
-    async fn last_seq_no_by_type(&self, r#type: &str) -> Result<Option<SeqNo>, Error> {
+    async fn last_seq_no_by_type(&self, type_name: &str) -> Result<Option<SeqNo>, Error> {
         self.cnn()
             .await?
-            .query_one("SELECT MAX(seq_no) FROM evts WHERE type = $1", &[&r#type])
+            .query_one(
+                "SELECT MAX(seq_no) FROM evts WHERE type = $1",
+                &[&type_name],
+            )
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .and_then(|row| {
@@ -217,7 +220,7 @@ impl EvtLog for PostgresEvtLog {
         &mut self,
         evt: &E,
         tag: Option<&str>,
-        r#type: &str,
+        type_name: &str,
         id: Uuid,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
@@ -240,7 +243,7 @@ impl EvtLog for PostgresEvtLog {
             .await?
             .query_one(
                 "INSERT INTO evts (seq_no, type, id, evt, tag) VALUES ($1, $2, $3, $4, $5) RETURNING seq_no",
-                &[&seq_no, &r#type, &id, &bytes.as_ref(), &tag],
+                &[&seq_no, &type_name, &id, &bytes.as_ref(), &tag],
             )
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
@@ -315,7 +318,7 @@ impl EvtLog for PostgresEvtLog {
 
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
-        r#type: &str,
+        type_name: &str,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
@@ -324,15 +327,15 @@ impl EvtLog for PostgresEvtLog {
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(r#type, %from_seq_no, "building events by type stream");
+        debug!(type_name, %from_seq_no, "building events by type stream");
 
-        let last_seq_no = self.last_seq_no_by_type(r#type).await?;
+        let last_seq_no = self.last_seq_no_by_type(type_name).await?;
 
         let mut current_from_seq_no = from_seq_no;
         let evts = stream! {
             'outer: loop {
                 let evts = self
-                    .next_evts_by_type(r#type, current_from_seq_no, from_bytes)
+                    .next_evts_by_type(type_name, current_from_seq_no, from_bytes)
                     .await?;
 
                 for await evt in evts {

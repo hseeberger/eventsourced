@@ -68,6 +68,8 @@ pub trait EventSourced: Sized + Send + 'static {
     /// Error type for rejected (a.k.a. invalid) commands.
     type Error: StdError + Send + Sync + 'static;
 
+    const TYPE_NAME: &'static str;
+
     /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(
         &self,
@@ -100,7 +102,6 @@ pub trait EventSourcedExt {
     /// spawning.
     #[allow(async_fn_in_trait)]
     async fn spawn<
-        T,
         L,
         S,
         EvtToBytes,
@@ -113,7 +114,6 @@ pub trait EventSourcedExt {
         StateFromBytesError,
     >(
         mut self,
-        r#type: T,
         id: Uuid,
         cmd_buffer: NonZeroUsize,
         evt_log: L,
@@ -122,7 +122,6 @@ pub trait EventSourcedExt {
     ) -> Result<EntityRef<Self>, SpawnError>
     where
         Self: EventSourced,
-        T: ToString,
         L: EvtLog,
         S: SnapshotStore,
         EvtToBytes: Fn(&Self::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
@@ -136,8 +135,6 @@ pub trait EventSourcedExt {
             Fn(Bytes) -> Result<Self::State, StateFromBytesError> + Copy + Send + Sync + 'static,
         StateFromBytesError: StdError + Send + Sync + 'static,
     {
-        let r#type = r#type.to_string();
-
         let Binarizer {
             evt_to_bytes,
             evt_from_bytes,
@@ -158,7 +155,7 @@ pub trait EventSourcedExt {
 
         // Replay latest events.
         let last_seq_no = evt_log
-            .last_seq_no(&r#type, id)
+            .last_seq_no(Self::TYPE_NAME, id)
             .await
             .map_err(|error| SpawnError::LastSeqNo(error.into()))?;
         assert!(
@@ -170,7 +167,7 @@ pub trait EventSourcedExt {
             let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
             debug!(%id, %from_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(&r#type, id, from_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
             pin!(evts);
@@ -186,7 +183,7 @@ pub trait EventSourcedExt {
         // Create entity.
         let mut entity = Entity {
             event_sourced: self,
-            r#type,
+            // type_name,
             id,
             last_seq_no,
             evt_log,
@@ -308,7 +305,7 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
 
 struct Entity<E, L, S, EvtToBytes, StateToBytes> {
     event_sourced: E,
-    r#type: String,
+    // type_name: String,
     id: Uuid,
     last_seq_no: Option<SeqNo>,
     evt_log: L,
@@ -337,7 +334,7 @@ where
                     .persist(
                         &evt,
                         tag.as_deref(),
-                        &self.r#type,
+                        E::TYPE_NAME,
                         self.id,
                         self.last_seq_no,
                         &self.evt_to_bytes,
@@ -378,12 +375,11 @@ mod tests {
 
     impl EventSourced for Simple {
         type Cmd = ();
-
         type Evt = u64;
-
         type State = u64;
-
         type Error = Infallible;
+
+        const TYPE_NAME: &'static str = "simple";
 
         fn handle_cmd(
             &self,
@@ -580,7 +576,6 @@ mod tests {
         let entity = task::spawn(async move {
             Simple(0)
                 .spawn(
-                    "simple",
                     Uuid::now_v7(),
                     unsafe { NonZeroUsize::new_unchecked(1) },
                     evt_log,
