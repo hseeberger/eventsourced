@@ -6,7 +6,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.9.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.9.0...eventsourced-nats-v0.9.1) - 2023-12-20
+## [0.10.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.9.0...eventsourced-nats-v0.10.0) - 2023-12-20
 
 ### Added
 - add const TYPE_NAME to trait EventSourced ([#94](https://github.com/hseeberger/eventsourced/pull/94))
