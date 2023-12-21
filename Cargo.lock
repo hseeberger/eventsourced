@@ -529,7 +529,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced-nats"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "async-nats",
