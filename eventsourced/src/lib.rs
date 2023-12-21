@@ -563,8 +563,6 @@ mod tests {
         Ok(())
     }
 
-    // We go through these hoops to ensure oddities in "async fn in trait" and other unstable
-    // features are handle appropriately, e.g. by asserting futures are send.
     async fn spawn<E, S>(
         evt_log: E,
         snapshot_store: S,
