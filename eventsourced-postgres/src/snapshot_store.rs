@@ -71,7 +71,7 @@ impl SnapshotStore for PostgresSnapshotStore {
         &mut self,
         id: Uuid,
         seq_no: SeqNo,
-        state: S,
+        state: &S,
         to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
     where
@@ -81,7 +81,7 @@ impl SnapshotStore for PostgresSnapshotStore {
     {
         debug!(%id, %seq_no, "saving snapshot");
 
-        let bytes = to_bytes(&state).map_err(|source| Error::ToBytes(Box::new(source)))?;
+        let bytes = to_bytes(state).map_err(|source| Error::ToBytes(Box::new(source)))?;
         self.cnn()
             .await?
             .execute(
@@ -211,7 +211,7 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(id, seq_no, state, &convert::prost::to_bytes)
+            .save(id, seq_no, &state, &convert::prost::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
