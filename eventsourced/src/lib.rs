@@ -292,7 +292,7 @@ where
     }
 
     /// Invoke the command handler of the entity.
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E::Error>> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E>> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
@@ -309,7 +309,10 @@ where
 
 /// Error from an [EntityRef].
 #[derive(Debug, Error, Serialize, Deserialize)]
-pub enum HandleCmdError<Error> {
+pub enum HandleCmdError<E>
+where
+    E: EventSourced,
+{
     /// A command cannot be sent from an [EntityRef] to its entity or the result cannot be received
     /// from its entity.
     #[error("{0}")]
@@ -317,7 +320,7 @@ pub enum HandleCmdError<Error> {
 
     /// Command handler result.
     #[error(transparent)]
-    Handler(Error),
+    Handler(E::Error),
 }
 
 /// Collection of conversion functions from and to [Bytes] for events and snapshots.
@@ -336,6 +339,7 @@ mod tests {
     use prost::Message;
     use std::convert::Infallible;
 
+    #[derive(Debug)]
     struct Simple;
 
     impl EventSourced for Simple {

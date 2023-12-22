@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+#[derive(Debug)]
 pub struct Counter;
 
 impl EventSourced for Counter {
