@@ -10,6 +10,12 @@ pub struct NoopSnapshotStore<I>(PhantomData<I>);
 
 impl<I> NoopSnapshotStore<I> {
     pub fn new() -> Self {
+        Default::default()
+    }
+}
+
+impl<I> Default for NoopSnapshotStore<I> {
+    fn default() -> Self {
         Self(PhantomData)
     }
 }
