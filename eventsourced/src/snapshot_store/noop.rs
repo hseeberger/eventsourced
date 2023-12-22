@@ -3,18 +3,19 @@
 use crate::{SeqNo, Snapshot, SnapshotStore};
 use bytes::Bytes;
 use std::{convert::Infallible, error::Error as StdError, fmt::Debug};
-use uuid::Uuid;
 
 /// A [SnapshotStore] implementation that does nothing.
 #[derive(Debug, Clone, Copy)]
 pub struct NoopSnapshotStore;
 
 impl SnapshotStore for NoopSnapshotStore {
+    type Id = String;
+
     type Error = Infallible;
 
     async fn save<S, ToBytes, ToBytesError>(
         &mut self,
-        _id: Uuid,
+        _id: &Self::Id,
         _seq_no: SeqNo,
         _state: &S,
         _to_bytes: &ToBytes,
@@ -29,7 +30,7 @@ impl SnapshotStore for NoopSnapshotStore {
 
     async fn load<S, FromBytes, FromBytesError>(
         &self,
-        _id: Uuid,
+        _id: &Self::Id,
         _from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where

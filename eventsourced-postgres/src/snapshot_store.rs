@@ -8,18 +8,19 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    marker::PhantomData,
 };
-use tokio_postgres::NoTls;
+use tokio_postgres::{types::ToSql, NoTls};
 use tracing::debug;
-use uuid::Uuid;
 
 /// A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
-pub struct PostgresSnapshotStore {
+pub struct PostgresSnapshotStore<I> {
     cnn_pool: CnnPool<NoTls>,
+    _id: PhantomData<I>,
 }
 
-impl PostgresSnapshotStore {
+impl<I> PostgresSnapshotStore<I> {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating PostgresSnapshotStore");
@@ -50,7 +51,10 @@ impl PostgresSnapshotStore {
                 .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?;
         }
 
-        Ok(Self { cnn_pool })
+        Ok(Self {
+            cnn_pool,
+            _id: PhantomData,
+        })
     }
 
     async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
@@ -58,18 +62,23 @@ impl PostgresSnapshotStore {
     }
 }
 
-impl Debug for PostgresSnapshotStore {
+impl<I> Debug for PostgresSnapshotStore<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PostgresSnapshotStore").finish()
     }
 }
 
-impl SnapshotStore for PostgresSnapshotStore {
+impl<I> SnapshotStore for PostgresSnapshotStore<I>
+where
+    I: Debug + Clone + ToSql + Send + Sync + 'static,
+{
+    type Id = I;
+
     type Error = Error;
 
     async fn save<S, ToBytes, ToBytesError>(
         &mut self,
-        id: Uuid,
+        id: &Self::Id,
         seq_no: SeqNo,
         state: &S,
         to_bytes: &ToBytes,
@@ -79,7 +88,7 @@ impl SnapshotStore for PostgresSnapshotStore {
         ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, %seq_no, "saving snapshot");
+        debug!(?id, %seq_no, "saving snapshot");
 
         let bytes = to_bytes(state).map_err(|source| Error::ToBytes(Box::new(source)))?;
         self.cnn()
@@ -95,14 +104,14 @@ impl SnapshotStore for PostgresSnapshotStore {
 
     async fn load<S, FromBytes, FromBytesError>(
         &self,
-        id: Uuid,
+        id: &Self::Id,
         from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
         FromBytes: Fn(Bytes) -> Result<S, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, "loading snapshot");
+        debug!(?id, "loading snapshot");
 
         self.cnn()
             .await?
@@ -186,6 +195,7 @@ mod tests {
     use eventsourced::convert;
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
@@ -198,12 +208,12 @@ mod tests {
             setup: true,
             ..Default::default()
         };
-        let mut snapshot_store = PostgresSnapshotStore::new(config).await?;
+        let mut snapshot_store = PostgresSnapshotStore::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(id, &convert::prost::from_bytes)
+            .load::<i32, _, _>(&id, &convert::prost::from_bytes)
             .await?;
         assert!(snapshot.is_none());
 
@@ -211,11 +221,11 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(id, seq_no, &state, &convert::prost::to_bytes)
+            .save(&id, seq_no, &state, &convert::prost::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(id, &convert::prost::from_bytes)
+            .load::<i32, _, _>(&id, &convert::prost::from_bytes)
             .await?;
 
         assert!(snapshot.is_some());

@@ -17,23 +17,24 @@ use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
-    fmt::{self, Debug, Formatter},
+    fmt::{self, Debug, Display, Formatter},
+    marker::PhantomData,
     path::PathBuf,
     time::Duration,
 };
 use tracing::debug;
-use uuid::Uuid;
 
 const TAG: &str = "EventSourced-Tag";
 
 /// An [EvtLog] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
-pub struct NatsEvtLog {
+pub struct NatsEvtLog<I> {
     evt_stream_name: String,
     jetstream: Jetstream,
+    _id: PhantomData<I>,
 }
 
-impl NatsEvtLog {
+impl<I> NatsEvtLog<I> {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating NatsEvtLog");
@@ -85,6 +86,7 @@ impl NatsEvtLog {
         Ok(Self {
             evt_stream_name: config.evt_stream_name,
             jetstream,
+            _id: PhantomData,
         })
     }
 
@@ -113,7 +115,7 @@ impl NatsEvtLog {
     }
 }
 
-impl Debug for NatsEvtLog {
+impl<I> Debug for NatsEvtLog<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("NatsEvtLog")
             .field("stream_name", &self.evt_stream_name)
@@ -121,7 +123,12 @@ impl Debug for NatsEvtLog {
     }
 }
 
-impl EvtLog for NatsEvtLog {
+impl<I> EvtLog for NatsEvtLog<I>
+where
+    I: Debug + Display + Clone + Send + Sync + 'static,
+{
+    type Id = I;
+
     type Error = Error;
 
     async fn persist<E, ToBytes, ToBytesError>(
@@ -129,7 +136,7 @@ impl EvtLog for NatsEvtLog {
         evt: &E,
         tag: Option<&str>,
         type_name: &str,
-        id: Uuid,
+        id: &Self::Id,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
     ) -> Result<SeqNo, Self::Error>
@@ -155,7 +162,11 @@ impl EvtLog for NatsEvtLog {
             .and_then(|ack| ack.sequence.try_into().map_err(Error::InvalidSeqNo))
     }
 
-    async fn last_seq_no(&self, type_name: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+    async fn last_seq_no(
+        &self,
+        type_name: &str,
+        id: &Self::Id,
+    ) -> Result<Option<SeqNo>, Self::Error> {
         let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
         stream(&self.jetstream, &self.evt_stream_name)
             .await?
@@ -183,7 +194,7 @@ impl EvtLog for NatsEvtLog {
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        id: Uuid,
+        id: &Self::Id,
         from: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
@@ -374,6 +385,7 @@ mod tests {
     use std::future;
     use testcontainers::{clients::Cli, core::WaitFor};
     use testcontainers_modules::testcontainers::GenericImage;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
@@ -388,17 +400,24 @@ mod tests {
             setup: true,
             ..Default::default()
         };
-        let mut evt_log = NatsEvtLog::new(config).await?;
+        let mut evt_log = NatsEvtLog::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no("test", id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", &id).await?;
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(&1, Some("tag"), "test", id, None, &convert::prost::to_bytes)
+            .persist(
+                &1,
+                Some("tag"),
+                "test",
+                &id,
+                None,
+                &convert::prost::to_bytes,
+            )
             .await?;
         assert!(last_seq_no.as_u64() == 1);
 
@@ -407,7 +426,7 @@ mod tests {
                 &2,
                 None,
                 "test",
-                id,
+                &id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
@@ -418,7 +437,7 @@ mod tests {
                 &3,
                 Some("tag"),
                 "test",
-                id,
+                &id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
@@ -430,17 +449,17 @@ mod tests {
                 &3,
                 Some("tag"),
                 "test",
-                id,
+                &id,
                 Some(last_seq_no.succ()),
                 &convert::prost::to_bytes,
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no("test", id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", &id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", id, 2.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", &id, 2.try_into()?, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -458,7 +477,7 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", id, 1.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", &id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log
@@ -467,7 +486,14 @@ mod tests {
 
         let last_seq_no = evt_log
             .clone()
-            .persist(&4, None, "test", id, last_seq_no, &convert::prost::to_bytes)
+            .persist(
+                &4,
+                None,
+                "test",
+                &id,
+                last_seq_no,
+                &convert::prost::to_bytes,
+            )
             .await?;
         evt_log
             .clone()
@@ -475,12 +501,12 @@ mod tests {
                 &5,
                 Some("tag"),
                 "test",
-                id,
+                &id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no("test", id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", &id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts

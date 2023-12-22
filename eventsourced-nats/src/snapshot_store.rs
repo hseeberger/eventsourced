@@ -11,20 +11,21 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
-    fmt::{self, Debug, Formatter},
+    fmt::{self, Debug, Display, Formatter},
+    marker::PhantomData,
     path::PathBuf,
 };
 use tracing::debug;
-use uuid::Uuid;
 
 /// A [SnapshotStore] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
-pub struct NatsSnapshotStore {
+pub struct NatsSnapshotStore<I> {
     jetstream: Jetstream,
     bucket: String,
+    _id: PhantomData<I>,
 }
 
-impl NatsSnapshotStore {
+impl<I> NatsSnapshotStore<I> {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating NatsSnapshotStore");
@@ -72,6 +73,7 @@ impl NatsSnapshotStore {
         Ok(Self {
             jetstream,
             bucket: config.bucket_name,
+            _id: PhantomData,
         })
     }
 
@@ -83,7 +85,7 @@ impl NatsSnapshotStore {
     }
 }
 
-impl Debug for NatsSnapshotStore {
+impl<I> Debug for NatsSnapshotStore<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("NatsSnapshotStore")
             .field("bucket", &self.bucket)
@@ -91,12 +93,17 @@ impl Debug for NatsSnapshotStore {
     }
 }
 
-impl SnapshotStore for NatsSnapshotStore {
+impl<I> SnapshotStore for NatsSnapshotStore<I>
+where
+    I: Debug + Display + Clone + Send + Sync + 'static,
+{
+    type Id = I;
+
     type Error = Error;
 
     async fn save<S, ToBytes, ToBytesError>(
         &mut self,
-        id: Uuid,
+        id: &Self::Id,
         seq_no: SeqNo,
         state: &S,
         to_bytes: &ToBytes,
@@ -131,7 +138,7 @@ impl SnapshotStore for NatsSnapshotStore {
 
     async fn load<S, FromBytes, FromBytesError>(
         &self,
-        id: Uuid,
+        id: &Self::Id,
         from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where
@@ -225,6 +232,7 @@ mod tests {
     use eventsourced::convert;
     use testcontainers::{clients::Cli, core::WaitFor};
     use testcontainers_modules::testcontainers::GenericImage;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
@@ -244,7 +252,7 @@ mod tests {
         let id = Uuid::now_v7();
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(id, &convert::prost::from_bytes)
+            .load::<i32, _, _>(&id, &convert::prost::from_bytes)
             .await?;
         assert!(snapshot.is_none());
 
@@ -252,11 +260,11 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(id, seq_no, &state, &convert::prost::to_bytes)
+            .save(&id, seq_no, &state, &convert::prost::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(id, &convert::prost::from_bytes)
+            .load::<i32, _, _>(&id, &convert::prost::from_bytes)
             .await?;
 
         assert!(snapshot.is_some());

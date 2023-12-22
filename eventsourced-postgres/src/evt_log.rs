@@ -10,22 +10,26 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
 use tokio::time::sleep;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::debug;
-use uuid::Uuid;
 
 /// An [EvtLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
-pub struct PostgresEvtLog {
+pub struct PostgresEvtLog<I> {
     poll_interval: Duration,
     cnn_pool: CnnPool<NoTls>,
+    _id: PhantomData<I>,
 }
 
-impl PostgresEvtLog {
+impl<I> PostgresEvtLog<I>
+where
+    I: ToSql + Sync,
+{
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating PostgresEvtLog");
@@ -57,6 +61,7 @@ impl PostgresEvtLog {
         Ok(Self {
             poll_interval: config.poll_interval,
             cnn_pool,
+            _id: PhantomData,
         })
     }
 
@@ -66,7 +71,7 @@ impl PostgresEvtLog {
 
     async fn next_evts_by_id<E, FromBytes, FromBytesError>(
         &self,
-        id: Uuid,
+        id: &I,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
@@ -75,8 +80,7 @@ impl PostgresEvtLog {
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, %from_seq_no, "querying events");
-
+        debug!(?id, %from_seq_no, "querying events");
         let params: [&(dyn ToSql + Sync); 2] = [&id, &(from_seq_no.as_u64() as i64)];
         let evts = self
             .cnn()
@@ -203,13 +207,18 @@ impl PostgresEvtLog {
     }
 }
 
-impl Debug for PostgresEvtLog {
+impl<I> Debug for PostgresEvtLog<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PostgresEvtLog").finish()
     }
 }
 
-impl EvtLog for PostgresEvtLog {
+impl<I> EvtLog for PostgresEvtLog<I>
+where
+    I: Clone + ToSql + Send + Sync + 'static,
+{
+    type Id = I;
+
     type Error = Error;
 
     /// The maximum value for sequence numbers. As PostgreSQL does not support unsigned integers,
@@ -221,7 +230,7 @@ impl EvtLog for PostgresEvtLog {
         evt: &E,
         tag: Option<&str>,
         type_name: &str,
-        id: Uuid,
+        id: &Self::Id,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
     ) -> Result<SeqNo, Self::Error>
@@ -230,8 +239,6 @@ impl EvtLog for PostgresEvtLog {
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, "persisting event");
-
         let seq_no = last_seq_no
             .map(|seq_no| seq_no.succ())
             .unwrap_or(SeqNo::MIN)
@@ -254,7 +261,7 @@ impl EvtLog for PostgresEvtLog {
             })
     }
 
-    async fn last_seq_no(&self, _type: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error> {
+    async fn last_seq_no(&self, _type: &str, id: &Self::Id) -> Result<Option<SeqNo>, Self::Error> {
         self.cnn()
             .await?
             .query_one("SELECT MAX(seq_no) FROM evts WHERE id = $1", &[&id])
@@ -271,8 +278,8 @@ impl EvtLog for PostgresEvtLog {
 
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
-        _type: &str,
-        id: Uuid,
+        _type_name: &str,
+        id: &Self::Id,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
@@ -281,8 +288,6 @@ impl EvtLog for PostgresEvtLog {
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, %from_seq_no, "building events by ID stream");
-
         let last_seq_no = self.last_seq_no("", id).await?;
 
         let mut current_from_seq_no = from_seq_no;
@@ -500,6 +505,7 @@ mod tests {
     use std::future;
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
+    use uuid::Uuid;
 
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
@@ -512,17 +518,24 @@ mod tests {
             setup: true,
             ..Default::default()
         };
-        let mut evt_log = PostgresEvtLog::new(config).await?;
+        let mut evt_log = PostgresEvtLog::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no("", id).await?;
+        let last_seq_no = evt_log.last_seq_no("", &id).await?;
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(&1, Some("tag"), "test", id, None, &convert::prost::to_bytes)
+            .persist(
+                &1,
+                Some("tag"),
+                "test",
+                &id,
+                None,
+                &convert::prost::to_bytes,
+            )
             .await?;
         assert!(last_seq_no.as_u64() == 1);
 
@@ -531,7 +544,7 @@ mod tests {
                 &2,
                 None,
                 "test",
-                id,
+                &id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
@@ -542,7 +555,7 @@ mod tests {
                 &3,
                 Some("tag"),
                 "test",
-                id,
+                &id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
@@ -554,17 +567,17 @@ mod tests {
                 &3,
                 Some("tag"),
                 "test",
-                id,
+                &id,
                 Some(last_seq_no.succ()),
                 &convert::prost::to_bytes,
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no("", id).await?;
+        let last_seq_no = evt_log.last_seq_no("", &id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", id, 2.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", &id, 2.try_into()?, convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -582,7 +595,7 @@ mod tests {
         assert_eq!(sum, 4);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", id, 1.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", &id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
         let evts_by_tag = evt_log
@@ -591,7 +604,14 @@ mod tests {
 
         let last_seq_no = evt_log
             .clone()
-            .persist(&4, None, "test", id, last_seq_no, &convert::prost::to_bytes)
+            .persist(
+                &4,
+                None,
+                "test",
+                &id,
+                last_seq_no,
+                &convert::prost::to_bytes,
+            )
             .await?;
         evt_log
             .clone()
@@ -599,12 +619,12 @@ mod tests {
                 &5,
                 Some("tag"),
                 "test",
-                id,
+                &id,
                 Some(last_seq_no),
                 &convert::prost::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no("", id).await?;
+        let last_seq_no = evt_log.last_seq_no("", &id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts
