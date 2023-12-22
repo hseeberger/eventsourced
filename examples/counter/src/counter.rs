@@ -2,12 +2,12 @@ use anyhow::Result;
 use eventsourced::{EventSourced, IntoTaggedEvt};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use uuid::Uuid;
 
 #[derive(Debug)]
 pub struct Counter;
 
 impl EventSourced for Counter {
+    type Id = String;
     type Cmd = Cmd;
     type Evt = Evt;
     type State = State;
@@ -16,7 +16,7 @@ impl EventSourced for Counter {
     const TYPE_NAME: &'static str = "counter";
 
     fn handle_cmd(
-        _id: Uuid,
+        _id: &Self::Id,
         state: &Self::State,
         cmd: Self::Cmd,
     ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {

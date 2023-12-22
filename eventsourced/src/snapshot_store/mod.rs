@@ -6,18 +6,19 @@ pub use noop::*;
 
 use crate::SeqNo;
 use bytes::Bytes;
-use std::error::Error as StdError;
-use uuid::Uuid;
+use std::{error::Error as StdError, fmt::Debug};
 
 /// Persistence for snapshots.
 #[trait_variant::make(SnapshotStore: Send)]
 pub trait LocalSnapshotStore: Clone + 'static {
+    type Id: Debug;
+
     type Error: StdError + Send + Sync + 'static;
 
     /// Save the given snapshot state for the given entity ID and sequence number.
     async fn save<S, ToBytes, ToBytesError>(
         &mut self,
-        id: Uuid,
+        id: &Self::Id,
         seq_no: SeqNo,
         state: &S,
         to_bytes: &ToBytes,
@@ -30,7 +31,7 @@ pub trait LocalSnapshotStore: Clone + 'static {
     /// Find and possibly load the [Snapshot] for the given entity ID.
     async fn load<S, FromBytes, FromBytesError>(
         &self,
-        id: Uuid,
+        id: &Self::Id,
         from_bytes: FromBytes,
     ) -> Result<Option<Snapshot<S>>, Self::Error>
     where

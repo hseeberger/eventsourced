@@ -3,12 +3,13 @@
 use crate::SeqNo;
 use bytes::Bytes;
 use futures::Stream;
-use std::{error::Error as StdError, num::NonZeroU64};
-use uuid::Uuid;
+use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64};
 
 /// Persistence for events.
 #[trait_variant::make(EvtLog: Send)]
 pub trait LocalEvtLog: Clone + 'static {
+    type Id: Debug;
+
     type Error: StdError + Send + Sync + 'static;
 
     /// The maximum value for sequence numbers. Defaults to `u64::MAX` unless overriden by an
@@ -23,7 +24,7 @@ pub trait LocalEvtLog: Clone + 'static {
         evt: &E,
         tag: Option<&str>,
         type_name: &str,
-        id: Uuid,
+        id: &Self::Id,
         last_seq_no: Option<SeqNo>,
         to_bytes: &ToBytes,
     ) -> Result<SeqNo, Self::Error>
@@ -33,13 +34,17 @@ pub trait LocalEvtLog: Clone + 'static {
         ToBytesError: StdError + Send + Sync + 'static;
 
     /// Get the last sequence number for the given entity type and ID.
-    async fn last_seq_no(&self, type_name: &str, id: Uuid) -> Result<Option<SeqNo>, Self::Error>;
+    async fn last_seq_no(
+        &self,
+        type_name: &str,
+        id: &Self::Id,
+    ) -> Result<Option<SeqNo>, Self::Error>;
 
     /// Get the events for the given entity ID starting with the given sequence number.
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        id: Uuid,
+        id: &Self::Id,
         from_seq_no: SeqNo,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>

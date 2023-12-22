@@ -4,9 +4,8 @@ use crate::counter::{Cmd, Counter};
 use anyhow::{Context, Result};
 use eventsourced::{convert, EventSourcedExt, EvtLog, SnapshotStore};
 use serde::Deserialize;
-use std::{iter, num::NonZeroUsize, time::Instant};
+use std::{num::NonZeroUsize, time::Instant};
 use tokio::task::JoinSet;
-use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -17,24 +16,21 @@ pub struct Config {
 
 pub async fn run<L, S>(config: Config, evt_log: L, snapshot_store: S) -> Result<()>
 where
-    L: EvtLog,
-    S: SnapshotStore,
+    L: EvtLog<Id = String>,
+    S: SnapshotStore<Id = String>,
 {
-    let ids = iter::repeat(())
-        .take(config.entity_count)
-        .map(|_| Uuid::now_v7())
+    let ids = (0..config.entity_count)
+        .map(|n| n.to_string())
         .collect::<Vec<_>>();
 
     println!("Spawning and sending a lot of commands ...");
     let mut tasks = JoinSet::new();
     let start_time = Instant::now();
-    for id in &ids {
-        let id = *id;
-
+    for id in ids.clone() {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::spawn(
-            id,
+            id.clone(),
             None,
             NonZeroUsize::new(42).expect("42 is not zero"),
             evt_log,

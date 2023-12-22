@@ -11,7 +11,7 @@
 //! these are implemented in the respective crates.
 //!
 //! The [spawn](EventSourcedExt::spawn) function provides for creating event sourced entities,
-//! identifiable by a [Uuid], for some event log and  some snapshot store. Conversion of events and
+//! identifiable by an ID, for some event log and  some snapshot store. Conversion of events and
 //! snapshot state to and from bytes happens via given [Binarizer] functions; for
 //! [prost](https://github.com/tokio-rs/prost) and
 //! [serde_json](https://github.com/serde-rs/json) these are already provided.
@@ -53,10 +53,12 @@ use tokio::{
     task,
 };
 use tracing::{debug, error};
-use uuid::Uuid;
 
 /// Command and event handling for an event sourced entity.
 pub trait EventSourced {
+    /// Id type.
+    type Id: Debug + Send + 'static;
+
     /// Command type.
     type Cmd: Send + Sync + 'static;
 
@@ -73,7 +75,7 @@ pub trait EventSourced {
 
     /// Command handler, returning the to be persisted event or an error.
     fn handle_cmd(
-        id: Uuid,
+        id: &Self::Id,
         state: &Self::State,
         cmd: Self::Cmd,
     ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
@@ -111,7 +113,7 @@ pub trait EventSourcedExt: Sized {
         StateFromBytes,
         StateFromBytesError,
     >(
-        id: Uuid,
+        id: Self::Id,
         snapshot_after: Option<NonZeroU64>,
         cmd_buffer: NonZeroUsize,
         mut evt_log: L,
@@ -120,8 +122,8 @@ pub trait EventSourcedExt: Sized {
     ) -> Result<EntityRef<Self>, SpawnError>
     where
         Self: EventSourced,
-        L: EvtLog,
-        S: SnapshotStore,
+        L: EvtLog<Id = Self::Id>,
+        S: SnapshotStore<Id = Self::Id>,
         EvtToBytes: Fn(&Self::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
         EvtToBytesError: StdError + Send + Sync + 'static,
         StateToBytes: Fn(&Self::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
@@ -142,11 +144,11 @@ pub trait EventSourcedExt: Sized {
 
         // Restore snapshot.
         let (snapshot_seq_no, state) = snapshot_store
-            .load::<Self::State, _, _>(id, state_from_bytes)
+            .load::<Self::State, _, _>(&id, state_from_bytes)
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(%id, %seq_no, "restoring snapshot");
+                debug!(?id, %seq_no, "restoring snapshot");
                 (seq_no, state)
             })
             .unzip();
@@ -155,7 +157,7 @@ pub trait EventSourcedExt: Sized {
 
         // Replay latest events.
         let mut last_seq_no = evt_log
-            .last_seq_no(Self::TYPE_NAME, id)
+            .last_seq_no(Self::TYPE_NAME, &id)
             .await
             .map_err(|error| SpawnError::LastSeqNo(error.into()))?;
         assert!(
@@ -165,9 +167,9 @@ pub trait EventSourcedExt: Sized {
         if snapshot_seq_no < last_seq_no {
             let from_seq_no = snapshot_seq_no.unwrap_or(SeqNo::MIN);
             let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
-            debug!(%id, %from_seq_no, %to_seq_no , "replaying evts");
+            debug!(?id, %from_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, id, from_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
             pin!(evts);
@@ -189,14 +191,14 @@ pub trait EventSourcedExt: Sized {
         // Spawn handler loop.
         task::spawn(async move {
             while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                let result = Self::handle_cmd(id, &state, cmd);
+                let result = Self::handle_cmd(&id, &state, cmd);
 
                 // This ugliness seems to be needed unfortunately, because matching on result
                 // prevents from using `state` below, because would still be
                 // borrowed.
                 if let Err(error) = result {
                     if result_sender.send(Err(error)).is_err() {
-                        error!(%id, "cannot send command handler result");
+                        error!(?id, "cannot send command handler result");
                     };
                     continue;
                 };
@@ -208,7 +210,7 @@ pub trait EventSourcedExt: Sized {
                         &evt,
                         tag.as_deref(),
                         Self::TYPE_NAME,
-                        id,
+                        &id,
                         last_seq_no,
                         &evt_to_bytes,
                     )
@@ -223,29 +225,29 @@ pub trait EventSourcedExt: Sized {
                             .unwrap_or_default()
                         {
                             if let Err(error) = snapshot_store
-                                .save(id, seq_no, &state, &state_to_bytes)
+                                .save(&id, seq_no, &state, &state_to_bytes)
                                 .await
                             {
-                                error!(%id, %error, "cannot save snapshot");
+                                error!(?id, %error, "cannot save snapshot");
                             };
                         }
 
                         if result_sender.send(Ok(())).is_err() {
-                            error!(%id, "cannot send command handler result");
+                            error!(?id, "cannot send command handler result");
                         };
                     }
 
                     Err(error) => {
-                        error!(%id, %error, "cannot persist event");
+                        error!(?id, %error, "cannot persist event");
                         break;
                     }
                 }
             }
 
-            debug!(%id, "entity terminated");
+            debug!(?id, "entity terminated");
         });
 
-        Ok(EntityRef { id, cmd_in })
+        Ok(EntityRef { cmd_in })
     }
 }
 
@@ -278,7 +280,6 @@ pub struct EntityRef<E>
 where
     E: EventSourced,
 {
-    id: Uuid,
     cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<(), E::Error>>)>,
 }
 
@@ -286,11 +287,6 @@ impl<E> EntityRef<E>
 where
     E: EventSourced,
 {
-    /// Get the ID of the proxied event sourced entity.
-    pub fn id(&self) -> Uuid {
-        self.id
-    }
-
     /// Invoke the command handler of the entity.
     pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E>> {
         let (result_in, result_out) = oneshot::channel();
@@ -338,11 +334,13 @@ mod tests {
     use futures::{stream, Stream};
     use prost::Message;
     use std::convert::Infallible;
+    use uuid::Uuid;
 
     #[derive(Debug)]
     struct Simple;
 
     impl EventSourced for Simple {
+        type Id = Uuid;
         type Cmd = ();
         type Evt = u64;
         type State = u64;
@@ -351,7 +349,7 @@ mod tests {
         const TYPE_NAME: &'static str = "simple";
 
         fn handle_cmd(
-            _id: Uuid,
+            _id: &Self::Id,
             state: &Self::State,
             _cmd: Self::Cmd,
         ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
@@ -368,6 +366,7 @@ mod tests {
     struct TestEvtLog;
 
     impl EvtLog for TestEvtLog {
+        type Id = Uuid;
         type Error = TestEvtLogError;
 
         async fn persist<E, ToBytes, ToBytesError>(
@@ -375,7 +374,7 @@ mod tests {
             _evt: &E,
             _tag: Option<&str>,
             _type: &str,
-            _id: Uuid,
+            _id: &Self::Id,
             _last_seq_no: Option<SeqNo>,
             _to_bytes: &ToBytes,
         ) -> Result<SeqNo, Self::Error>
@@ -390,7 +389,7 @@ mod tests {
         async fn last_seq_no(
             &self,
             _type: &str,
-            _entity_id: Uuid,
+            _entity_id: &Self::Id,
         ) -> Result<Option<SeqNo>, Self::Error> {
             Ok(Some(SeqNo(42.try_into().unwrap())))
         }
@@ -398,7 +397,7 @@ mod tests {
         async fn evts_by_id<E, FromBytes, FromBytesError>(
             &self,
             _type: &str,
-            _id: Uuid,
+            _id: &Self::Id,
             _from_seq_no: SeqNo,
             _evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
@@ -447,11 +446,12 @@ mod tests {
     struct TestSnapshotStore;
 
     impl SnapshotStore for TestSnapshotStore {
+        type Id = Uuid;
         type Error = TestSnapshotStoreError;
 
         async fn save<S, ToBytes, ToBytesError>(
             &mut self,
-            _id: Uuid,
+            _id: &Self::Id,
             _seq_no: SeqNo,
             _state: &S,
             _state_to_bytes: &ToBytes,
@@ -466,7 +466,7 @@ mod tests {
 
         async fn load<S, FromBytes, FromBytesError>(
             &self,
-            _id: Uuid,
+            _id: &Self::Id,
             state_from_bytes: FromBytes,
         ) -> Result<Option<Snapshot<S>>, Self::Error>
         where
