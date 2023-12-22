@@ -83,7 +83,7 @@ pub trait EventSourced {
 }
 
 /// Extension methods for types implementing [EventSourced].
-pub trait EventSourcedExt {
+pub trait EventSourcedExt: Sized {
     /// Spawns an event sourced entity and creates an [EntityRef] as a handle for it.
     ///
     /// First the given [SnapshotStore] is used to find and possibly load a snapshot. Then the
@@ -117,7 +117,7 @@ pub trait EventSourcedExt {
         mut evt_log: L,
         mut snapshot_store: S,
         binarizer: Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes>,
-    ) -> Result<EntityRef<Self::Cmd, Self::Error>, SpawnError>
+    ) -> Result<EntityRef<Self>, SpawnError>
     where
         Self: EventSourced,
         L: EvtLog,
@@ -274,19 +274,25 @@ impl<E> EventSourcedExt for E where E: EventSourced {}
 /// A handle for a spawned event sourced entity which can be used to invoke its command handler.
 #[derive(Debug, Clone)]
 #[allow(clippy::type_complexity)]
-pub struct EntityRef<Cmd, Error> {
+pub struct EntityRef<E>
+where
+    E: EventSourced,
+{
     id: Uuid,
-    cmd_in: mpsc::Sender<(Cmd, oneshot::Sender<Result<(), Error>>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<(), E::Error>>)>,
 }
 
-impl<Cmd, Error> EntityRef<Cmd, Error> {
+impl<E> EntityRef<E>
+where
+    E: EventSourced,
+{
     /// Get the ID of the proxied event sourced entity.
     pub fn id(&self) -> Uuid {
         self.id
     }
 
     /// Invoke the command handler of the entity.
-    pub async fn handle_cmd(&self, cmd: Cmd) -> Result<(), HandleCmdError<Error>> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E::Error>> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
