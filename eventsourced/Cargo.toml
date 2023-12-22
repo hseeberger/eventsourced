@@ -20,6 +20,7 @@ serde_json       = { workspace = true, optional = true }
 thiserror        = { workspace = true }
 tokio            = { workspace = true, features = [ "rt-multi-thread" ] }
 tracing          = { workspace = true }
+trait-variant    = { workspace = true }
 uuid             = { workspace = true }
 
 [dev-dependencies]
