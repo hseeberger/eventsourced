@@ -2,14 +2,23 @@
 
 use crate::{SeqNo, Snapshot, SnapshotStore};
 use bytes::Bytes;
-use std::{convert::Infallible, error::Error as StdError, fmt::Debug};
+use std::{convert::Infallible, error::Error as StdError, fmt::Debug, marker::PhantomData};
 
 /// A [SnapshotStore] implementation that does nothing.
 #[derive(Debug, Clone, Copy)]
-pub struct NoopSnapshotStore;
+pub struct NoopSnapshotStore<I>(PhantomData<I>);
 
-impl SnapshotStore for NoopSnapshotStore {
-    type Id = String;
+impl<I> NoopSnapshotStore<I> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<I> SnapshotStore for NoopSnapshotStore<I>
+where
+    I: Debug + Clone + Send + Sync + 'static,
+{
+    type Id = I;
 
     type Error = Infallible;
 
