@@ -43,7 +43,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
-    fmt::{Debug, Display},
+    fmt::Debug,
     num::{NonZeroU64, NonZeroUsize},
 };
 use thiserror::Error;
@@ -57,7 +57,7 @@ use tracing::{debug, error};
 /// Command and event handling for an event sourced entity.
 pub trait EventSourced {
     /// Id type.
-    type Id: Display + Send + 'static;
+    type Id: Debug + Send + 'static;
 
     /// Command type.
     type Cmd: Send + Sync + 'static;
@@ -148,7 +148,7 @@ pub trait EventSourcedExt: Sized {
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(%id, %seq_no, "restoring snapshot");
+                debug!(?id, %seq_no, "restoring snapshot");
                 (seq_no, state)
             })
             .unzip();
@@ -167,7 +167,7 @@ pub trait EventSourcedExt: Sized {
         if snapshot_seq_no < last_seq_no {
             let from_seq_no = snapshot_seq_no.unwrap_or(SeqNo::MIN);
             let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
-            debug!(%id, %from_seq_no, %to_seq_no , "replaying evts");
+            debug!(?id, %from_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
                 .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, evt_from_bytes)
                 .await
@@ -198,7 +198,7 @@ pub trait EventSourcedExt: Sized {
                 // borrowed.
                 if let Err(error) = result {
                     if result_sender.send(Err(error)).is_err() {
-                        error!(%id, "cannot send command handler result");
+                        error!(?id, "cannot send command handler result");
                     };
                     continue;
                 };
@@ -228,23 +228,23 @@ pub trait EventSourcedExt: Sized {
                                 .save(&id, seq_no, &state, &state_to_bytes)
                                 .await
                             {
-                                error!(%id, %error, "cannot save snapshot");
+                                error!(?id, %error, "cannot save snapshot");
                             };
                         }
 
                         if result_sender.send(Ok(())).is_err() {
-                            error!(%id, "cannot send command handler result");
+                            error!(?id, "cannot send command handler result");
                         };
                     }
 
                     Err(error) => {
-                        error!(%id, %error, "cannot persist event");
+                        error!(?id, %error, "cannot persist event");
                         break;
                     }
                 }
             }
 
-            debug!(%id, "entity terminated");
+            debug!(?id, "entity terminated");
         });
 
         Ok(EntityRef { cmd_in })
