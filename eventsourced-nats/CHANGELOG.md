@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.10.0...eventsourced-nats-v0.11.0) - 2023-12-22
+
+### Added
+- major API overhaul ([#104](https://github.com/hseeberger/eventsourced/pull/104))
+- *(eventsourced-nats)* credentials ([#102](https://github.com/hseeberger/eventsourced/pull/102))
+
+### Other
+- update NATS version ([#97](https://github.com/hseeberger/eventsourced/pull/97))
+
 ## [0.10.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.9.0...eventsourced-nats-v0.10.0) - 2023-12-20
 
 ### Added
