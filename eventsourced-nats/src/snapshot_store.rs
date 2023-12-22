@@ -2,8 +2,8 @@
 
 use crate::Error;
 use async_nats::{
-    connect,
     jetstream::{self, kv::Store, Context as Jetstream},
+    ConnectOptions,
 };
 use bytes::{Bytes, BytesMut};
 use eventsourced::{SeqNo, Snapshot, SnapshotStore};
@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    path::PathBuf,
 };
 use tracing::debug;
 use uuid::Uuid;
@@ -28,20 +29,38 @@ impl NatsSnapshotStore {
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating NatsSnapshotStore");
 
-        let server_addr = config.server_addr;
-        let client = connect(&server_addr).await.map_err(|error| {
-            Error::Nats(
-                format!("cannot connect to NATS server at {server_addr})"),
-                error.into(),
-            )
-        })?;
+        let mut options = ConnectOptions::new();
+        if let Some(credentials) = config.credentials {
+            options = options
+                .credentials_file(&credentials)
+                .await
+                .map_err(|error| {
+                    Error::Nats(
+                        format!(
+                            "cannot read NATS credentials file at {})",
+                            credentials.display()
+                        ),
+                        error.into(),
+                    )
+                })?;
+        };
+        let client = options
+            .connect(&config.server_addr)
+            .await
+            .map_err(|error| {
+                Error::Nats(
+                    format!("cannot connect to NATS server at {})", config.server_addr),
+                    error.into(),
+                )
+            })?;
         let jetstream = jetstream::new(client);
 
         // Setup bucket.
         if config.setup {
             let _ = jetstream
                 .create_key_value(jetstream::kv::Config {
-                    bucket: "snapshots".to_string(),
+                    bucket: config.bucket_name.clone(),
+                    max_bytes: config.bucket_max_bytes,
                     ..Default::default()
                 })
                 .await
@@ -52,7 +71,7 @@ impl NatsSnapshotStore {
 
         Ok(Self {
             jetstream,
-            bucket: config.bucket,
+            bucket: config.bucket_name,
         })
     }
 
@@ -162,8 +181,13 @@ impl SnapshotStore for NatsSnapshotStore {
 pub struct Config {
     pub server_addr: String,
 
-    #[serde(default = "bucket_default")]
-    pub bucket: String,
+    pub credentials: Option<PathBuf>,
+
+    #[serde(default = "bucket_name_default")]
+    pub bucket_name: String,
+
+    #[serde(default = "bucket_max_bytes_default")]
+    pub bucket_max_bytes: i64,
 
     #[serde(default)]
     pub setup: bool,
@@ -174,13 +198,19 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server_addr: "localhost:4222".to_string(),
-            bucket: bucket_default(),
+            credentials: None,
+            bucket_name: bucket_name_default(),
+            bucket_max_bytes: bucket_max_bytes_default(),
             setup: false,
         }
     }
 }
 
-fn bucket_default() -> String {
+fn bucket_max_bytes_default() -> i64 {
+    -1
+}
+
+fn bucket_name_default() -> String {
     "snapshots".to_string()
 }
 

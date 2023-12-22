@@ -2,7 +2,6 @@
 
 use crate::Error;
 use async_nats::{
-    connect,
     jetstream::{
         self,
         consumer::{pull, AckPolicy, DeliverPolicy},
@@ -10,6 +9,7 @@ use async_nats::{
         stream::{LastRawMessageErrorKind, Stream as JetstreamStream},
         Context as Jetstream, Message,
     },
+    ConnectOptions,
 };
 use bytes::Bytes;
 use eventsourced::{EvtLog, SeqNo};
@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
+    path::PathBuf,
     time::Duration,
 };
 use tracing::debug;
@@ -37,13 +38,30 @@ impl NatsEvtLog {
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating NatsEvtLog");
 
-        let server_addr = config.server_addr;
-        let client = connect(&server_addr).await.map_err(|error| {
-            Error::Nats(
-                format!("cannot connect to NATS server at {server_addr})"),
-                error.into(),
-            )
-        })?;
+        let mut options = ConnectOptions::new();
+        if let Some(credentials) = config.credentials {
+            options = options
+                .credentials_file(&credentials)
+                .await
+                .map_err(|error| {
+                    Error::Nats(
+                        format!(
+                            "cannot read NATS credentials file at {})",
+                            credentials.display()
+                        ),
+                        error.into(),
+                    )
+                })?;
+        };
+        let client = options
+            .connect(&config.server_addr)
+            .await
+            .map_err(|error| {
+                Error::Nats(
+                    format!("cannot connect to NATS server at {})", config.server_addr),
+                    error.into(),
+                )
+            })?;
         let jetstream = jetstream::new(client);
 
         // Setup stream.
@@ -52,12 +70,13 @@ impl NatsEvtLog {
                 .create_stream(jetstream::stream::Config {
                     name: config.evt_stream_name.clone(),
                     subjects: vec![format!("{}.>", config.evt_stream_name)],
+                    max_bytes: config.evt_stream_max_bytes,
                     ..Default::default()
                 })
                 .await
                 .map_err(|error| {
                     Error::Nats(
-                        format!("cannot create tag stream '{}'", config.evt_stream_name),
+                        format!("cannot create evt stream '{}'", config.evt_stream_name),
                         error.into(),
                     )
                 })?;
@@ -218,11 +237,13 @@ impl EvtLog for NatsEvtLog {
 pub struct Config {
     pub server_addr: String,
 
+    pub credentials: Option<PathBuf>,
+
     #[serde(default = "evt_stream_name_default")]
     pub evt_stream_name: String,
 
-    #[serde(default = "tag_stream_name_default")]
-    pub tag_stream_name: String,
+    #[serde(default = "evt_stream_max_bytes_default")]
+    pub evt_stream_max_bytes: i64,
 
     #[serde(default)]
     pub setup: bool,
@@ -233,8 +254,9 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server_addr: "localhost:4222".into(),
+            credentials: None,
             evt_stream_name: evt_stream_name_default(),
-            tag_stream_name: tag_stream_name_default(),
+            evt_stream_max_bytes: evt_stream_max_bytes_default(),
             setup: false,
         }
     }
@@ -339,8 +361,8 @@ fn evt_stream_name_default() -> String {
     "evts".to_string()
 }
 
-fn tag_stream_name_default() -> String {
-    "tags".to_string()
+fn evt_stream_max_bytes_default() -> i64 {
+    -1
 }
 
 #[cfg(test)]
