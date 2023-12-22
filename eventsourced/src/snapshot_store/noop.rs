@@ -16,11 +16,11 @@ impl SnapshotStore for NoopSnapshotStore {
         &mut self,
         _id: Uuid,
         _seq_no: SeqNo,
-        _state: S,
+        _state: &S,
         _to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
     where
-        S: Send,
+        S: Send + Sync,
         ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError,
     {

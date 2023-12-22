@@ -18,11 +18,11 @@ pub trait SnapshotStore: Clone + Send + 'static {
         &mut self,
         id: Uuid,
         seq_no: SeqNo,
-        state: S,
+        state: &S,
         to_bytes: &ToBytes,
     ) -> impl Future<Output = Result<(), Self::Error>> + Send
     where
-        S: Send,
+        S: Send + Sync,
         ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static;
 

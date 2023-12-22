@@ -33,17 +33,16 @@ where
 
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
-        let counter = Counter::default();
-        let counter = counter
-            .spawn(
-                id,
-                NonZeroUsize::new(42).expect("42 is not zero"),
-                evt_log,
-                snapshot_store,
-                convert::serde_json::binarizer(),
-            )
-            .await
-            .context("spawn entity")?;
+        let counter = Counter::spawn(
+            id,
+            None,
+            NonZeroUsize::new(42).expect("42 is not zero"),
+            evt_log,
+            snapshot_store,
+            convert::serde_json::binarizer(),
+        )
+        .await
+        .context("spawn counter entity")?;
 
         tasks.spawn(async move {
             for n in 0..config.evt_count / 2 {
@@ -80,17 +79,16 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
-            let _counter = Counter::default()
-                .spawn(
-                    id,
-                    NonZeroUsize::new(42).expect("42 is not zero"),
-                    evt_log,
-                    snapshot_store,
-                    convert::serde_json::binarizer(),
-                )
-                .await
-                .context("spawn entity")
-                .unwrap();
+            let _counter = Counter::spawn(
+                id,
+                None,
+                NonZeroUsize::new(42).expect("42 is not zero"),
+                evt_log,
+                snapshot_store,
+                convert::serde_json::binarizer(),
+            )
+            .await
+            .unwrap();
         });
     }
     while tasks.join_next().await.is_some() {}
