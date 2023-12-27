@@ -21,7 +21,6 @@ pub trait LocalEvtLog: Clone + 'static {
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
-        tag: Option<&str>,
         type_name: &str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
@@ -56,18 +55,6 @@ pub trait LocalEvtLog: Clone + 'static {
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from_seq_no: NonZeroU64,
-        from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-    where
-        E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
-        FromBytesError: StdError + Send + Sync + 'static;
-
-    /// Get the events for the given tag starting with the given sequence number.
-    async fn evts_by_tag<E, FromBytes, FromBytesError>(
-        &self,
-        tag: String,
         from_seq_no: NonZeroU64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>

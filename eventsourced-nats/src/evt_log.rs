@@ -25,8 +25,6 @@ use std::{
 };
 use tracing::{debug, instrument};
 
-const TAG: &str = "EventSourced-Tag";
-
 /// An [EvtLog] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
 pub struct NatsEvtLog<I> {
@@ -136,7 +134,6 @@ where
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
-        tag: Option<&str>,
         type_name: &str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
@@ -149,7 +146,6 @@ where
     {
         let bytes = to_bytes(evt).map_err(|error| Error::IntoBytes(error.into()))?;
         let publish = Publish::build().payload(bytes);
-        let publish = tag.into_iter().fold(publish, |p, tag| p.header(TAG, tag));
         let publish = last_seq_no.into_iter().fold(publish, |p, last_seq_no| {
             p.expected_last_subject_sequence(last_seq_no.get())
         });
@@ -238,24 +234,6 @@ where
         debug!(type_name, %from, "building events by type stream");
         let subject = format!("{}.{type_name}.*", self.evt_stream_name);
         self.evts(subject, from, |_| true, from_bytes).await
-    }
-
-    #[instrument(skip(self, from_bytes))]
-    async fn evts_by_tag<E, FromBytes, FromBytesError>(
-        &self,
-        tag: String,
-        from: NonZeroU64,
-        from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-    where
-        E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
-        FromBytesError: StdError + Send + Sync + 'static,
-    {
-        debug!(tag, %from, "building events by tag stream");
-        let subject = format!("{}.*.*", self.evt_stream_name);
-        self.evts(subject, from, move |msg| has_tag(msg, &tag), from_bytes)
-            .await
     }
 }
 
@@ -381,14 +359,6 @@ fn seq_no(msg: &Message) -> Result<NonZeroU64, Error> {
         })
 }
 
-fn has_tag(msg: &Message, tag: &str) -> bool {
-    msg.headers
-        .as_ref()
-        .and_then(|headers| headers.get(TAG))
-        .map(|value| value.as_str() == tag)
-        .unwrap_or_default()
-}
-
 fn evt_stream_name_default() -> String {
     "evts".to_string()
 }
@@ -431,21 +401,13 @@ mod tests {
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(
-                &1,
-                Some("tag"),
-                "test",
-                &id,
-                None,
-                &convert::prost::to_bytes,
-            )
+            .persist(&1, "test", &id, None, &convert::prost::to_bytes)
             .await?;
         assert!(last_seq_no.get() == 1);
 
         evt_log
             .persist(
                 &2,
-                None,
                 "test",
                 &id,
                 Some(last_seq_no),
@@ -456,7 +418,6 @@ mod tests {
         let result = evt_log
             .persist(
                 &3,
-                Some("tag"),
                 "test",
                 &id,
                 Some(last_seq_no),
@@ -468,7 +429,6 @@ mod tests {
         evt_log
             .persist(
                 &3,
-                Some("tag"),
                 "test",
                 &id,
                 Some(last_seq_no.checked_add(1).expect("overflow")),
@@ -488,47 +448,18 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
-        let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>(
-                "tag".to_string(),
-                NonZeroU64::MIN,
-                convert::prost::from_bytes,
-            )
-            .await?;
-        let sum = evts_by_tag
-            .take(2)
-            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
-            .await?;
-        assert_eq!(sum, 4);
-
         let evts = evt_log
             .evts_by_id::<i32, _, _>("test", &id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
-        let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>(
-                "tag".to_string(),
-                NonZeroU64::MIN,
-                convert::prost::from_bytes,
-            )
-            .await?;
-
         let last_seq_no = evt_log
             .clone()
-            .persist(
-                &4,
-                None,
-                "test",
-                &id,
-                last_seq_no,
-                &convert::prost::to_bytes,
-            )
+            .persist(&4, "test", &id, last_seq_no, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
             .persist(
                 &5,
-                Some("tag"),
                 "test",
                 &id,
                 Some(last_seq_no),
@@ -543,12 +474,6 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
-
-        let sum = evts_by_tag
-            .take(3)
-            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
-            .await?;
-        assert_eq!(sum, 9);
 
         Ok(())
     }

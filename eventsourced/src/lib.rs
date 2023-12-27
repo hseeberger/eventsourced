@@ -30,11 +30,9 @@ pub mod convert;
 
 mod evt_log;
 mod snapshot_store;
-mod tagged_evt;
 
 pub use evt_log::*;
 pub use snapshot_store::*;
-pub use tagged_evt::*;
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -76,7 +74,7 @@ pub trait EventSourced {
         id: &Self::Id,
         state: &Self::State,
         cmd: Self::Cmd,
-    ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error>;
+    ) -> Result<Self::Evt, Self::Error>;
 
     /// Event handler.
     fn handle_evt(state: Self::State, evt: Self::Evt) -> Self::State;
@@ -204,23 +202,15 @@ pub trait EventSourcedExt: Sized {
                     };
                     continue;
                 };
-                let tagged_evt = result.unwrap();
-                let TaggedEvt { evt, tag } = tagged_evt.into_tagged_evt();
+                let evt = result.unwrap();
 
-                debug!(?id, ?evt, ?tag, "persisting event");
+                debug!(?id, ?evt, "persisting event");
                 match evt_log
-                    .persist(
-                        &evt,
-                        tag.as_deref(),
-                        Self::TYPE_NAME,
-                        &id,
-                        last_seq_no,
-                        &evt_to_bytes,
-                    )
+                    .persist(&evt, Self::TYPE_NAME, &id, last_seq_no, &evt_to_bytes)
                     .await
                 {
                     Ok(seq_no) => {
-                        debug!(?id, ?evt, ?tag, "persited event");
+                        debug!(?id, ?evt, "persited event");
                         last_seq_no = Some(seq_no);
                         state = Self::handle_evt(state, evt);
 
@@ -359,7 +349,7 @@ mod tests {
             _id: &Self::Id,
             state: &Self::State,
             _cmd: Self::Cmd,
-        ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+        ) -> Result<Self::Evt, Self::Error> {
             Ok((1 << 32) + *state)
         }
 
@@ -379,7 +369,6 @@ mod tests {
         async fn persist<E, ToBytes, ToBytesError>(
             &mut self,
             _evt: &E,
-            _tag: Option<&str>,
             _type: &str,
             _id: &Self::Id,
             _last_seq_no: Option<NonZeroU64>,
@@ -425,20 +414,6 @@ mod tests {
         where
             E: Send,
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
-            FromBytesError: StdError + Send + Sync + 'static,
-        {
-            Ok(stream::empty())
-        }
-
-        async fn evts_by_tag<E, FromBytes, FromBytesError>(
-            &self,
-            _tag: String,
-            _from_seq_no: NonZeroU64,
-            _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-        where
-            E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             Ok(stream::empty())

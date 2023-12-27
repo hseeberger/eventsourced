@@ -1,5 +1,5 @@
 use anyhow::Result;
-use eventsourced::{EventSourced, IntoTaggedEvt};
+use eventsourced::EventSourced;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -19,7 +19,7 @@ impl EventSourced for Counter {
         _id: &Self::Id,
         state: &Self::State,
         cmd: Self::Cmd,
-    ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
+    ) -> Result<Self::Evt, Self::Error> {
         let value = state.value;
 
         match cmd {
