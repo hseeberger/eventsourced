@@ -38,12 +38,12 @@ pub trait LocalEvtLog: Clone + 'static {
         id: &Self::Id,
     ) -> Result<Option<NonZeroU64>, Self::Error>;
 
-    /// Get the events for the given entity ID starting with the given sequence number.
+    /// Get the events for the given entity ID starting after the given sequence number.
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
         id: &Self::Id,
-        from_seq_no: NonZeroU64,
+        after_seq_no: Option<NonZeroU64>,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
@@ -51,11 +51,11 @@ pub trait LocalEvtLog: Clone + 'static {
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static;
 
-    /// Get the events for the given entity type starting with the given sequence number.
+    /// Get the events for the given entity type starting after the given sequence number.
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from_seq_no: NonZeroU64,
+        after_seq_no: Option<NonZeroU64>,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
