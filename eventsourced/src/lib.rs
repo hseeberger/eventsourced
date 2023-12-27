@@ -140,12 +140,12 @@ pub trait EventSourcedExt: Sized {
         } = binarizer;
 
         // Restore snapshot.
-        let (snapshot_seq_no, state) = snapshot_store
+        let (after_seq_no, state) = snapshot_store
             .load::<Self::State, _, _>(&id, state_from_bytes)
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(?id, %seq_no, "restored snapshot");
+                debug!(?id, %seq_no, ?state, "restored snapshot");
                 (seq_no, state)
             })
             .unzip();
@@ -158,15 +158,14 @@ pub trait EventSourcedExt: Sized {
             .await
             .map_err(|error| SpawnError::LastNonZeroU64(error.into()))?;
         assert!(
-            snapshot_seq_no <= last_seq_no,
+            after_seq_no <= last_seq_no,
             "snapshot_seq_no must be less than or equal to last_seq_no"
         );
-        if snapshot_seq_no < last_seq_no {
-            let from_seq_no = snapshot_seq_no.unwrap_or(NonZeroU64::MIN);
+        if after_seq_no < last_seq_no {
             let to_seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
-            debug!(?id, %from_seq_no, %to_seq_no , "replaying evts");
+            debug!(?id, ?after_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, after_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
             pin!(evts);
@@ -324,13 +323,12 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub state_from_bytes: StateFromBytes,
 }
 
-#[cfg(all(test, feature = "prost"))]
+#[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
-    use bytes::BytesMut;
     use futures::{stream, Stream};
-    use prost::Message;
     use std::convert::Infallible;
+    use tracing_test::traced_test;
     use uuid::Uuid;
 
     #[derive(Debug)]
@@ -339,7 +337,7 @@ mod tests {
     impl EventSourced for Simple {
         type Id = Uuid;
         type Cmd = ();
-        type Evt = u64;
+        type Evt = ();
         type State = u64;
         type Error = Infallible;
 
@@ -347,14 +345,14 @@ mod tests {
 
         fn handle_cmd(
             _id: &Self::Id,
-            state: &Self::State,
+            _state: &Self::State,
             _cmd: Self::Cmd,
         ) -> Result<Self::Evt, Self::Error> {
-            Ok((1 << 32) + *state)
+            Ok(())
         }
 
-        fn handle_evt(mut state: Self::State, evt: Self::Evt) -> Self::State {
-            state += evt >> 32;
+        fn handle_evt(mut state: Self::State, _evt: Self::Evt) -> Self::State {
+            state += 1;
             state
         }
     }
@@ -371,7 +369,7 @@ mod tests {
             _evt: &E,
             _type: &str,
             _id: &Self::Id,
-            _last_seq_no: Option<NonZeroU64>,
+            last_seq_no: Option<NonZeroU64>,
             _to_bytes: &ToBytes,
         ) -> Result<NonZeroU64, Self::Error>
         where
@@ -379,7 +377,8 @@ mod tests {
             ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
         {
-            Ok(43.try_into().unwrap())
+            let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
+            Ok(seq_no)
         }
 
         async fn last_seq_no(
@@ -394,21 +393,29 @@ mod tests {
             &self,
             _type: &str,
             _id: &Self::Id,
-            _from_seq_no: NonZeroU64,
-            _evt_from_bytes: FromBytes,
+            after_seq_no: Option<NonZeroU64>,
+            evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
             FromBytesError: StdError + Send + Sync + 'static,
         {
-            Ok(stream::empty())
+            let evts = stream::iter((after_seq_no.map(|n| n.get())).unwrap_or_default()..u64::MAX)
+                .map(move |n| {
+                    Ok((
+                        (n + 1).try_into().unwrap(),
+                        evt_from_bytes(serde_json::to_vec(&()).unwrap().into()).unwrap(),
+                    ))
+                });
+
+            Ok(evts)
         }
 
         async fn evts_by_type<E, FromBytes, FromBytesError>(
             &self,
             _type: &str,
-            _from_seq_no: NonZeroU64,
+            _after_seq_no: Option<NonZeroU64>,
             _evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
@@ -455,11 +462,10 @@ mod tests {
             FromBytes: Fn(Bytes) -> Result<S, FromBytesError>,
             FromBytesError: StdError,
         {
-            let mut bytes = BytesMut::new();
-            42.encode(&mut bytes).unwrap();
+            let bytes = serde_json::to_vec(&21).unwrap();
             let state = state_from_bytes(bytes.into()).unwrap();
             Ok(Some(Snapshot {
-                seq_no: 42.try_into().unwrap(),
+                seq_no: 21.try_into().unwrap(),
                 state,
             }))
         }
@@ -470,6 +476,7 @@ mod tests {
     struct TestSnapshotStoreError;
 
     #[tokio::test]
+    #[traced_test]
     async fn test_spawn_handle_cmd() -> Result<(), Box<dyn StdError>> {
         let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
@@ -480,11 +487,13 @@ mod tests {
             unsafe { NonZeroUsize::new_unchecked(1) },
             evt_log,
             snapshot_store,
-            convert::prost::binarizer(),
+            convert::serde_json::binarizer(),
         )
         .await?;
 
         entity.handle_cmd(()).await?;
+
+        assert!(logs_contain("state=42"));
 
         Ok(())
     }

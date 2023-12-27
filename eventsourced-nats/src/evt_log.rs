@@ -92,7 +92,7 @@ impl<I> NatsEvtLog<I> {
     async fn evts<E, F, FromBytes, FromBytesError>(
         &self,
         subject: String,
-        from: NonZeroU64,
+        after_seq_no: Option<NonZeroU64>,
         filter: F,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
@@ -106,7 +106,7 @@ impl<I> NatsEvtLog<I> {
             &self.jetstream,
             &self.evt_stream_name,
             subject,
-            from_seq_no_policy(from),
+            policy(after_seq_no),
         )
         .await?;
 
@@ -206,7 +206,7 @@ where
         &self,
         type_name: &str,
         id: &Self::Id,
-        from: NonZeroU64,
+        after_seq_no: Option<NonZeroU64>,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
@@ -214,16 +214,16 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%id, %from, "building events by ID stream");
+        debug!(%id, ?after_seq_no, "building events by ID stream");
         let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
-        self.evts(subject, from, |_| true, from_bytes).await
+        self.evts(subject, after_seq_no, |_| true, from_bytes).await
     }
 
     #[instrument(skip(self, from_bytes))]
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from: NonZeroU64,
+        after_seq_no: Option<NonZeroU64>,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
@@ -231,9 +231,9 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(type_name, %from, "building events by type stream");
+        debug!(type_name, ?after_seq_no, "building events by type stream");
         let subject = format!("{}.{type_name}.*", self.evt_stream_name);
-        self.evts(subject, from, |_| true, from_bytes).await
+        self.evts(subject, after_seq_no, |_| true, from_bytes).await
     }
 }
 
@@ -343,9 +343,13 @@ async fn stream(jetstream: &Jetstream, stream_name: &str) -> Result<JetstreamStr
     })
 }
 
-fn from_seq_no_policy(from: NonZeroU64) -> DeliverPolicy {
-    DeliverPolicy::ByStartSequence {
-        start_sequence: from.get(),
+fn policy(last_seq_no: Option<NonZeroU64>) -> DeliverPolicy {
+    match last_seq_no {
+        Some(last_seq_no) => DeliverPolicy::ByStartSequence {
+            start_sequence: last_seq_no.get() + 1,
+        },
+
+        None => DeliverPolicy::All,
     }
 }
 
@@ -440,7 +444,7 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", &id, 2.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", &id, Some(1.try_into()?), convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -449,7 +453,7 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", &id, 1.try_into()?, convert::prost::from_bytes)
+            .evts_by_type::<i32, _, _>("test", None, convert::prost::from_bytes)
             .await?;
 
         let last_seq_no = evt_log

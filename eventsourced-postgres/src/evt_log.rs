@@ -72,7 +72,7 @@ where
     async fn next_evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         id: &I,
-        from_seq_no: NonZeroU64,
+        after_seq_no: i64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
@@ -80,13 +80,13 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(?id, %from_seq_no, "querying events");
-        let params: [&(dyn ToSql + Sync); 2] = [&id, &(from_seq_no.get() as i64)];
+        debug!(?id, ?after_seq_no, "querying events");
+        let params: [&(dyn ToSql + Sync); 2] = [&id, &after_seq_no];
         let evts = self
             .cnn()
             .await?
             .query_raw(
-                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2",
+                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no > $2",
                 params,
             )
             .await
@@ -111,7 +111,7 @@ where
     async fn next_evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from_seq_no: NonZeroU64,
+        after_seq_no: i64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
@@ -119,9 +119,9 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%type_name, %from_seq_no, "querying events");
+        debug!(%type_name, ?after_seq_no, "querying events");
 
-        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &(from_seq_no.get() as i64)];
+        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &after_seq_no];
         let evts = self
             .cnn()
             .await?
@@ -203,7 +203,7 @@ where
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        let seq_no = last_seq_no.map(succ).unwrap_or(NonZeroU64::MIN).get() as i64;
+        let seq_no = last_seq_no.map(|n| n.get() as i64).unwrap_or_default() + 1;
 
         let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(Box::new(error)))?;
 
@@ -251,7 +251,7 @@ where
         &self,
         _type_name: &str,
         id: &Self::Id,
-        from_seq_no: NonZeroU64,
+        after_seq_no: Option<NonZeroU64>,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
@@ -259,9 +259,13 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        let last_seq_no = self.last_seq_no("", id).await?;
+        let last_seq_no = self
+            .last_seq_no("", id)
+            .await?
+            .map(|n| n.get() as i64)
+            .unwrap_or_default();
 
-        let mut current_from_seq_no = from_seq_no;
+        let mut current_from_seq_no = after_seq_no.map(|n| n.get() as i64).unwrap_or_default();
         let evts = stream! {
             'outer: loop {
                 let evts = self
@@ -271,7 +275,7 @@ where
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = succ(seq_no);
+                            current_from_seq_no = seq_no.get() as i64 + 1;
                             yield Ok(evt);
                         }
 
@@ -283,7 +287,7 @@ where
                 }
 
                 // Only sleep if requesting future events.
-                if Some(current_from_seq_no) >= last_seq_no {
+                if current_from_seq_no >= last_seq_no {
                     sleep(self.poll_interval).await;
                 }
             }
@@ -296,7 +300,7 @@ where
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from_seq_no: NonZeroU64,
+        after_seq_no: Option<NonZeroU64>,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
@@ -304,11 +308,15 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(type_name, %from_seq_no, "building events by type stream");
+        debug!(type_name, ?after_seq_no, "building events by type stream");
 
-        let last_seq_no = self.last_seq_no_by_type(type_name).await?;
+        let last_seq_no = self
+            .last_seq_no_by_type(type_name)
+            .await?
+            .map(|n| n.get() as i64)
+            .unwrap_or_default();
 
-        let mut current_from_seq_no = from_seq_no;
+        let mut current_from_seq_no = after_seq_no.map(|n| n.get() as i64).unwrap_or_default();
         let evts = stream! {
             'outer: loop {
                 let evts = self
@@ -318,7 +326,7 @@ where
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = succ(seq_no);
+                            current_from_seq_no = seq_no.get() as i64 + 1;
                             yield Ok(evt);
                         }
 
@@ -330,7 +338,7 @@ where
                 }
 
                 // Only sleep if requesting future events.
-                if Some(current_from_seq_no) >= last_seq_no {
+                if current_from_seq_no >= last_seq_no {
                     sleep(self.poll_interval).await;
                 }
             }
@@ -408,10 +416,6 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
     NonZeroUsize::MIN
 }
 
-fn succ(seq_no: NonZeroU64) -> NonZeroU64 {
-    seq_no.checked_add(1).expect("overflow")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,7 +442,7 @@ mod tests {
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no("", &id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", &id).await?;
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
@@ -472,16 +476,16 @@ mod tests {
                 &3,
                 "test",
                 &id,
-                Some(succ(last_seq_no)),
+                Some(last_seq_no.checked_add(1).expect("overflow")),
                 &convert::prost::to_bytes,
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no("", &id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", &id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", &id, 2.try_into()?, convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>("test", &id, Some(1.try_into()?), convert::prost::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -490,7 +494,7 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", &id, 1.try_into()?, convert::prost::from_bytes)
+            .evts_by_type::<i32, _, _>("test", None, convert::prost::from_bytes)
             .await?;
 
         let last_seq_no = evt_log
@@ -507,7 +511,7 @@ mod tests {
                 &convert::prost::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no("", &id).await?;
+        let last_seq_no = evt_log.last_seq_no("test", &id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
         let sum = evts
