@@ -23,7 +23,7 @@ use std::{
     path::PathBuf,
     time::Duration,
 };
-use tracing::debug;
+use tracing::{debug, instrument};
 
 const TAG: &str = "EventSourced-Tag";
 
@@ -132,6 +132,7 @@ where
 
     type Error = Error;
 
+    #[instrument(skip(self, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
@@ -142,7 +143,7 @@ where
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
-        E: Sync,
+        E: Debug + Sync,
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
@@ -167,6 +168,7 @@ where
             })
     }
 
+    #[instrument(skip(self))]
     async fn last_seq_no(
         &self,
         type_name: &str,
@@ -203,6 +205,7 @@ where
             )
     }
 
+    #[instrument(skip(self, from_bytes))]
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
@@ -220,6 +223,7 @@ where
         self.evts(subject, from, |_| true, from_bytes).await
     }
 
+    #[instrument(skip(self, from_bytes))]
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
@@ -236,6 +240,7 @@ where
         self.evts(subject, from, |_| true, from_bytes).await
     }
 
+    #[instrument(skip(self, from_bytes))]
     async fn evts_by_tag<E, FromBytes, FromBytesError>(
         &self,
         tag: String,

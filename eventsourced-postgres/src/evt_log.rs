@@ -16,7 +16,7 @@ use std::{
 };
 use tokio::time::sleep;
 use tokio_postgres::{types::ToSql, NoTls};
-use tracing::debug;
+use tracing::{debug, instrument};
 
 /// An [EvtLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
@@ -229,6 +229,7 @@ where
     /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
     const MAX_SEQ_NO: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) };
 
+    #[instrument(skip(self, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
@@ -239,7 +240,7 @@ where
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
-        E: Sync,
+        E: Debug + Sync,
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
@@ -262,6 +263,7 @@ where
             })
     }
 
+    #[instrument(skip(self))]
     async fn last_seq_no(
         &self,
         _type: &str,
@@ -285,6 +287,7 @@ where
             })
     }
 
+    #[instrument(skip(self, from_bytes))]
     async fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         _type_name: &str,
@@ -330,6 +333,7 @@ where
         Ok(evts)
     }
 
+    #[instrument(skip(self, from_bytes))]
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
@@ -376,6 +380,7 @@ where
         Ok(evts)
     }
 
+    #[instrument(skip(self, from_bytes))]
     async fn evts_by_tag<E, FromBytes, FromBytesError>(
         &self,
         tag: String,
