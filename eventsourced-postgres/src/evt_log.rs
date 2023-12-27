@@ -4,7 +4,7 @@ use crate::{Cnn, CnnPool, Error};
 use async_stream::stream;
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::{EvtLog, SeqNo};
+use eventsourced::EvtLog;
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -72,16 +72,16 @@ where
     async fn next_evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         id: &I,
-        from_seq_no: SeqNo,
+        from_seq_no: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(?id, %from_seq_no, "querying events");
-        let params: [&(dyn ToSql + Sync); 2] = [&id, &(from_seq_no.as_u64() as i64)];
+        let params: [&(dyn ToSql + Sync); 2] = [&id, &(from_seq_no.get() as i64)];
         let evts = self
             .cnn()
             .await?
@@ -96,7 +96,7 @@ where
                 row.and_then(|row| {
                     let seq_no = (row.get::<_, i64>(0) as u64)
                         .try_into()
-                        .map_err(|_| Error::ZeroSeqNo)?;
+                        .map_err(|_| Error::ZeroNonZeroU64)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
@@ -111,9 +111,9 @@ where
     async fn next_evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from_seq_no: SeqNo,
+        from_seq_no: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
@@ -121,7 +121,7 @@ where
     {
         debug!(%type_name, %from_seq_no, "querying events");
 
-        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &(from_seq_no.as_u64() as i64)];
+        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &(from_seq_no.get() as i64)];
         let evts = self
             .cnn()
             .await?
@@ -136,7 +136,7 @@ where
                 row.and_then(|row| {
                     let seq_no = (row.get::<_, i64>(0) as u64)
                         .try_into()
-                        .map_err(|_| Error::ZeroSeqNo)?;
+                        .map_err(|_| Error::ZeroNonZeroU64)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
@@ -151,9 +151,9 @@ where
     async fn next_evts_by_tag<E, EvtFromBytes, EvtFromBytesError>(
         &self,
         tag: &str,
-        from_seq_no: SeqNo,
+        from_seq_no: NonZeroU64,
         from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
         E: Send,
         EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
@@ -161,7 +161,7 @@ where
     {
         debug!(tag, %from_seq_no, "querying events");
 
-        let params: [&(dyn ToSql + Sync); 2] = [&tag, &(from_seq_no.as_u64() as i64)];
+        let params: [&(dyn ToSql + Sync); 2] = [&tag, &(from_seq_no.get() as i64)];
         let evts = self
             .cnn()
             .await?
@@ -176,7 +176,7 @@ where
                 row.and_then(|row| {
                     let seq_no = (row.get::<_, i64>(0) as u64)
                         .try_into()
-                        .map_err(|_| Error::ZeroSeqNo)?;
+                        .map_err(|_| Error::ZeroNonZeroU64)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
@@ -188,7 +188,7 @@ where
         Ok(evts)
     }
 
-    async fn last_seq_no_by_type(&self, type_name: &str) -> Result<Option<SeqNo>, Error> {
+    async fn last_seq_no_by_type(&self, type_name: &str) -> Result<Option<NonZeroU64>, Error> {
         self.cnn()
             .await?
             .query_one(
@@ -201,7 +201,11 @@ where
                 // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
                 row.try_get::<_, i64>(0)
                     .ok()
-                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
+                    .map(|seq_no| {
+                        (seq_no as u64)
+                            .try_into()
+                            .map_err(|_| Error::ZeroNonZeroU64)
+                    })
                     .transpose()
             })
     }
@@ -223,7 +227,7 @@ where
 
     /// The maximum value for sequence numbers. As PostgreSQL does not support unsigned integers,
     /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
-    const MAX_SEQ_NO: SeqNo = SeqNo::new(unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) });
+    const MAX_SEQ_NO: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) };
 
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
@@ -231,18 +235,15 @@ where
         tag: Option<&str>,
         type_name: &str,
         id: &Self::Id,
-        last_seq_no: Option<SeqNo>,
+        last_seq_no: Option<NonZeroU64>,
         to_bytes: &ToBytes,
-    ) -> Result<SeqNo, Self::Error>
+    ) -> Result<NonZeroU64, Self::Error>
     where
         E: Sync,
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        let seq_no = last_seq_no
-            .map(|seq_no| seq_no.succ())
-            .unwrap_or(SeqNo::MIN)
-            .as_u64() as i64;
+        let seq_no = last_seq_no.map(succ).unwrap_or(NonZeroU64::MIN).get() as i64;
 
         let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(Box::new(error)))?;
 
@@ -257,11 +258,15 @@ where
             .and_then(|row| {
                 (row.get::<_, i64>(0) as u64)
                     .try_into()
-                    .map_err(|_| Error::ZeroSeqNo)
+                    .map_err(|_| Error::ZeroNonZeroU64)
             })
     }
 
-    async fn last_seq_no(&self, _type: &str, id: &Self::Id) -> Result<Option<SeqNo>, Self::Error> {
+    async fn last_seq_no(
+        &self,
+        _type: &str,
+        id: &Self::Id,
+    ) -> Result<Option<NonZeroU64>, Self::Error> {
         self.cnn()
             .await?
             .query_one("SELECT MAX(seq_no) FROM evts WHERE id = $1", &[&id])
@@ -271,7 +276,11 @@ where
                 // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
                 row.try_get::<_, i64>(0)
                     .ok()
-                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
+                    .map(|seq_no| {
+                        (seq_no as u64)
+                            .try_into()
+                            .map_err(|_| Error::ZeroNonZeroU64)
+                    })
                     .transpose()
             })
     }
@@ -280,9 +289,9 @@ where
         &self,
         _type_name: &str,
         id: &Self::Id,
-        from_seq_no: SeqNo,
+        from_seq_no: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
@@ -300,7 +309,7 @@ where
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = seq_no.succ();
+                            current_from_seq_no = succ(seq_no);
                             yield Ok(evt);
                         }
 
@@ -324,9 +333,9 @@ where
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from_seq_no: SeqNo,
+        from_seq_no: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
@@ -346,7 +355,7 @@ where
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = seq_no.succ();
+                            current_from_seq_no = succ(seq_no);
                             yield Ok(evt);
                         }
 
@@ -370,9 +379,9 @@ where
     async fn evts_by_tag<E, FromBytes, FromBytesError>(
         &self,
         tag: String,
-        from_seq_no: SeqNo,
+        from_seq_no: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
@@ -395,7 +404,7 @@ where
             .and_then(|row| {
                 (row.get::<_, i64>(0) as u64)
                     .try_into()
-                    .map_err(|_| Error::ZeroSeqNo)
+                    .map_err(|_| Error::ZeroNonZeroU64)
             })?;
 
         let mut current_from_seq_no = from_seq_no;
@@ -408,7 +417,7 @@ where
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = seq_no.succ();
+                            current_from_seq_no = succ(seq_no);
                             yield Ok(evt);
                         }
 
@@ -498,6 +507,10 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
     NonZeroUsize::MIN
 }
 
+fn succ(seq_no: NonZeroU64) -> NonZeroU64 {
+    seq_no.checked_add(1).expect("overflow")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,7 +550,7 @@ mod tests {
                 &convert::prost::to_bytes,
             )
             .await?;
-        assert!(last_seq_no.as_u64() == 1);
+        assert!(last_seq_no.get() == 1);
 
         evt_log
             .persist(
@@ -568,7 +581,7 @@ mod tests {
                 Some("tag"),
                 "test",
                 &id,
-                Some(last_seq_no.succ()),
+                Some(succ(last_seq_no)),
                 &convert::prost::to_bytes,
             )
             .await?;
@@ -586,7 +599,11 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _>(
+                "tag".to_string(),
+                NonZeroU64::MIN,
+                convert::prost::from_bytes,
+            )
             .await?;
         let sum = evts_by_tag
             .take(2)
@@ -599,7 +616,11 @@ mod tests {
             .await?;
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _>(
+                "tag".to_string(),
+                NonZeroU64::MIN,
+                convert::prost::from_bytes,
+            )
             .await?;
 
         let last_seq_no = evt_log

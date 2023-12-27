@@ -3,12 +3,13 @@
 use crate::{Cnn, CnnPool, Error};
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::{SeqNo, Snapshot, SnapshotStore};
+use eventsourced::{Snapshot, SnapshotStore};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
+    num::NonZeroU64,
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::debug;
@@ -79,7 +80,7 @@ where
     async fn save<S, ToBytes, ToBytesError>(
         &mut self,
         id: &Self::Id,
-        seq_no: SeqNo,
+        seq_no: NonZeroU64,
         state: &S,
         to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
@@ -95,7 +96,7 @@ where
             .await?
             .execute(
                 "INSERT INTO snapshots VALUES ($1, $2, $3)",
-                &[&id, &(seq_no.as_u64() as i64), &bytes.as_ref()],
+                &[&id, &(seq_no.get() as i64), &bytes.as_ref()],
             )
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
@@ -126,7 +127,7 @@ where
             .map(move |row| {
                 let seq_no = (row.get::<_, i64>(0) as u64)
                     .try_into()
-                    .map_err(|_| Error::ZeroSeqNo)?;
+                    .map_err(|_| Error::ZeroNonZeroU64)?;
                 let bytes = row.get::<_, &[u8]>(1);
                 let bytes = Bytes::copy_from_slice(bytes);
                 from_bytes(bytes)

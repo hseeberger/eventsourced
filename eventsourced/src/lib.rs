@@ -29,12 +29,10 @@
 pub mod convert;
 
 mod evt_log;
-mod seq_no;
 mod snapshot_store;
 mod tagged_evt;
 
 pub use evt_log::*;
-pub use seq_no::*;
 pub use snapshot_store::*;
 pub use tagged_evt::*;
 
@@ -159,14 +157,14 @@ pub trait EventSourcedExt: Sized {
         let mut last_seq_no = evt_log
             .last_seq_no(Self::TYPE_NAME, &id)
             .await
-            .map_err(|error| SpawnError::LastSeqNo(error.into()))?;
+            .map_err(|error| SpawnError::LastNonZeroU64(error.into()))?;
         assert!(
             snapshot_seq_no <= last_seq_no,
             "snapshot_seq_no must be less than or equal to last_seq_no"
         );
         if snapshot_seq_no < last_seq_no {
-            let from_seq_no = snapshot_seq_no.unwrap_or(SeqNo::MIN);
-            let to_seq_no = last_seq_no.unwrap_or(SeqNo::MIN);
+            let from_seq_no = snapshot_seq_no.unwrap_or(NonZeroU64::MIN);
+            let to_seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
             debug!(?id, %from_seq_no, %to_seq_no , "replaying evts");
             let evts = evt_log
                 .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, evt_from_bytes)
@@ -260,7 +258,7 @@ pub enum SpawnError {
 
     /// The last seqence number cannot be obtained from the event log.
     #[error("cannot get last seqence number from event log")]
-    LastSeqNo(#[source] Box<dyn StdError + Send + Sync>),
+    LastNonZeroU64(#[source] Box<dyn StdError + Send + Sync>),
 
     /// Events by ID cannot be obtained from the event log.
     #[error("cannot get events by ID from event log")]
@@ -375,32 +373,32 @@ mod tests {
             _tag: Option<&str>,
             _type: &str,
             _id: &Self::Id,
-            _last_seq_no: Option<SeqNo>,
+            _last_seq_no: Option<NonZeroU64>,
             _to_bytes: &ToBytes,
-        ) -> Result<SeqNo, Self::Error>
+        ) -> Result<NonZeroU64, Self::Error>
         where
             E: Sync,
             ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
         {
-            Ok(SeqNo(43.try_into().unwrap()))
+            Ok(43.try_into().unwrap())
         }
 
         async fn last_seq_no(
             &self,
             _type: &str,
             _entity_id: &Self::Id,
-        ) -> Result<Option<SeqNo>, Self::Error> {
-            Ok(Some(SeqNo(42.try_into().unwrap())))
+        ) -> Result<Option<NonZeroU64>, Self::Error> {
+            Ok(Some(42.try_into().unwrap()))
         }
 
         async fn evts_by_id<E, FromBytes, FromBytesError>(
             &self,
             _type: &str,
             _id: &Self::Id,
-            _from_seq_no: SeqNo,
+            _from_seq_no: NonZeroU64,
             _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
@@ -412,9 +410,9 @@ mod tests {
         async fn evts_by_type<E, FromBytes, FromBytesError>(
             &self,
             _type: &str,
-            _from_seq_no: SeqNo,
+            _from_seq_no: NonZeroU64,
             _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
@@ -426,9 +424,9 @@ mod tests {
         async fn evts_by_tag<E, FromBytes, FromBytesError>(
             &self,
             _tag: String,
-            _from_seq_no: SeqNo,
+            _from_seq_no: NonZeroU64,
             _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
             E: Send,
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
@@ -452,7 +450,7 @@ mod tests {
         async fn save<S, ToBytes, ToBytesError>(
             &mut self,
             _id: &Self::Id,
-            _seq_no: SeqNo,
+            _seq_no: NonZeroU64,
             _state: &S,
             _state_to_bytes: &ToBytes,
         ) -> Result<(), Self::Error>
