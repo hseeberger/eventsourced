@@ -50,7 +50,7 @@ use tokio::{
     sync::{mpsc, oneshot},
     task,
 };
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 /// Command and event handling for an event sourced entity.
 pub trait EventSourced {
@@ -58,13 +58,13 @@ pub trait EventSourced {
     type Id: Debug + Send + 'static;
 
     /// Command type.
-    type Cmd: Send + Sync + 'static;
+    type Cmd: Debug + Send + Sync + 'static;
 
     /// Event type.
-    type Evt: Send + Sync;
+    type Evt: Debug + Send + Sync;
 
     /// State type.
-    type State: Default + Send + Sync + 'static;
+    type State: Debug + Default + Send + Sync + 'static;
 
     /// Error type for rejected (a.k.a. invalid) commands.
     type Error: StdError + Send + Sync + 'static;
@@ -99,6 +99,7 @@ pub trait EventSourcedExt: Sized {
     /// spawning.
     #[allow(async_fn_in_trait)]
     #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(evt_log, snapshot_store, binarizer))]
     async fn spawn<
         L,
         S,
@@ -146,7 +147,7 @@ pub trait EventSourcedExt: Sized {
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(?id, %seq_no, "restoring snapshot");
+                debug!(?id, %seq_no, "restored snapshot");
                 (seq_no, state)
             })
             .unzip();
@@ -178,6 +179,7 @@ pub trait EventSourcedExt: Sized {
                     break;
                 }
             }
+            debug!(?id, ?state, "replayed evts");
         }
 
         let mut evt_count = 0u64;
@@ -189,7 +191,9 @@ pub trait EventSourcedExt: Sized {
         // Spawn handler loop.
         task::spawn(async move {
             while let Some((cmd, result_sender)) = cmd_out.recv().await {
+                debug!(?id, ?cmd, "handling command");
                 let result = Self::handle_cmd(&id, &state, cmd);
+                debug!(?id, "handled command");
 
                 // This ugliness seems to be needed unfortunately, because matching on result
                 // prevents from using `state` below, because would still be
@@ -201,8 +205,9 @@ pub trait EventSourcedExt: Sized {
                     continue;
                 };
                 let tagged_evt = result.unwrap();
-
                 let TaggedEvt { evt, tag } = tagged_evt.into_tagged_evt();
+
+                debug!(?id, ?evt, ?tag, "persisting event");
                 match evt_log
                     .persist(
                         &evt,
@@ -215,13 +220,16 @@ pub trait EventSourcedExt: Sized {
                     .await
                 {
                     Ok(seq_no) => {
+                        debug!(?id, ?evt, ?tag, "persited event");
                         last_seq_no = Some(seq_no);
                         state = Self::handle_evt(state, evt);
+
                         evt_count += 1;
                         if snapshot_after
                             .map(|a| evt_count % a == 0)
                             .unwrap_or_default()
                         {
+                            debug!(?id, ?seq_no, "saving snapshot");
                             if let Err(error) = snapshot_store
                                 .save(&id, seq_no, &state, &state_to_bytes)
                                 .await
@@ -286,6 +294,7 @@ where
     E: EventSourced,
 {
     /// Invoke the command handler of the entity.
+    #[instrument(skip(self))]
     pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E>> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
