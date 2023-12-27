@@ -11,7 +11,7 @@ use bb8_postgres::{
     bb8::{Pool, PooledConnection},
     PostgresConnectionManager,
 };
-use eventsourced::SeqNo;
+use std::num::NonZeroU64;
 use thiserror::Error;
 
 type CnnPool<T> = Pool<PostgresConnectionManager<T>>;
@@ -39,9 +39,9 @@ pub enum Error {
 
     /// Sequence number must not be zero.
     #[error("sequence number must not be zero")]
-    ZeroSeqNo,
+    ZeroNonZeroU64,
 
     /// Sequence number must not be zero.
     #[error("invalid last sequence number: {0:?} {1:?}")]
-    InvalidLastSeqNo(Option<SeqNo>, Option<SeqNo>),
+    InvalidLastNonZeroU64(Option<NonZeroU64>, Option<NonZeroU64>),
 }

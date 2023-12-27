@@ -6,13 +6,14 @@ use async_nats::{
     ConnectOptions,
 };
 use bytes::{Bytes, BytesMut};
-use eventsourced::{SeqNo, Snapshot, SnapshotStore};
+use eventsourced::{Snapshot, SnapshotStore};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Display, Formatter},
     marker::PhantomData,
+    num::NonZeroU64,
     path::PathBuf,
 };
 use tracing::debug;
@@ -104,7 +105,7 @@ where
     async fn save<S, ToBytes, ToBytesError>(
         &mut self,
         id: &Self::Id,
-        seq_no: SeqNo,
+        seq_no: NonZeroU64,
         state: &S,
         to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
@@ -116,7 +117,7 @@ where
         let mut bytes = BytesMut::new();
         let state = to_bytes(state).map_err(|error| Error::IntoBytes(Box::new(error)))?;
         let snapshot = proto::Snapshot {
-            seq_no: seq_no.as_u64(),
+            seq_no: seq_no.get(),
             state,
         };
         snapshot.encode(&mut bytes)?;
@@ -165,7 +166,7 @@ where
                             .and_then(|state| {
                                 seq_no
                                     .try_into()
-                                    .map_err(Error::InvalidSeqNo)
+                                    .map_err(|_| Error::InvalidNonZeroU64)
                                     .map(|seq_no| Snapshot::new(seq_no, state))
                             })
                     })

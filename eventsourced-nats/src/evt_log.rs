@@ -12,13 +12,14 @@ use async_nats::{
     ConnectOptions,
 };
 use bytes::Bytes;
-use eventsourced::{EvtLog, SeqNo};
+use eventsourced::EvtLog;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Display, Formatter},
     marker::PhantomData,
+    num::NonZeroU64,
     path::PathBuf,
     time::Duration,
 };
@@ -93,10 +94,10 @@ impl<I> NatsEvtLog<I> {
     async fn evts<E, F, FromBytes, FromBytesError>(
         &self,
         subject: String,
-        from: SeqNo,
+        from: NonZeroU64,
         filter: F,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Error>> + Send, Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
         E: Send,
         F: Fn(&Message) -> bool + Send,
@@ -137,9 +138,9 @@ where
         tag: Option<&str>,
         type_name: &str,
         id: &Self::Id,
-        last_seq_no: Option<SeqNo>,
+        last_seq_no: Option<NonZeroU64>,
         to_bytes: &ToBytes,
-    ) -> Result<SeqNo, Self::Error>
+    ) -> Result<NonZeroU64, Self::Error>
     where
         E: Sync,
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
@@ -149,7 +150,7 @@ where
         let publish = Publish::build().payload(bytes);
         let publish = tag.into_iter().fold(publish, |p, tag| p.header(TAG, tag));
         let publish = last_seq_no.into_iter().fold(publish, |p, last_seq_no| {
-            p.expected_last_subject_sequence(last_seq_no.as_u64())
+            p.expected_last_subject_sequence(last_seq_no.get())
         });
 
         let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
@@ -159,14 +160,18 @@ where
             .map_err(|error| Error::Nats("cannot publish event".into(), error.into()))?
             .await
             .map_err(|error| Error::Nats("cannot get ACK for published event".into(), error.into()))
-            .and_then(|ack| ack.sequence.try_into().map_err(Error::InvalidSeqNo))
+            .and_then(|ack| {
+                ack.sequence
+                    .try_into()
+                    .map_err(|_| Error::InvalidNonZeroU64)
+            })
     }
 
     async fn last_seq_no(
         &self,
         type_name: &str,
         id: &Self::Id,
-    ) -> Result<Option<SeqNo>, Self::Error> {
+    ) -> Result<Option<NonZeroU64>, Self::Error> {
         let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
         stream(&self.jetstream, &self.evt_stream_name)
             .await?
@@ -187,7 +192,14 @@ where
                         ))
                     }
                 },
-                |msg| Some(msg.sequence.try_into().map_err(Error::InvalidSeqNo)).transpose(),
+                |msg| {
+                    Some(
+                        msg.sequence
+                            .try_into()
+                            .map_err(|_| Error::InvalidNonZeroU64),
+                    )
+                    .transpose()
+                },
             )
     }
 
@@ -195,9 +207,9 @@ where
         &self,
         type_name: &str,
         id: &Self::Id,
-        from: SeqNo,
+        from: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
@@ -211,9 +223,9 @@ where
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        from: SeqNo,
+        from: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
@@ -227,9 +239,9 @@ where
     async fn evts_by_tag<E, FromBytes, FromBytesError>(
         &self,
         tag: String,
-        from: SeqNo,
+        from: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(SeqNo, E), Self::Error>> + Send, Self::Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
@@ -277,7 +289,7 @@ async fn evts<E, F, FromBytes, FromBytesError>(
     msgs: impl Stream<Item = Result<Message, Error>> + Send,
     filter: F,
     from_bytes: FromBytes,
-) -> impl Stream<Item = Result<(SeqNo, E), Error>> + Send
+) -> impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send
 where
     E: Send,
     F: Fn(&Message) -> bool + Send,
@@ -348,16 +360,20 @@ async fn stream(jetstream: &Jetstream, stream_name: &str) -> Result<JetstreamStr
     })
 }
 
-fn from_seq_no_policy(from: SeqNo) -> DeliverPolicy {
+fn from_seq_no_policy(from: NonZeroU64) -> DeliverPolicy {
     DeliverPolicy::ByStartSequence {
-        start_sequence: from.as_u64(),
+        start_sequence: from.get(),
     }
 }
 
-fn seq_no(msg: &Message) -> Result<SeqNo, Error> {
+fn seq_no(msg: &Message) -> Result<NonZeroU64, Error> {
     msg.info()
         .map_err(|error| Error::Nats("cannot get message info".into(), error))
-        .and_then(|info| info.stream_sequence.try_into().map_err(Error::InvalidSeqNo))
+        .and_then(|info| {
+            info.stream_sequence
+                .try_into()
+                .map_err(|_| Error::InvalidNonZeroU64)
+        })
 }
 
 fn has_tag(msg: &Message, tag: &str) -> bool {
@@ -419,7 +435,7 @@ mod tests {
                 &convert::prost::to_bytes,
             )
             .await?;
-        assert!(last_seq_no.as_u64() == 1);
+        assert!(last_seq_no.get() == 1);
 
         evt_log
             .persist(
@@ -450,7 +466,7 @@ mod tests {
                 Some("tag"),
                 "test",
                 &id,
-                Some(last_seq_no.succ()),
+                Some(last_seq_no.checked_add(1).expect("overflow")),
                 &convert::prost::to_bytes,
             )
             .await?;
@@ -468,7 +484,11 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _>(
+                "tag".to_string(),
+                NonZeroU64::MIN,
+                convert::prost::from_bytes,
+            )
             .await?;
         let sum = evts_by_tag
             .take(2)
@@ -481,7 +501,11 @@ mod tests {
             .await?;
 
         let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>("tag".to_string(), SeqNo::MIN, convert::prost::from_bytes)
+            .evts_by_tag::<i32, _, _>(
+                "tag".to_string(),
+                NonZeroU64::MIN,
+                convert::prost::from_bytes,
+            )
             .await?;
 
         let last_seq_no = evt_log

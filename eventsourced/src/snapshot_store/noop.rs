@@ -1,6 +1,6 @@
 //! A [SnapshotStore] implementation that does nothing.
 
-use crate::{SeqNo, Snapshot, SnapshotStore};
+use crate::{NonZeroU64, Snapshot, SnapshotStore};
 use bytes::Bytes;
 use std::{convert::Infallible, error::Error as StdError, fmt::Debug, marker::PhantomData};
 
@@ -31,7 +31,7 @@ where
     async fn save<S, ToBytes, ToBytesError>(
         &mut self,
         _id: &Self::Id,
-        _seq_no: SeqNo,
+        _seq_no: NonZeroU64,
         _state: &S,
         _to_bytes: &ToBytes,
     ) -> Result<(), Self::Error>
