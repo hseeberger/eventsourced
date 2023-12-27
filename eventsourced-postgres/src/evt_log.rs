@@ -148,46 +148,6 @@ where
         Ok(evts)
     }
 
-    async fn next_evts_by_tag<E, EvtFromBytes, EvtFromBytesError>(
-        &self,
-        tag: &str,
-        from_seq_no: NonZeroU64,
-        from_bytes: EvtFromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
-    where
-        E: Send,
-        EvtFromBytes: Fn(Bytes) -> Result<E, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: StdError + Send + Sync + 'static,
-    {
-        debug!(tag, %from_seq_no, "querying events");
-
-        let params: [&(dyn ToSql + Sync); 2] = [&tag, &(from_seq_no.get() as i64)];
-        let evts = self
-            .cnn()
-            .await?
-            .query_raw(
-                "SELECT seq_no, evt FROM evts WHERE tag = $1 AND seq_no >= $2 ORDER BY seq_no",
-                params,
-            )
-            .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
-            .map_err(|error| Error::Postgres("cannot get next row".to_string(), error))
-            .map(move |row| {
-                row.and_then(|row| {
-                    let seq_no = (row.get::<_, i64>(0) as u64)
-                        .try_into()
-                        .map_err(|_| Error::ZeroNonZeroU64)?;
-                    let bytes = row.get::<_, &[u8]>(1);
-                    let bytes = Bytes::copy_from_slice(bytes);
-                    from_bytes(bytes)
-                        .map_err(|source| Error::FromBytes(Box::new(source)))
-                        .map(|evt| (seq_no, evt))
-                })
-            });
-
-        Ok(evts)
-    }
-
     async fn last_seq_no_by_type(&self, type_name: &str) -> Result<Option<NonZeroU64>, Error> {
         self.cnn()
             .await?
@@ -233,7 +193,6 @@ where
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
-        tag: Option<&str>,
         type_name: &str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
@@ -251,8 +210,8 @@ where
         self.cnn()
             .await?
             .query_one(
-                "INSERT INTO evts (seq_no, type, id, evt, tag) VALUES ($1, $2, $3, $4, $5) RETURNING seq_no",
-                &[&seq_no, &type_name, &id, &bytes.as_ref(), &tag],
+                "INSERT INTO evts (seq_no, type, id, evt) VALUES ($1, $2, $3, $4) RETURNING seq_no",
+                &[&seq_no, &type_name, &id, &bytes.as_ref()],
             )
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
@@ -379,69 +338,6 @@ where
 
         Ok(evts)
     }
-
-    #[instrument(skip(self, from_bytes))]
-    async fn evts_by_tag<E, FromBytes, FromBytesError>(
-        &self,
-        tag: String,
-        from_seq_no: NonZeroU64,
-        from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-    where
-        E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
-        FromBytesError: StdError + Send + Sync + 'static,
-    {
-        assert!(
-            from_seq_no <= Self::MAX_SEQ_NO,
-            "from_seq_no must be less or equal {}",
-            Self::MAX_SEQ_NO
-        );
-
-        debug!(tag, %from_seq_no, "building events by tag stream");
-
-        let last_seq_no = self
-            .cnn()
-            .await?
-            .query_one("SELECT COALESCE(MAX(seq_no), 1) FROM evts", &[])
-            .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
-            .and_then(|row| {
-                (row.get::<_, i64>(0) as u64)
-                    .try_into()
-                    .map_err(|_| Error::ZeroNonZeroU64)
-            })?;
-
-        let mut current_from_seq_no = from_seq_no;
-        let evts = stream! {
-            'outer: loop {
-                let evts = self
-                    .next_evts_by_tag(&tag, current_from_seq_no, from_bytes)
-                    .await?;
-
-                for await evt in evts {
-                    match evt {
-                        Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = succ(seq_no);
-                            yield Ok(evt);
-                        }
-
-                        Err(error) => {
-                            yield Err(error);
-                            break 'outer;
-                        }
-                    }
-                }
-
-                // Only sleep if requesting future events.
-                if current_from_seq_no >= last_seq_no {
-                    sleep(self.poll_interval).await;
-                }
-            }
-        };
-
-        Ok(evts)
-    }
 }
 
 /// Configuration for the [PostgresEvtLog].
@@ -546,21 +442,13 @@ mod tests {
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(
-                &1,
-                Some("tag"),
-                "test",
-                &id,
-                None,
-                &convert::prost::to_bytes,
-            )
+            .persist(&1, "test", &id, None, &convert::prost::to_bytes)
             .await?;
         assert!(last_seq_no.get() == 1);
 
         evt_log
             .persist(
                 &2,
-                None,
                 "test",
                 &id,
                 Some(last_seq_no),
@@ -571,7 +459,6 @@ mod tests {
         let result = evt_log
             .persist(
                 &3,
-                Some("tag"),
                 "test",
                 &id,
                 Some(last_seq_no),
@@ -583,7 +470,6 @@ mod tests {
         evt_log
             .persist(
                 &3,
-                Some("tag"),
                 "test",
                 &id,
                 Some(succ(last_seq_no)),
@@ -603,47 +489,18 @@ mod tests {
             .await?;
         assert_eq!(sum, 5);
 
-        let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>(
-                "tag".to_string(),
-                NonZeroU64::MIN,
-                convert::prost::from_bytes,
-            )
-            .await?;
-        let sum = evts_by_tag
-            .take(2)
-            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
-            .await?;
-        assert_eq!(sum, 4);
-
         let evts = evt_log
             .evts_by_id::<i32, _, _>("test", &id, 1.try_into()?, convert::prost::from_bytes)
             .await?;
 
-        let evts_by_tag = evt_log
-            .evts_by_tag::<i32, _, _>(
-                "tag".to_string(),
-                NonZeroU64::MIN,
-                convert::prost::from_bytes,
-            )
-            .await?;
-
         let last_seq_no = evt_log
             .clone()
-            .persist(
-                &4,
-                None,
-                "test",
-                &id,
-                last_seq_no,
-                &convert::prost::to_bytes,
-            )
+            .persist(&4, "test", &id, last_seq_no, &convert::prost::to_bytes)
             .await?;
         evt_log
             .clone()
             .persist(
                 &5,
-                Some("tag"),
                 "test",
                 &id,
                 Some(last_seq_no),
@@ -658,12 +515,6 @@ mod tests {
             .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 15);
-
-        let sum = evts_by_tag
-            .take(3)
-            .try_fold(0i32, |acc, (_, n)| future::ready(Ok(acc + n)))
-            .await?;
-        assert_eq!(sum, 9);
 
         Ok(())
     }

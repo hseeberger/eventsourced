@@ -4,8 +4,5 @@ CREATE TABLE
     type text,
     id uuid,
     evt bytea,
-    tag text,
     PRIMARY KEY (seq_no, id)
   );
-
-CREATE INDEX IF NOT EXISTS evts_tag ON evts (tag);
