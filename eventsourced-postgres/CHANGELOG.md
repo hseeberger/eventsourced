@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.11.0...eventsourced-postgres-v0.12.0) - 2023-12-27
+
+### Added
+- use NonZeroU64 instead of SeqNo ([#111](https://github.com/hseeberger/eventsourced/pull/111))
+
 ## [0.10.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.9.0...eventsourced-postgres-v0.10.0) - 2023-12-20
 
 ### Added
