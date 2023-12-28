@@ -46,7 +46,6 @@ jobs:
           fi
 
   check:
-    name: check
     runs-on: ubuntu-latest
     needs: toolchain
     steps:
@@ -75,7 +74,6 @@ jobs:
           just check
 
   fmt-check:
-    name: fmt-check
     runs-on: ubuntu-latest
     needs: toolchain
     steps:
@@ -100,7 +98,6 @@ jobs:
           just fmt-check
 
   lint:
-    name: lint
     runs-on: ubuntu-latest
     needs: [toolchain, check, fmt-check]
     steps:
@@ -130,7 +127,6 @@ jobs:
           just lint
 
   test:
-    name: test
     runs-on: ubuntu-latest
     needs: [toolchain, check, fmt-check]
     steps:
@@ -159,7 +155,6 @@ jobs:
           just test
 
   doc:
-    name: doc
     runs-on: ubuntu-latest
     needs: [toolchain, check, fmt-check]
     steps:
