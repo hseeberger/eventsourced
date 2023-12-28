@@ -70,7 +70,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: just check
-        run: just check
+        run: |
+          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          just check
 
   fmt-check:
     name: fmt-check
@@ -93,7 +95,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: just fmt-check
-        run: just fmt-check
+        run: |
+          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          just fmt-check
 
   lint:
     name: lint
@@ -121,7 +125,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: just lint
-        run: just lint
+        run: |
+          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          just lint
 
   test:
     name: test
@@ -148,7 +154,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: just test
-        run: just test
+        run: |
+          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          just test
 
   doc:
     name: doc
@@ -175,4 +183,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: just doc
-        run: just doc
+        run: |
+          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          just doc
