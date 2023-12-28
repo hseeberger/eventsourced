@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.11.0...eventsourced-nats-v0.12.0) - 2023-12-28
+
+### Added
+- no longer support tagging ([#116](https://github.com/hseeberger/eventsourced/pull/116))
+- add logging and tracing ([#114](https://github.com/hseeberger/eventsourced/pull/114))
+- use NonZeroU64 instead of SeqNo ([#111](https://github.com/hseeberger/eventsourced/pull/111))
+
+### Fixed
+- hydrate entities / evtlog after seq_no ([#120](https://github.com/hseeberger/eventsourced/pull/120))
+
 ## [0.10.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.9.0...eventsourced-nats-v0.10.0) - 2023-12-20
 
 ### Added
