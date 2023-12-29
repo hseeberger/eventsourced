@@ -1,33 +1,27 @@
 set shell := ["bash", "-uc"]
 
 check:
-	@echo "RUSTUP_TOOLCHAIN is ${RUSTUP_TOOLCHAIN:-not set}"
-	cargo check --tests --package eventsourced --all-features
-	cargo check --tests --package eventsourced-nats
-	cargo check --tests --package eventsourced-postgres
+	cargo check --tests
 
 fmt:
-	@echo "RUSTUP_TOOLCHAIN is ${RUSTUP_TOOLCHAIN:-not set}"
-	cargo fmt
+	cargo +nightly fmt
 
 fmt-check:
-	@echo "RUSTUP_TOOLCHAIN is ${RUSTUP_TOOLCHAIN:-not set}"
-	cargo fmt --check
+	cargo +nightly fmt --check
 
 lint:
-	@echo "RUSTUP_TOOLCHAIN is ${RUSTUP_TOOLCHAIN:-not set}"
-	cargo clippy --no-deps --all-features -- -D warnings
+	cargo clippy --no-deps -- -D warnings
 
 test:
-	@echo "RUSTUP_TOOLCHAIN is ${RUSTUP_TOOLCHAIN:-not set}"
-	cargo test --all-features
+	cargo test
+
+coverage:
+	cargo llvm-cov --all-features --workspace --lcov --output-path lcov.info
 
 fix:
-	@echo "RUSTUP_TOOLCHAIN is ${RUSTUP_TOOLCHAIN:-not set}"
-	cargo fix --allow-dirty --allow-staged --all-features
+	cargo fix --allow-dirty --allow-staged
 
 doc:
-	@echo "RUSTUP_TOOLCHAIN is ${RUSTUP_TOOLCHAIN:-not set}"
 	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
 
 all: check fmt lint test doc
