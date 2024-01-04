@@ -140,42 +140,47 @@ pub trait EventSourcedExt: Sized {
         } = binarizer;
 
         // Restore snapshot.
-        let (after_seq_no, state) = snapshot_store
+        let (snapshot_seq_no, state) = snapshot_store
             .load::<Self::State, _, _>(&id, state_from_bytes)
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(?id, %seq_no, ?state, "restored snapshot");
+                debug!(?id, seq_no, ?state, "restored snapshot");
                 (seq_no, state)
             })
             .unzip();
 
         let mut state = state.unwrap_or_default();
 
-        // Replay latest events.
+        // Get and validate last sequence number.
         let mut last_seq_no = evt_log
             .last_seq_no(Self::TYPE_NAME, &id)
             .await
             .map_err(|error| SpawnError::LastNonZeroU64(error.into()))?;
-        assert!(
-            after_seq_no <= last_seq_no,
-            "snapshot_seq_no must be less than or equal to last_seq_no"
-        );
-        if after_seq_no < last_seq_no {
-            let to_seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
-            debug!(?id, ?after_seq_no, %to_seq_no , "replaying evts");
+        if last_seq_no < snapshot_seq_no {
+            return Err(SpawnError::InvalidLastSeqNo(last_seq_no, snapshot_seq_no));
+        };
+
+        // Replay latest events.
+        if snapshot_seq_no < last_seq_no {
+            let from_seq_no = snapshot_seq_no.successor();
+            let last_seq_no = last_seq_no.unwrap(); // This is safe because of the above relation!
+            debug!(?id, from_seq_no, last_seq_no, "replaying evts");
+
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, after_seq_no, evt_from_bytes)
+                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
+
             pin!(evts);
             while let Some(evt) = evts.next().await {
                 let (seq_no, evt) = evt.map_err(|error| SpawnError::NextEvt(error.into()))?;
                 state = Self::handle_evt(state, evt);
-                if seq_no == to_seq_no {
+                if seq_no == last_seq_no {
                     break;
                 }
             }
+
             debug!(?id, ?state, "replayed evts");
         }
 
@@ -190,7 +195,7 @@ pub trait EventSourcedExt: Sized {
             while let Some((cmd, result_sender)) = cmd_out.recv().await {
                 debug!(?id, ?cmd, "handling command");
                 let result = Self::handle_cmd(&id, &state, cmd);
-                debug!(?id, "handled command");
+                debug!(?id, ?result, "handled command");
 
                 // This ugliness seems to be needed unfortunately, because matching on result
                 // prevents from using `state` below, because would still be
@@ -209,7 +214,8 @@ pub trait EventSourcedExt: Sized {
                     .await
                 {
                     Ok(seq_no) => {
-                        debug!(?id, ?evt, "persited event");
+                        debug!(?id, ?evt, seq_no, "persited event");
+
                         last_seq_no = Some(seq_no);
                         state = Self::handle_evt(state, evt);
 
@@ -218,7 +224,8 @@ pub trait EventSourcedExt: Sized {
                             .map(|a| evt_count % a == 0)
                             .unwrap_or_default()
                         {
-                            debug!(?id, ?seq_no, "saving snapshot");
+                            debug!(?id, seq_no, evt_count, "saving snapshot");
+
                             if let Err(error) = snapshot_store
                                 .save(&id, seq_no, &state, &state_to_bytes)
                                 .await
@@ -234,6 +241,7 @@ pub trait EventSourcedExt: Sized {
 
                     Err(error) => {
                         error!(?id, %error, "cannot persist event");
+                        // This is fatal, we must terminate the entity!
                         break;
                     }
                 }
@@ -252,6 +260,10 @@ pub enum SpawnError {
     /// A snapshot cannot be loaded from the snapshot store.
     #[error("cannot load snapshot from snapshot store")]
     LoadSnapshot(#[source] Box<dyn StdError + Send + Sync>),
+
+    /// The last sequence number is less than the snapshot sequence number.
+    #[error("last sequence number {0:?} less than snapshot sequence number {0:?}")]
+    InvalidLastSeqNo(Option<NonZeroU64>, Option<NonZeroU64>),
 
     /// The last seqence number cannot be obtained from the event log.
     #[error("cannot get last seqence number from event log")]
@@ -323,11 +335,28 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub state_from_bytes: StateFromBytes,
 }
 
+/// Extension methods for sequence numbers.
+pub trait SeqNo<T> {
+    fn successor(self) -> T;
+}
+
+impl SeqNo<NonZeroU64> for NonZeroU64 {
+    fn successor(self) -> NonZeroU64 {
+        self.saturating_add(1)
+    }
+}
+
+impl SeqNo<NonZeroU64> for Option<NonZeroU64> {
+    fn successor(self) -> NonZeroU64 {
+        self.map(|n| n.saturating_add(1)).unwrap_or(NonZeroU64::MIN)
+    }
+}
+
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
     use futures::{stream, Stream};
-    use std::convert::Infallible;
+    use std::{convert::Infallible, iter};
     use tracing_test::traced_test;
     use uuid::Uuid;
 
@@ -393,7 +422,7 @@ mod tests {
             &self,
             _type: &str,
             _id: &Self::Id,
-            after_seq_no: Option<NonZeroU64>,
+            seq_no: NonZeroU64,
             evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
@@ -401,13 +430,11 @@ mod tests {
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
             FromBytesError: StdError + Send + Sync + 'static,
         {
-            let evts = stream::iter((after_seq_no.map(|n| n.get())).unwrap_or_default()..u64::MAX)
-                .map(move |n| {
-                    Ok((
-                        (n + 1).try_into().unwrap(),
-                        evt_from_bytes(serde_json::to_vec(&()).unwrap().into()).unwrap(),
-                    ))
-                });
+            let successors = iter::successors(Some(seq_no), |n| n.checked_add(1));
+            let evts = stream::iter(successors).map(move |n| {
+                let evt = evt_from_bytes(serde_json::to_vec(&()).unwrap().into()).unwrap();
+                Ok((n, evt))
+            });
 
             Ok(evts)
         }
@@ -415,7 +442,7 @@ mod tests {
         async fn evts_by_type<E, FromBytes, FromBytesError>(
             &self,
             _type: &str,
-            _after_seq_no: Option<NonZeroU64>,
+            _seq_no: NonZeroU64,
             _evt_from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where

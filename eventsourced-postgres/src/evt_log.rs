@@ -72,7 +72,7 @@ where
     async fn next_evts_by_id<E, FromBytes, FromBytesError>(
         &self,
         id: &I,
-        after_seq_no: i64,
+        seq_no: i64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
@@ -80,13 +80,13 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(?id, ?after_seq_no, "querying events");
-        let params: [&(dyn ToSql + Sync); 2] = [&id, &after_seq_no];
+        debug!(?id, ?seq_no, "querying events");
+        let params: [&(dyn ToSql + Sync); 2] = [&id, &seq_no];
         let evts = self
             .cnn()
             .await?
             .query_raw(
-                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no > $2",
+                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2",
                 params,
             )
             .await
@@ -251,7 +251,7 @@ where
         &self,
         _type_name: &str,
         id: &Self::Id,
-        after_seq_no: Option<NonZeroU64>,
+        seq_no: NonZeroU64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
@@ -265,17 +265,17 @@ where
             .map(|n| n.get() as i64)
             .unwrap_or_default();
 
-        let mut current_from_seq_no = after_seq_no.map(|n| n.get() as i64).unwrap_or_default();
+        let mut current_seq_no = seq_no.get() as i64;
         let evts = stream! {
             'outer: loop {
                 let evts = self
-                    .next_evts_by_id(id, current_from_seq_no, from_bytes)
+                    .next_evts_by_id(id, current_seq_no, from_bytes)
                     .await?;
 
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = seq_no.get() as i64 + 1;
+                            current_seq_no += seq_no.get() as i64 + 1;
                             yield Ok(evt);
                         }
 
@@ -287,7 +287,7 @@ where
                 }
 
                 // Only sleep if requesting future events.
-                if current_from_seq_no >= last_seq_no {
+                if current_seq_no >= last_seq_no {
                     sleep(self.poll_interval).await;
                 }
             }
@@ -300,7 +300,7 @@ where
     async fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        after_seq_no: Option<NonZeroU64>,
+        seq_no: NonZeroU64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
     where
@@ -308,7 +308,7 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(type_name, ?after_seq_no, "building events by type stream");
+        debug!(type_name, seq_no, "building events by type stream");
 
         let last_seq_no = self
             .last_seq_no_by_type(type_name)
@@ -316,17 +316,17 @@ where
             .map(|n| n.get() as i64)
             .unwrap_or_default();
 
-        let mut current_from_seq_no = after_seq_no.map(|n| n.get() as i64).unwrap_or_default();
+        let mut current_seq_no = seq_no.get() as i64;
         let evts = stream! {
             'outer: loop {
                 let evts = self
-                    .next_evts_by_type(type_name, current_from_seq_no, from_bytes)
+                    .next_evts_by_type(type_name, current_seq_no, from_bytes)
                     .await?;
 
                 for await evt in evts {
                     match evt {
                         Ok(evt @ (seq_no, _)) => {
-                            current_from_seq_no = seq_no.get() as i64 + 1;
+                            current_seq_no = seq_no.get() as i64 + 1;
                             yield Ok(evt);
                         }
 
@@ -338,7 +338,7 @@ where
                 }
 
                 // Only sleep if requesting future events.
-                if current_from_seq_no >= last_seq_no {
+                if current_seq_no >= last_seq_no {
                     sleep(self.poll_interval).await;
                 }
             }
@@ -485,12 +485,7 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>(
-                "test",
-                &id,
-                Some(1.try_into()?),
-                convert::serde_json::from_bytes,
-            )
+            .evts_by_id::<i32, _, _>("test", &id, 2.try_into()?, convert::serde_json::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -499,7 +494,7 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_type::<i32, _, _>("test", None, convert::serde_json::from_bytes)
+            .evts_by_type::<i32, _, _>("test", NonZeroU64::MIN, convert::serde_json::from_bytes)
             .await?;
 
         let last_seq_no = evt_log
