@@ -111,7 +111,7 @@ where
     async fn next_evts_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
-        after_seq_no: i64,
+        seq_no: i64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
@@ -119,9 +119,9 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        debug!(%type_name, ?after_seq_no, "querying events");
+        debug!(%type_name, seq_no, "querying events");
 
-        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &after_seq_no];
+        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &seq_no];
         let evts = self
             .cnn()
             .await?
