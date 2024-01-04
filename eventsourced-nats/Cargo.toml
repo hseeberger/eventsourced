@@ -17,14 +17,12 @@ bytes        = { workspace = true }
 futures      = { workspace = true }
 prost        = { workspace = true }
 serde        = { workspace = true }
-serde_json   = { workspace = true }
 thiserror    = { workspace = true }
 tokio        = { workspace = true }
 tracing      = { workspace = true }
 
 [dev-dependencies]
-eventsourced           = { path = "../eventsourced", version = "0.12.0", features = [ "prost" ] }
-prost                  = { workspace = true }
+eventsourced           = { path = "../eventsourced", version = "0.12.0", features = [ "serde_json" ] }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true }
 tokio                  = { workspace = true, features = [ "macros" ] }

@@ -428,7 +428,7 @@ mod tests {
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
-        let container = client.run(Postgres::default());
+        let container = client.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
         let config = Config {
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist(&1, "test", &id, None, &convert::prost::to_bytes)
+            .persist(&1, "test", &id, None, &convert::serde_json::to_bytes)
             .await?;
         assert!(last_seq_no.get() == 1);
 
@@ -456,7 +456,7 @@ mod tests {
                 "test",
                 &id,
                 Some(last_seq_no),
-                &convert::prost::to_bytes,
+                &convert::serde_json::to_bytes,
             )
             .await?;
 
@@ -466,7 +466,7 @@ mod tests {
                 "test",
                 &id,
                 Some(last_seq_no),
-                &convert::prost::to_bytes,
+                &convert::serde_json::to_bytes,
             )
             .await;
         assert!(result.is_err());
@@ -477,7 +477,7 @@ mod tests {
                 "test",
                 &id,
                 Some(last_seq_no.checked_add(1).expect("overflow")),
-                &convert::prost::to_bytes,
+                &convert::serde_json::to_bytes,
             )
             .await?;
 
@@ -485,7 +485,12 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<i32, _, _>("test", &id, Some(1.try_into()?), convert::prost::from_bytes)
+            .evts_by_id::<i32, _, _>(
+                "test",
+                &id,
+                Some(1.try_into()?),
+                convert::serde_json::from_bytes,
+            )
             .await?;
         let sum = evts
             .take(2)
@@ -494,12 +499,12 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_type::<i32, _, _>("test", None, convert::prost::from_bytes)
+            .evts_by_type::<i32, _, _>("test", None, convert::serde_json::from_bytes)
             .await?;
 
         let last_seq_no = evt_log
             .clone()
-            .persist(&4, "test", &id, last_seq_no, &convert::prost::to_bytes)
+            .persist(&4, "test", &id, last_seq_no, &convert::serde_json::to_bytes)
             .await?;
         evt_log
             .clone()
@@ -508,7 +513,7 @@ mod tests {
                 "test",
                 &id,
                 Some(last_seq_no),
-                &convert::prost::to_bytes,
+                &convert::serde_json::to_bytes,
             )
             .await?;
         let last_seq_no = evt_log.last_seq_no("test", &id).await?;
