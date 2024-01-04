@@ -201,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
         let client = Cli::default();
-        let container = client.run(Postgres::default());
+        let container = client.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
         let config = Config {
@@ -214,7 +214,7 @@ mod tests {
         let id = Uuid::now_v7();
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(&id, &convert::prost::from_bytes)
+            .load::<i32, _, _>(&id, &convert::serde_json::from_bytes)
             .await?;
         assert!(snapshot.is_none());
 
@@ -222,11 +222,11 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(&id, seq_no, &state, &convert::prost::to_bytes)
+            .save(&id, seq_no, &state, &convert::serde_json::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(&id, &convert::prost::from_bytes)
+            .load::<i32, _, _>(&id, &convert::serde_json::from_bytes)
             .await?;
 
         assert!(snapshot.is_some());

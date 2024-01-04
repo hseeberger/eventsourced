@@ -540,7 +540,6 @@ dependencies = [
  "prost",
  "prost-build",
  "serde",
- "serde_json",
  "testcontainers",
  "testcontainers-modules",
  "thiserror",
@@ -560,7 +559,6 @@ dependencies = [
  "eventsourced",
  "futures",
  "humantime-serde",
- "prost",
  "serde",
  "testcontainers",
  "testcontainers-modules",
@@ -1846,9 +1844,9 @@ dependencies = [
 
 [[package]]
 name = "testcontainers-modules"
-version = "0.1.4"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47c405c3757803e54818eaaf6b5b2af485dff4ab89a7130b72f62fd19b8bb6cd"
+checksum = "8a14c27856c4472d75fb72207448caf010d9d5de3ccb805cd48d1421a8998caa"
 dependencies = [
  "testcontainers",
 ]
