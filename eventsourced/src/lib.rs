@@ -359,7 +359,7 @@ fn error_chain<E>(error: E) -> String
 where
     E: StdError + Send + Sync + 'static,
 {
-    format!("{}", anyhow!(error))
+    format!("{:#}", anyhow!(error))
 }
 
 #[cfg(all(test, feature = "serde_json"))]
