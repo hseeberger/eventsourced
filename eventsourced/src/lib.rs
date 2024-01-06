@@ -34,6 +34,7 @@ mod snapshot_store;
 pub use evt_log::*;
 pub use snapshot_store::*;
 
+use anyhow::anyhow;
 use bytes::Bytes;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -202,7 +203,7 @@ pub trait EventSourcedExt: Sized {
                 // borrowed.
                 if let Err(error) = result {
                     if result_sender.send(Err(error)).is_err() {
-                        error!(?id, "cannot send command handler result");
+                        error!(?id, "cannot send command handler error");
                     };
                     continue;
                 };
@@ -230,17 +231,17 @@ pub trait EventSourcedExt: Sized {
                                 .save(&id, seq_no, &state, &state_to_bytes)
                                 .await
                             {
-                                error!(?id, %error, "cannot save snapshot");
+                                error!(?id, error = error_chain(error), "cannot save snapshot");
                             };
                         }
 
                         if result_sender.send(Ok(())).is_err() {
-                            error!(?id, "cannot send command handler result");
+                            error!(?id, "cannot send command handler OK");
                         };
                     }
 
                     Err(error) => {
-                        error!(?id, %error, "cannot persist event");
+                        error!(?id, error = error_chain(error), "cannot persist event");
                         // This is fatal, we must terminate the entity!
                         break;
                     }
@@ -350,6 +351,13 @@ impl SeqNo<NonZeroU64> for Option<NonZeroU64> {
     fn successor(self) -> NonZeroU64 {
         self.map(|n| n.saturating_add(1)).unwrap_or(NonZeroU64::MIN)
     }
+}
+
+fn error_chain<E>(error: E) -> String
+where
+    E: StdError + Send + Sync + 'static,
+{
+    format!("{}", anyhow!(error))
 }
 
 #[cfg(all(test, feature = "serde_json"))]
