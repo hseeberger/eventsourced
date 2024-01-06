@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.14.0...eventsourced-v0.14.1) - 2024-01-06
+
+### Other
+- print error chains ([#133](https://github.com/hseeberger/eventsourced/pull/133))
+
 ## [0.14.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.13.0...eventsourced-v0.14.0) - 2024-01-04
 
 ### Other
