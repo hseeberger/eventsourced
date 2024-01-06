@@ -11,6 +11,7 @@ repository    = { workspace = true }
 documentation = "https://docs.rs/eventsourced/latest/eventsourced"
 
 [dependencies]
+anyhow           = { workspace = true }
 bytes            = { workspace = true }
 futures          = { workspace = true }
 pin-project-lite = { workspace = true }
