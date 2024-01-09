@@ -27,7 +27,7 @@ pub trait LocalEvtLog: Clone + 'static {
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
-        E: Debug + Sync,
+        E: Sync,
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static;
 

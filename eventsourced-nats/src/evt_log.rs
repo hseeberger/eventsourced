@@ -130,7 +130,7 @@ where
 
     type Error = Error;
 
-    #[instrument(skip(self, to_bytes))]
+    #[instrument(skip(self, evt, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E,
@@ -140,7 +140,7 @@ where
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
-        E: Debug + Sync,
+        E: Sync,
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
