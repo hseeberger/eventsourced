@@ -353,7 +353,8 @@ impl SeqNo<NonZeroU64> for Option<NonZeroU64> {
     }
 }
 
-fn error_chain<E>(error: E) -> String
+/// Format the given error with its whole error chain, implemented by using `anyhow`.
+pub fn error_chain<E>(error: E) -> String
 where
     E: StdError + Send + Sync + 'static,
 {

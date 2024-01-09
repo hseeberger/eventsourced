@@ -1,7 +1,7 @@
-use anyhow::anyhow;
+use eventsourced::error_chain;
 use futures::{Stream, StreamExt};
 use sqlx::{database::HasArguments, query::Query, Pool, Postgres, Transaction};
-use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{fmt::Debug, num::NonZeroU64, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot, RwLock},
@@ -21,6 +21,132 @@ pub struct Projection {
 }
 
 impl Projection {
+    pub async fn spawn<'q, E, M, H, EvtsError, HandlerError>(
+        name: String,
+        make_evts: M,
+        handle_evt: H,
+        error_strategy: ErrorStrategy,
+        pool: Pool<Postgres>,
+    ) -> Projection
+    where
+        E: Send,
+        M: Service<NonZeroU64, Error = EvtsError> + Send + 'static + Clone,
+        M::Response: Stream<Item = Result<(NonZeroU64, E), EvtsError>> + Send + Unpin,
+        M::Future: Send,
+        EvtsError: std::error::Error + Send + Sync + 'static,
+        H: Fn(E) -> HandlerResult<'q, HandlerError> + Send + Sync + 'static + Clone,
+        HandlerError: std::error::Error + Send + Sync + 'static,
+    {
+        sqlx::query(include_str!("create_projection.sql"))
+            .execute(&pool)
+            .await
+            .expect("create projection table");
+
+        let state = Arc::new(RwLock::new(State {
+            seq_no: NonZeroU64::MIN,
+            running: false,
+            error: None,
+        }));
+
+        let (cmd_in, mut cmd_out) = mpsc::channel::<(Cmd, oneshot::Sender<State>)>(1);
+
+        task::spawn({
+            let name = name.clone();
+            let state = state.clone();
+
+            async move {
+                while let Some((cmd, result_sender)) = cmd_out.recv().await {
+                    match cmd {
+                        Cmd::Run => {
+                            let running = { state.read().await.running };
+                            if running {
+                                info!(name, "projection already running");
+                            } else {
+                                info!(name, "running projection");
+                                {
+                                    let mut state = state.write().await;
+                                    state.running = true;
+                                    state.error = None;
+                                }
+
+                                task::spawn({
+                                    let name = name.clone();
+                                    let state = state.clone();
+                                    let mut make_evts = make_evts.clone();
+                                    let handle_evt = handle_evt.clone();
+                                    let pool = pool.clone();
+
+                                    async move {
+                                        loop {
+                                            let run_result = run(
+                                                &name,
+                                                &mut make_evts,
+                                                &handle_evt,
+                                                &pool,
+                                                state.clone(),
+                                            )
+                                            .await;
+
+                                            match run_result {
+                                                Ok(_) => {
+                                                    info!(name, "stopped");
+                                                    break;
+                                                }
+
+                                                Err(error) => {
+                                                    error!(
+                                                        name,
+                                                        error = error_chain(error),
+                                                        "projection terminated with error"
+                                                    );
+
+                                                    match error_strategy {
+                                                        ErrorStrategy::Retry(delay) => {
+                                                            info!(
+                                                                name,
+                                                                ?delay,
+                                                                "retrying after error"
+                                                            );
+                                                            sleep(delay).await
+                                                        }
+
+                                                        ErrorStrategy::Stop => {
+                                                            info!(name, "stopping after error");
+                                                            break;
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        }
+
+                        Cmd::Stop => {
+                            let running = &mut state.write().await.running;
+                            if !*running {
+                                info!(name, "projection already stopped");
+                            } else {
+                                info!(name, "stopping projection");
+                                *running = false;
+                            }
+                        }
+
+                        Cmd::GetState => {
+                            let state = state.read().await.clone();
+                            if result_sender.send(state).is_err() {
+                                error!(name, "cannot send state");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Projection { name, cmd_in }
+    }
+
     pub async fn run(&self) -> Result<(), Error> {
         let (cmd_in, _) = oneshot::channel();
         self.cmd_in
@@ -63,7 +189,7 @@ pub enum Error {
     ReceiveReply(&'static str, String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum ErrorStrategy {
     Retry(Duration),
     Stop,
@@ -76,113 +202,23 @@ pub struct State {
     error: Option<String>,
 }
 
-pub async fn spawn<'q, E, M, H, EvtsError, HandlerError>(
-    name: String,
-    mut make_evts: M,
-    handle_evt: H,
-    error_strategy: ErrorStrategy,
-    pool: Pool<Postgres>,
-) -> Projection
-where
-    E: Send,
-    M: Service<NonZeroU64, Error = EvtsError> + Send + 'static,
-    M::Response: Stream<Item = Result<(NonZeroU64, E), EvtsError>> + Send + Unpin,
-    M::Future: Send,
-    EvtsError: std::error::Error + Send + Sync + 'static,
-    H: Fn(E) -> HandlerResult<'q, HandlerError> + Send + Sync + 'static,
-    HandlerError: std::error::Error + Send + Sync + 'static,
-{
-    let state = Arc::new(RwLock::new(State {
-        seq_no: NonZeroU64::MIN,
-        running: false,
-        error: None,
-    }));
-
-    let (cmd_in, mut cmd_out) = mpsc::channel::<(Cmd, oneshot::Sender<State>)>(1);
-
-    task::spawn({
-        let name = name.clone();
-        let state = state.clone();
-
-        async move {
-            while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                match cmd {
-                    Cmd::Run => {
-                        let mut state = state.write().await;
-                        if state.running {
-                            info!(name, "projection already running");
-                        } else {
-                            info!(name, "running projection");
-                            state.running = true;
-                            state.error = None;
-                        }
-                    }
-
-                    Cmd::Stop => {
-                        let running = &mut state.write().await.running;
-                        if !*running {
-                            info!(name, "projection already stopped");
-                        } else {
-                            info!(name, "stopping projection");
-                            *running = false;
-                            todo!()
-                        }
-                    }
-
-                    Cmd::GetState => {
-                        let state = state.read().await.clone();
-                        if result_sender.send(state).is_err() {
-                            error!(name, "cannot send state");
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    task::spawn({
-        let name = name.clone();
-        async move {
-            loop {
-                let seq_no = state.read().await.seq_no;
-                debug!(seq_no, "executing projection step");
-
-                let run_result =
-                    run(&name, &mut make_evts, &handle_evt, &pool, state.clone()).await;
-                match run_result {
-                    Ok(_) => error!("projection terminated unexpectedly"),
-
-                    Err(error) => {
-                        error!(
-                            error = format!("{}", anyhow!(error)),
-                            "projection step terminated with error"
-                        );
-
-                        match error_strategy {
-                            ErrorStrategy::Retry(delay) => {
-                                info!(?delay, "retrying");
-                                sleep(delay).await
-                            }
-
-                            ErrorStrategy::Stop => {
-                                info!("stopping");
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    Projection { name, cmd_in }
-}
-
 #[derive(Debug)]
 enum Cmd {
     Run,
     Stop,
     GetState,
+}
+
+#[derive(Debug, Error)]
+enum RunError<E, H> {
+    #[error(transparent)]
+    Evts(#[from] E),
+
+    #[error(transparent)]
+    Handler(H),
+
+    #[error(transparent)]
+    Sqlx(sqlx::Error),
 }
 
 async fn run<'q, E, M, H, EvtsError, HandlerError>(
@@ -191,7 +227,7 @@ async fn run<'q, E, M, H, EvtsError, HandlerError>(
     handle_evt: &H,
     pool: &Pool<Postgres>,
     state: Arc<RwLock<State>>,
-) -> Result<(), Box<dyn StdError + Send + Sync + 'static>>
+) -> Result<(), RunError<EvtsError, HandlerError>>
 where
     M: Service<NonZeroU64, Error = EvtsError>,
     M::Response: Stream<Item = Result<(NonZeroU64, E), EvtsError>> + Send + Unpin,
@@ -209,10 +245,17 @@ where
 
         let (seq_no, evt) = evt?;
 
-        let mut tx = pool.begin().await?;
-        handle_evt(evt)?.execute(&mut *tx).await?;
-        save_seq_no(seq_no, name, &mut tx).await?;
-        tx.commit().await?;
+        let mut tx = pool.begin().await.map_err(RunError::Sqlx)?;
+        handle_evt(evt)
+            .map_err(RunError::Handler)?
+            .execute(&mut *tx)
+            .await
+            .map_err(RunError::Sqlx)?;
+        debug!(seq_no, "handled event");
+        save_seq_no(seq_no, name, &mut tx)
+            .await
+            .map_err(RunError::Sqlx)?;
+        tx.commit().await.map_err(RunError::Sqlx)?;
 
         state.write().await.seq_no = seq_no;
     }
@@ -226,7 +269,7 @@ async fn save_seq_no(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<(), sqlx::Error> {
     let query = r#"INSERT INTO projection (name, seq_no)
-                   VAULES ($1, $2)
+                   VALUES ($1, $2)
                    ON CONFLICT (name) DO UPDATE SET seq_no = $2"#;
     sqlx::query(query)
         .bind(name)
@@ -234,4 +277,88 @@ async fn save_seq_no(
         .execute(&mut **tx)
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Context;
+    use futures::{future::ok, stream};
+    use sqlx::{
+        postgres::{PgConnectOptions, PgPoolOptions},
+        Row,
+    };
+    use std::{convert::Infallible, error::Error as StdError};
+    use testcontainers::clients::Cli;
+    use testcontainers_modules::postgres::Postgres;
+    use tower::service_fn;
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+    #[tokio::test]
+    async fn test() -> Result<(), Box<dyn StdError>> {
+        let _ = tracing_subscriber::registry()
+            .with(EnvFilter::from_default_env())
+            .with(tracing_subscriber::fmt::layer())
+            .try_init();
+
+        let testcontainers_client = Cli::default();
+        let container = testcontainers_client.run(Postgres::default().with_host_auth());
+        let port = container.get_host_port_ipv4(5432);
+
+        let cnn_url = format!("postgresql://postgres@localhost:{port}");
+        let cnn_options = cnn_url
+            .parse::<PgConnectOptions>()
+            .context("parse PgConnectOptions")?;
+        let pool = PgPoolOptions::new().connect_with(cnn_options).await?;
+
+        sqlx::query("CREATE TABLE test (n bigint PRIMARY KEY);")
+            .execute(&pool)
+            .await?;
+
+        let make_evts = service_fn(|seq_no: NonZeroU64| {
+            ok(stream::iter(seq_no.get()..=100)
+                .map(|n| Ok::<_, Infallible>((NonZeroU64::new(n).unwrap(), n as i64))))
+        });
+
+        fn handle_evt<'q>(evt: i64) -> HandlerResult<'q, Infallible> {
+            let query = "INSERT INTO test (n) VALUES ($1)";
+            Ok(sqlx::query(query).bind(evt))
+        }
+
+        let projection = Projection::spawn(
+            "test-projection".to_string(),
+            make_evts,
+            handle_evt,
+            ErrorStrategy::Stop,
+            pool.clone(),
+        )
+        .await;
+
+        projection.run().await?;
+
+        let mut state = projection.get_state().await?;
+        let max = NonZeroU64::new(100).unwrap();
+        while state.seq_no < max {
+            sleep(Duration::from_millis(100)).await;
+            state = projection.get_state().await?;
+        }
+        assert_eq!(state.seq_no, max);
+
+        let sum = sqlx::query("SELECT * FROM test;")
+            .fetch_all(&pool)
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<i64, _>(0))
+            .try_fold(0i64, |acc, n| n.map(|n| acc + n))?;
+        assert_eq!(sum, 5050);
+
+        projection.stop().await?;
+        sleep(Duration::from_millis(100)).await;
+        let state = projection.get_state().await?;
+        sleep(Duration::from_millis(100)).await;
+        let state_2 = projection.get_state().await?;
+        assert_eq!(state.seq_no, state_2.seq_no);
+
+        Ok(())
+    }
 }

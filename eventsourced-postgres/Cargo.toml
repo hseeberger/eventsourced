@@ -26,6 +26,6 @@ tracing         = { workspace = true }
 [dev-dependencies]
 eventsourced           = { path = "../eventsourced", version = "0.14.1", features = [ "serde_json" ] }
 testcontainers         = { workspace = true }
-testcontainers-modules = { workspace = true }
+testcontainers-modules = { workspace = true, features = [ "postgres" ] }
 tokio                  = { workspace = true, features = [ "macros" ] }
 uuid                   = { workspace = true }
