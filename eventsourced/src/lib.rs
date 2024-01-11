@@ -169,6 +169,7 @@ pub trait EventSourcedExt: Sized {
             debug!(?id, from_seq_no, last_seq_no, "replaying evts");
 
             let evts = evt_log
+                .clone()
                 .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
@@ -427,7 +428,7 @@ mod tests {
         }
 
         async fn evts_by_id<E, FromBytes, FromBytesError>(
-            &self,
+            self,
             _type: &str,
             _id: &Self::Id,
             seq_no: NonZeroU64,
@@ -448,7 +449,7 @@ mod tests {
         }
 
         async fn evts_by_type<E, FromBytes, FromBytesError>(
-            &self,
+            self,
             _type: &str,
             _seq_no: NonZeroU64,
             _evt_from_bytes: FromBytes,

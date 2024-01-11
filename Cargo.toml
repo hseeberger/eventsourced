@@ -2,10 +2,10 @@
 members = [
   "eventsourced",
   "eventsourced-nats",
-  "eventsourced-postgres",
+  # "eventsourced-postgres",
   "examples/counter",
   "examples/counter-nats",
-  "examples/counter-postgres",
+  # "examples/counter-postgres",
 ]
 resolver = "2"
 

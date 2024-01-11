@@ -203,7 +203,7 @@ where
 
     #[instrument(skip(self, from_bytes))]
     async fn evts_by_id<E, FromBytes, FromBytesError>(
-        &self,
+        self,
         type_name: &str,
         id: &Self::Id,
         seq_no: NonZeroU64,
@@ -221,7 +221,7 @@ where
 
     #[instrument(skip(self, from_bytes))]
     async fn evts_by_type<E, FromBytes, FromBytesError>(
-        &self,
+        self,
         type_name: &str,
         seq_no: NonZeroU64,
         from_bytes: FromBytes,
@@ -440,6 +440,7 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
+            .clone()
             .evts_by_id::<i32, _, _>("test", &id, 2.try_into()?, convert::serde_json::from_bytes)
             .await?;
         let sum = evts
@@ -449,6 +450,7 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
+            .clone()
             .evts_by_type::<i32, _, _>("test", NonZeroU64::MIN, convert::serde_json::from_bytes)
             .await?;
 

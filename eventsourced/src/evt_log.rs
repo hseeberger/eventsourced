@@ -40,7 +40,7 @@ pub trait LocalEvtLog: Clone + 'static {
 
     /// Get the events for the given entity ID starting at the given sequence number.
     async fn evts_by_id<E, FromBytes, FromBytesError>(
-        &self,
+        self,
         type_name: &str,
         id: &Self::Id,
         seq_no: NonZeroU64,
@@ -53,7 +53,7 @@ pub trait LocalEvtLog: Clone + 'static {
 
     /// Get the events for the given entity type starting at the given sequence number.
     async fn evts_by_type<E, FromBytes, FromBytesError>(
-        &self,
+        self,
         type_name: &str,
         seq_no: NonZeroU64,
         from_bytes: FromBytes,
