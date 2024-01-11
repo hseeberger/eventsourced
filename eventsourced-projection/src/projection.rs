@@ -1,14 +1,16 @@
-use eventsourced::error_chain;
-use futures::{Stream, StreamExt};
+use eventsourced::{convert, error_chain, EvtLog};
+use futures::StreamExt;
+use serde::Deserialize;
 use sqlx::{Pool, Postgres, Transaction};
-use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64, sync::Arc, time::Duration};
+use std::{
+    error::Error as StdError, fmt::Debug, num::NonZeroU64, pin::pin, sync::Arc, time::Duration,
+};
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot, RwLock},
     task,
     time::sleep,
 };
-use tower::{Service, ServiceExt};
 use tracing::{debug, error, info};
 
 #[derive(Debug, Clone)]
@@ -18,19 +20,18 @@ pub struct Projection {
 }
 
 impl Projection {
-    pub async fn spawn<M, H, EvtsError>(
+    pub async fn spawn<L, H>(
         name: String,
-        make_evts: M,
+        type_name: &'static str,
+        evt_log: L,
         evt_handler: H,
         error_strategy: ErrorStrategy,
         pool: Pool<Postgres>,
     ) -> Projection
     where
-        M: Service<NonZeroU64, Error = EvtsError> + Send + 'static + Clone,
-        M::Response: Stream<Item = Result<(NonZeroU64, H::Evt), EvtsError>> + Send + Unpin,
-        M::Future: Send,
-        EvtsError: StdError + Send + Sync + 'static,
+        L: EvtLog + Send + Sync,
         H: EvtHandler + Send + Sync + Clone + 'static,
+        H::Evt: for<'de> Deserialize<'de>,
     {
         sqlx::query(include_str!("create_projection.sql"))
             .execute(&pool)
@@ -67,7 +68,7 @@ impl Projection {
                                 task::spawn({
                                     let name = name.clone();
                                     let state = state.clone();
-                                    let mut make_evts = make_evts.clone();
+                                    let evt_log = evt_log.clone();
                                     let evt_handler = evt_handler.clone();
                                     let pool = pool.clone();
 
@@ -75,7 +76,8 @@ impl Projection {
                                         loop {
                                             let run_result = run(
                                                 &name,
-                                                &mut make_evts,
+                                                type_name,
+                                                &evt_log,
                                                 &evt_handler,
                                                 &pool,
                                                 state.clone(),
@@ -229,24 +231,28 @@ enum RunError<E, H> {
     Sqlx(#[from] sqlx::Error),
 }
 
-async fn run<M, H, EvtsError>(
+async fn run<L, H>(
     name: &str,
-    make_evts: &mut M,
+    type_name: &'static str,
+    evt_log: &L,
     handler: &H,
     pool: &Pool<Postgres>,
     state: Arc<RwLock<State>>,
-) -> Result<(), RunError<EvtsError, H::Error>>
+) -> Result<(), RunError<L::Error, H::Error>>
 where
-    M: Service<NonZeroU64, Error = EvtsError>,
-    M::Response: Stream<Item = Result<(NonZeroU64, H::Evt), EvtsError>> + Send + Unpin,
-    EvtsError: StdError + Send + Sync + 'static,
+    L: EvtLog,
     H: EvtHandler,
+    H::Evt: for<'de> Deserialize<'de> + 'static,
 {
-    let make_evts = make_evts.ready().await.map_err(RunError::Evts)?;
-    let mut evts = make_evts
-        .call(state.read().await.seq_no)
+    let evts = evt_log
+        .evts_by_type(
+            type_name,
+            state.read().await.seq_no,
+            convert::serde_json::from_bytes,
+        )
         .await
         .map_err(RunError::Evts)?;
+    let mut evts = pin!(evts);
 
     while let Some(evt) = evts.next().await {
         if !state.read().await.running {
@@ -289,15 +295,14 @@ async fn save_seq_no(
 mod tests {
     use super::*;
     use anyhow::Context;
-    use futures::{future::ok, stream};
+    use bytes::Bytes;
+    use futures::{stream, Stream};
     use sqlx::{
         postgres::{PgConnectOptions, PgPoolOptions},
         Row,
     };
-    use std::convert::Infallible;
     use testcontainers::{clients::Cli, RunnableImage};
     use testcontainers_modules::postgres::Postgres as TCPostgres;
-    use tower::service_fn;
 
     #[tokio::test]
     async fn test() -> Result<(), Box<dyn StdError>> {
@@ -316,35 +321,11 @@ mod tests {
             .execute(&pool)
             .await?;
 
-        let make_evts = service_fn(|seq_no: NonZeroU64| {
-            ok::<_, Infallible>(
-                stream::iter(seq_no.get()..=100)
-                    .map(|n| Ok::<_, Infallible>((NonZeroU64::new(n).unwrap(), n as i64))),
-            )
-        });
-
-        #[derive(Clone)]
-        struct H;
-        impl EvtHandler for H {
-            type Evt = i64;
-
-            type Error = sqlx::Error;
-
-            async fn handle_evt(
-                &self,
-                evt: Self::Evt,
-                tx: &mut Transaction<'static, Postgres>,
-            ) -> Result<(), Self::Error> {
-                let query = "INSERT INTO test (n) VALUES ($1)";
-                sqlx::query(query).bind(evt).execute(&mut **tx).await?;
-                Ok(())
-            }
-        }
-
         let projection = Projection::spawn(
             "test-projection".to_string(),
-            make_evts,
-            H,
+            "type-name",
+            TestEvtLog,
+            TestHandler,
             ErrorStrategy::Stop,
             pool.clone(),
         )
@@ -376,5 +357,97 @@ mod tests {
         assert_eq!(state.seq_no, state_2.seq_no);
 
         Ok(())
+    }
+
+    #[derive(Debug, Clone)]
+    struct TestEvtLog;
+
+    impl EvtLog for TestEvtLog {
+        type Id = ();
+        type Error = TestEvtLogError;
+
+        async fn persist<E, ToBytes, ToBytesError>(
+            &mut self,
+            _evt: &E,
+            _type: &str,
+            _id: &Self::Id,
+            last_seq_no: Option<NonZeroU64>,
+            _to_bytes: &ToBytes,
+        ) -> Result<NonZeroU64, Self::Error>
+        where
+            E: Sync,
+            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
+            ToBytesError: StdError + Send + Sync + 'static,
+        {
+            let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
+            Ok(seq_no)
+        }
+
+        async fn last_seq_no(
+            &self,
+            _type: &str,
+            _entity_id: &Self::Id,
+        ) -> Result<Option<NonZeroU64>, Self::Error> {
+            Ok(Some(42.try_into().unwrap()))
+        }
+
+        async fn evts_by_id<E, FromBytes, FromBytesError>(
+            &self,
+            _type: &str,
+            _id: &Self::Id,
+            _seq_no: NonZeroU64,
+            _evt_from_bytes: FromBytes,
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+        where
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
+            FromBytesError: StdError + Send + Sync + 'static,
+        {
+            Ok(stream::empty())
+        }
+
+        async fn evts_by_type<E, FromBytes, FromBytesError>(
+            &self,
+            _type: &str,
+            seq_no: NonZeroU64,
+            evt_from_bytes: FromBytes,
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+        where
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
+            FromBytesError: StdError + Send + Sync + 'static,
+        {
+            let evts = stream::iter(seq_no.get()..=100).map(move |n| {
+                let evt = n as i64;
+                let n = NonZeroU64::new(n).unwrap();
+                let evt = evt_from_bytes(serde_json::to_vec(&evt).unwrap().into()).unwrap();
+                Ok((n, evt))
+            });
+
+            Ok(evts)
+        }
+    }
+
+    #[derive(Debug, Error)]
+    #[error("TestEvtLogError")]
+    struct TestEvtLogError(#[source] Box<dyn StdError + Send + Sync>);
+
+    #[derive(Clone)]
+    struct TestHandler;
+
+    impl EvtHandler for TestHandler {
+        type Evt = i64;
+
+        type Error = sqlx::Error;
+
+        async fn handle_evt(
+            &self,
+            evt: Self::Evt,
+            tx: &mut Transaction<'static, Postgres>,
+        ) -> Result<(), Self::Error> {
+            let query = "INSERT INTO test (n) VALUES ($1)";
+            sqlx::query(query).bind(evt).execute(&mut **tx).await?;
+            Ok(())
+        }
     }
 }
