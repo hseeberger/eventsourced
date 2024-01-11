@@ -517,7 +517,6 @@ dependencies = [
  "async-stream",
  "bytes",
  "futures",
- "pin-project-lite",
  "prost",
  "serde",
  "serde_json",
