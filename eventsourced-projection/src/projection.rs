@@ -21,7 +21,7 @@ impl Projection {
     pub async fn spawn<M, H, EvtsError>(
         name: String,
         make_evts: M,
-        handle_evt: H,
+        evt_handler: H,
         error_strategy: ErrorStrategy,
         pool: Pool<Postgres>,
     ) -> Projection
@@ -68,7 +68,7 @@ impl Projection {
                                     let name = name.clone();
                                     let state = state.clone();
                                     let mut make_evts = make_evts.clone();
-                                    let handle_evt = handle_evt.clone();
+                                    let evt_handler = evt_handler.clone();
                                     let pool = pool.clone();
 
                                     async move {
@@ -76,7 +76,7 @@ impl Projection {
                                             let run_result = run(
                                                 &name,
                                                 &mut make_evts,
-                                                &handle_evt,
+                                                &evt_handler,
                                                 &pool,
                                                 state.clone(),
                                             )
