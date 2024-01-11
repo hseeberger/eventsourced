@@ -29,7 +29,7 @@ jobs:
       nightly: ${{(github.event.inputs.nightly == 'true' || github.event_name == 'schedule') && 'true' || ''}}
     outputs:
       toolchain: ${{steps.set_toolchain.outputs.toolchain}}
-      fmt_toolchain: ${{steps.set_toolchain.outputs.fmt_toolchain}}
+      nightly_toolchain: ${{steps.set_toolchain.outputs.nightly_toolchain}}
     steps:
       - uses: actions/checkout@v4
       - name: Set toolchain
@@ -42,18 +42,18 @@ jobs:
             echo "using toolchain $toolchain from rust-toolchain.toml"
             echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
             if [[ $toolchain =~ ^nightly.* ]]; then
-              echo "using fmt_toolchain $toolchain"
-              echo "fmt_toolchain=$toolchain" >> "$GITHUB_OUTPUT"
+              echo "using nightly_toolchain $toolchain"
+              echo "nightly_toolchain=$toolchain" >> "$GITHUB_OUTPUT"
             else
-              echo "using fmt_toolchain nightly"
-              echo "fmt_toolchain=nightly" >> "$GITHUB_OUTPUT"
+              echo "using nightly_toolchain nightly"
+              echo "nightly_toolchain=nightly" >> "$GITHUB_OUTPUT"
             fi
           else
             toolchain='nightly'
             echo "using toolchain nightly"
             echo "toolchain=nightly" >> "$GITHUB_OUTPUT"
-            echo "using fmt_toolchain nightly"
-            echo "fmt_toolchain=nightly" >> "$GITHUB_OUTPUT"
+            echo "using nightly_toolchain nightly"
+            echo "nightly_toolchain=nightly" >> "$GITHUB_OUTPUT"
           fi
 
   check:
@@ -93,7 +93,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{needs.toolchain.outputs.fmt_toolchain}}
+          toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
           components: rustfmt
 
       - name: Install just
@@ -105,7 +105,7 @@ jobs:
 
       - name: just fmt-check
         run: |
-          rustup override set ${{needs.toolchain.outputs.fmt_toolchain}}
+          rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
           just fmt-check ''
 
   lint:
@@ -174,7 +174,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{needs.toolchain.outputs.toolchain}}
+          toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
 
       - name: Install just
         uses: taiki-e/install-action@v2
@@ -189,7 +189,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: just doc
-        run: just doc
+        run: |
+          rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
+          just doc ''
 
   dependabot:
     runs-on: ubuntu-latest

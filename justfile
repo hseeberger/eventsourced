@@ -23,7 +23,7 @@ coverage:
 fix:
 	cargo fix --allow-dirty --allow-staged --all-features
 
-doc:
-	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+doc toolchain="+nightly":
+	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo {{toolchain}} doc --no-deps --all-features
 
 all: check fmt lint test doc
