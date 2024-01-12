@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.2...eventsourced-postgres-v0.13.3) - 2024-01-12
+
+### Other
+- updated the following local packages: eventsourced, eventsourced
+
 ## [0.13.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.1...eventsourced-postgres-v0.13.2) - 2024-01-06
 
 ### Other
