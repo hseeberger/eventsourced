@@ -1,3 +1,5 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 //! Event sourced entities.
 //!
 //! EventSourced is inspired to a large degree by the amazing
