@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.4](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.13.3...eventsourced-nats-v0.13.4) - 2024-01-15
+
+### Other
+- bump NATS version ([#145](https://github.com/hseeberger/eventsourced/pull/145))
+
 ## [0.13.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.13.2...eventsourced-nats-v0.13.3) - 2024-01-12
 
 ### Other
