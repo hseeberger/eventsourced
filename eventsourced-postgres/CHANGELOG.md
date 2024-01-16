@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.4](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.3...eventsourced-postgres-v0.13.4) - 2024-01-16
+
+### Added
+- add projections ([#148](https://github.com/hseeberger/eventsourced/pull/148))
+
+### Other
+- clearer EvtLog API ([#147](https://github.com/hseeberger/eventsourced/pull/147))
+
 ## [0.13.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.2...eventsourced-postgres-v0.13.3) - 2024-01-12
 
 ### Other
