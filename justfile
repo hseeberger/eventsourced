@@ -4,6 +4,7 @@ check:
 	cargo check --tests --package eventsourced --all-features
 	cargo check --tests --package eventsourced-nats
 	cargo check --tests --package eventsourced-postgres
+	cargo check --tests --package eventsourced-projection
 
 fmt toolchain="+nightly":
 	cargo {{toolchain}} fmt

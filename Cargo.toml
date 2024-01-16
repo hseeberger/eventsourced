@@ -3,6 +3,7 @@ members = [
   "eventsourced",
   "eventsourced-nats",
   "eventsourced-postgres",
+  "eventsourced-projection",
   "examples/counter",
   "examples/counter-nats",
   "examples/counter-postgres",
@@ -29,11 +30,13 @@ prost                  = { version = "0.12" }
 prost-build            = { version = "0.12" }
 serde                  = { version = "1.0", features = [ "derive" ] }
 serde_json             = { version = "1.0" }
+sqlx                   = { version = "0.7", features = [ "postgres", "runtime-tokio" ] }
 testcontainers         = { version = "0.15" }
-testcontainers-modules = { version = "0.3", features = [ "postgres" ] }
+testcontainers-modules = { version = "0.3" }
 thiserror              = { version = "1.0" }
 tokio                  = { version = "1", features = [ "sync" ] }
 tokio-postgres         = { version = "0.7", features = [ "with-uuid-1" ] }
+tower                  = { version = "0.4", features = [ "util" ] }
 tracing                = { version = "0.1" }
 tracing-subscriber     = { version = "0.3", features = [ "env-filter" ] }
 tracing-test           = { version = "0.2" }

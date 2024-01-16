@@ -130,7 +130,7 @@ where
 
     type Error = Error;
 
-    #[instrument(skip(self, to_bytes))]
+    #[instrument(skip(self, evt, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         evt: &E::Evt,
