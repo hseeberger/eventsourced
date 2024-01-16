@@ -1,12 +1,12 @@
 //! Persistence for events.
 
+use crate::EventSourced;
 use bytes::Bytes;
 use futures::Stream;
-use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64};
+use std::{error::Error as StdError, fmt::Debug, future::Future, num::NonZeroU64};
 
 /// Persistence for events.
-#[trait_variant::make(EvtLog: Send)]
-pub trait LocalEvtLog: Clone + 'static {
+pub trait EvtLog: Clone + Send + 'static {
     type Id: Debug;
 
     type Error: StdError + Send + Sync + 'static;
@@ -15,51 +15,59 @@ pub trait LocalEvtLog: Clone + 'static {
     /// implementation.
     const MAX_SEQ_NO: NonZeroU64 = NonZeroU64::MAX;
 
-    /// Persist the given event and optional tag for the given entity type and ID and return the
+    /// Persist the given event and optional tag for the given entity ID and return the
     /// sequence number for the persisted event. The given last sequence number is used for
     /// optimistic locking, i.e. it must match the current last sequence number of the event log.
-    async fn persist<E, ToBytes, ToBytesError>(
+    fn persist<E, ToBytes, ToBytesError>(
         &mut self,
-        evt: &E,
-        type_name: &str,
+        evt: &E::Evt,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
         to_bytes: &ToBytes,
-    ) -> Result<NonZeroU64, Self::Error>
+    ) -> impl Future<Output = Result<NonZeroU64, Self::Error>> + Send
     where
-        E: Debug + Sync,
-        ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
+        E: EventSourced,
+        ToBytes: Fn(&E::Evt) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static;
 
-    /// Get the last sequence number for the given entity type and ID.
-    async fn last_seq_no(
+    /// Get the last sequence number for the given entity ID.
+    fn last_seq_no<E>(
         &self,
-        type_name: &str,
         id: &Self::Id,
-    ) -> Result<Option<NonZeroU64>, Self::Error>;
+    ) -> impl Future<Output = Result<Option<NonZeroU64>, Self::Error>> + Send
+    where
+        E: EventSourced;
 
     /// Get the events for the given entity ID starting at the given sequence number.
-    async fn evts_by_id<E, FromBytes, FromBytesError>(
+    fn evts_by_id<E, FromBytes, FromBytesError>(
         &self,
-        type_name: &str,
         id: &Self::Id,
         seq_no: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+    ) -> impl Future<
+        Output = Result<
+            impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send,
+            Self::Error,
+        >,
+    > + Send
     where
-        E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        E: EventSourced,
+        FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static;
 
     /// Get the events for the given entity type starting at the given sequence number.
-    async fn evts_by_type<E, FromBytes, FromBytesError>(
+    fn evts_by_type<E, FromBytes, FromBytesError>(
         &self,
-        type_name: &str,
         seq_no: NonZeroU64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+    ) -> impl Future<
+        Output = Result<
+            impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send,
+            Self::Error,
+        >,
+    > + Send
     where
-        E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync + 'static,
+        E: EventSourced,
+        FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send + Sync + 'static,
         FromBytesError: StdError + Send + Sync + 'static;
 }

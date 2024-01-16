@@ -157,7 +157,7 @@ pub trait EventSourcedExt: Sized {
 
         // Get and validate last sequence number.
         let mut last_seq_no = evt_log
-            .last_seq_no(Self::TYPE_NAME, &id)
+            .last_seq_no::<Self>(&id)
             .await
             .map_err(|error| SpawnError::LastNonZeroU64(error.into()))?;
         if last_seq_no < snapshot_seq_no {
@@ -171,7 +171,7 @@ pub trait EventSourcedExt: Sized {
             debug!(?id, from_seq_no, last_seq_no, "replaying evts");
 
             let evts = evt_log
-                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, evt_from_bytes)
+                .evts_by_id::<Self, _, _>(&id, from_seq_no, evt_from_bytes)
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
 
@@ -213,7 +213,7 @@ pub trait EventSourcedExt: Sized {
 
                 debug!(?id, ?evt, "persisting event");
                 match evt_log
-                    .persist(&evt, Self::TYPE_NAME, &id, last_seq_no, &evt_to_bytes)
+                    .persist::<Self, _, _>(&evt, &id, last_seq_no, &evt_to_bytes)
                     .await
                 {
                     Ok(seq_no) => {
@@ -405,39 +405,39 @@ mod tests {
 
         async fn persist<E, ToBytes, ToBytesError>(
             &mut self,
-            _evt: &E,
-            _type: &str,
+            _evt: &E::Evt,
             _id: &Self::Id,
             last_seq_no: Option<NonZeroU64>,
             _to_bytes: &ToBytes,
         ) -> Result<NonZeroU64, Self::Error>
         where
-            E: Sync,
-            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
+            E: EventSourced,
+            ToBytes: Fn(&E::Evt) -> Result<Bytes, ToBytesError> + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
         {
             let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
             Ok(seq_no)
         }
 
-        async fn last_seq_no(
+        async fn last_seq_no<E>(
             &self,
-            _type: &str,
             _entity_id: &Self::Id,
-        ) -> Result<Option<NonZeroU64>, Self::Error> {
+        ) -> Result<Option<NonZeroU64>, Self::Error>
+        where
+            E: EventSourced,
+        {
             Ok(Some(42.try_into().unwrap()))
         }
 
         async fn evts_by_id<E, FromBytes, FromBytesError>(
             &self,
-            _type: &str,
             _id: &Self::Id,
             seq_no: NonZeroU64,
             evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
         where
-            E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
+            E: EventSourced,
+            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send + Sync,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             let successors = iter::successors(Some(seq_no), |n| n.checked_add(1));
@@ -451,13 +451,12 @@ mod tests {
 
         async fn evts_by_type<E, FromBytes, FromBytesError>(
             &self,
-            _type: &str,
             _seq_no: NonZeroU64,
             _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
         where
-            E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+            E: EventSourced,
+            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             Ok(stream::empty())
