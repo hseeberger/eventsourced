@@ -1,6 +1,6 @@
 use eventsourced::{convert, error_chain, EventSourced, EvtLog};
 use futures::StreamExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Transaction};
 use std::{
     error::Error as StdError, fmt::Debug, num::NonZeroU64, pin::pin, sync::Arc, time::Duration,
@@ -187,7 +187,7 @@ pub trait LocalEvtHandler {
     ) -> Result<(), Self::Error>;
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Serialize, Deserialize)]
 pub enum Error {
     /// A command cannot be sent from this [Projection] to its projection.
     #[error("cannot send {0} command to projection {1}")]
@@ -211,8 +211,8 @@ pub struct State {
     error: Option<String>,
 }
 
-#[derive(Debug)]
-enum Cmd {
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum Cmd {
     Run,
     Stop,
     GetState,
