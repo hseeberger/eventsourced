@@ -221,7 +221,7 @@ impl State {
     }
 
     pub fn error(&self) -> Option<&str> {
-        self.error.as_ref().map(|s| s.as_str())
+        self.error.as_deref()
     }
 }
 
