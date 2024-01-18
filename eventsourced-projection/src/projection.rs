@@ -211,6 +211,20 @@ pub struct State {
     error: Option<String>,
 }
 
+impl State {
+    pub fn seq_no(&self) -> NonZeroU64 {
+        self.seq_no
+    }
+
+    pub fn running(&self) -> bool {
+        self.running
+    }
+
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_ref().map(|s| s.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Cmd {
     Run,
