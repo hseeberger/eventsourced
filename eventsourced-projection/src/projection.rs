@@ -204,7 +204,7 @@ pub enum ErrorStrategy {
     Stop,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
     seq_no: NonZeroU64,
     running: bool,
