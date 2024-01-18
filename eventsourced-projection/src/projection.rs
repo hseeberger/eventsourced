@@ -148,7 +148,7 @@ impl Projection {
         self.cmd_in
             .send((Cmd::Run, cmd_in))
             .await
-            .map_err(|_| Error::SendCmd("Run", self.name.clone()))?;
+            .map_err(|_| Error::SendCmd(Cmd::Run, self.name.clone()))?;
         Ok(())
     }
 
@@ -157,7 +157,7 @@ impl Projection {
         self.cmd_in
             .send((Cmd::Stop, cmd_in))
             .await
-            .map_err(|_| Error::SendCmd("Stop", self.name.clone()))?;
+            .map_err(|_| Error::SendCmd(Cmd::Stop, self.name.clone()))?;
         Ok(())
     }
 
@@ -166,10 +166,10 @@ impl Projection {
         self.cmd_in
             .send((Cmd::GetState, cmd_in))
             .await
-            .map_err(|_| Error::SendCmd("GetState", self.name.clone()))?;
+            .map_err(|_| Error::SendCmd(Cmd::GetState, self.name.clone()))?;
         let state = state_out
             .await
-            .map_err(|_| Error::ReceiveReply("GetState", self.name.clone()))?;
+            .map_err(|_| Error::ReceiveReply(Cmd::GetState, self.name.clone()))?;
         Ok(state)
     }
 }
@@ -190,12 +190,12 @@ pub trait LocalEvtHandler {
 #[derive(Debug, Error, Serialize, Deserialize)]
 pub enum Error {
     /// A command cannot be sent from this [Projection] to its projection.
-    #[error("cannot send {0} command to projection {1}")]
-    SendCmd(&'static str, String),
+    #[error("cannot send command {0:?} to projection {1}")]
+    SendCmd(Cmd, String),
 
     /// A reply for a command cannot be received from this [Projection]'s projection.
-    #[error("cannot receive reply for {0} command from projection {1}")]
-    ReceiveReply(&'static str, String),
+    #[error("cannot receive reply for command {0:?} from projection {1}")]
+    ReceiveReply(Cmd, String),
 }
 
 #[derive(Debug, Clone, Copy)]
