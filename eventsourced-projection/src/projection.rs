@@ -30,7 +30,7 @@ impl Projection {
     where
         E: EventSourced,
         E::Evt: for<'de> Deserialize<'de> + 'static,
-        L: EvtLog + Send + Sync,
+        L: EvtLog + Sync,
         H: EvtHandler<EventSourced = E> + Send + Sync + Clone + 'static,
     {
         sqlx::query(include_str!("create_projection.sql"))
