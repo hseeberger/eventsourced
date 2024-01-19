@@ -41,5 +41,5 @@ tracing                = { version = "0.1" }
 tracing-subscriber     = { version = "0.3", features = [ "env-filter" ] }
 tracing-test           = { version = "0.2" }
 trait-variant          = { version = "0.1" }
-uuid                   = { version = "1.6", features = [ "serde", "v7" ] }
+uuid                   = { version = "1.7", features = [ "serde", "v7" ] }
 walkdir                = { version = "2.4" }
