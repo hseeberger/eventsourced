@@ -51,7 +51,7 @@ impl Projection {
             let state = state.clone();
 
             async move {
-                while let Some((cmd, result_in)) = cmd_out.recv().await {
+                while let Some((cmd, reply_in)) = cmd_out.recv().await {
                     match cmd {
                         Cmd::Run => {
                             let running = { state.read().await.running };
@@ -89,7 +89,7 @@ impl Projection {
 
                         Cmd::GetState => {
                             let state = state.read().await.clone();
-                            if result_in.send(state).is_err() {
+                            if reply_in.send(state).is_err() {
                                 error!(type_name = E::TYPE_NAME, name, "cannot send state");
                             }
                         }
@@ -101,33 +101,33 @@ impl Projection {
         Projection { name, cmd_in }
     }
 
-    pub async fn run(&self) -> Result<(), Error> {
-        let (cmd_in, _) = oneshot::channel();
+    pub async fn run(&self) -> Result<(), CmdError> {
+        let (reply_in, _) = oneshot::channel();
         self.cmd_in
-            .send((Cmd::Run, cmd_in))
+            .send((Cmd::Run, reply_in))
             .await
-            .map_err(|_| Error::SendCmd(Cmd::Run, self.name.clone()))?;
+            .map_err(|_| CmdError::SendCmd(Cmd::Run, self.name.clone()))?;
         Ok(())
     }
 
-    pub async fn stop(&self) -> Result<(), Error> {
-        let (cmd_in, _) = oneshot::channel();
+    pub async fn stop(&self) -> Result<(), CmdError> {
+        let (reply_in, _) = oneshot::channel();
         self.cmd_in
-            .send((Cmd::Stop, cmd_in))
+            .send((Cmd::Stop, reply_in))
             .await
-            .map_err(|_| Error::SendCmd(Cmd::Stop, self.name.clone()))?;
+            .map_err(|_| CmdError::SendCmd(Cmd::Stop, self.name.clone()))?;
         Ok(())
     }
 
-    pub async fn get_state(&self) -> Result<State, Error> {
-        let (cmd_in, state_out) = oneshot::channel();
+    pub async fn get_state(&self) -> Result<State, CmdError> {
+        let (reply_in, reply_out) = oneshot::channel();
         self.cmd_in
-            .send((Cmd::GetState, cmd_in))
+            .send((Cmd::GetState, reply_in))
             .await
-            .map_err(|_| Error::SendCmd(Cmd::GetState, self.name.clone()))?;
-        let state = state_out
+            .map_err(|_| CmdError::SendCmd(Cmd::GetState, self.name.clone()))?;
+        let state = reply_out
             .await
-            .map_err(|_| Error::ReceiveReply(Cmd::GetState, self.name.clone()))?;
+            .map_err(|_| CmdError::ReceiveReply(Cmd::GetState, self.name.clone()))?;
         Ok(state)
     }
 }
@@ -146,7 +146,7 @@ pub trait LocalEvtHandler {
 }
 
 #[derive(Debug, Error, Serialize, Deserialize)]
-pub enum Error {
+pub enum CmdError {
     /// A command cannot be sent from this [Projection] to its projection.
     #[error("cannot send command {0:?} to projection {1}")]
     SendCmd(Cmd, String),
