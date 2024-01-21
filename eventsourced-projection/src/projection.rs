@@ -51,88 +51,46 @@ impl Projection {
             let state = state.clone();
 
             async move {
-                while let Some((cmd, result_sender)) = cmd_out.recv().await {
+                while let Some((cmd, result_in)) = cmd_out.recv().await {
                     match cmd {
                         Cmd::Run => {
                             let running = { state.read().await.running };
                             if running {
-                                info!(name, "projection already running");
+                                info!(type_name = E::TYPE_NAME, name, "projection already running");
                             } else {
-                                info!(name, "running projection");
+                                info!(type_name = E::TYPE_NAME, name, "running projection");
                                 {
                                     let mut state = state.write().await;
                                     state.running = true;
                                     state.error = None;
                                 }
 
-                                task::spawn({
-                                    let name = name.clone();
-                                    let state = state.clone();
-                                    let evt_log = evt_log.clone();
-                                    let evt_handler = evt_handler.clone();
-                                    let pool = pool.clone();
-
-                                    async move {
-                                        loop {
-                                            let run_result = run(
-                                                &name,
-                                                &evt_log,
-                                                &evt_handler,
-                                                &pool,
-                                                state.clone(),
-                                            )
-                                            .await;
-
-                                            match run_result {
-                                                Ok(_) => {
-                                                    info!(name, "stopped");
-                                                    break;
-                                                }
-
-                                                Err(error) => {
-                                                    error!(
-                                                        name,
-                                                        error = error_chain(error),
-                                                        "projection terminated with error"
-                                                    );
-
-                                                    match error_strategy {
-                                                        ErrorStrategy::Retry(delay) => {
-                                                            info!(
-                                                                name,
-                                                                ?delay,
-                                                                "retrying after error"
-                                                            );
-                                                            sleep(delay).await
-                                                        }
-
-                                                        ErrorStrategy::Stop => {
-                                                            info!(name, "stopping after error");
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                });
+                                run_projection_loop(
+                                    name.clone(),
+                                    state.clone(),
+                                    evt_log.clone(),
+                                    evt_handler.clone(),
+                                    pool.clone(),
+                                    error_strategy,
+                                )
+                                .await;
                             }
                         }
 
                         Cmd::Stop => {
                             let running = &mut state.write().await.running;
                             if !*running {
-                                info!(name, "projection already stopped");
+                                info!(type_name = E::TYPE_NAME, name, "projection already stopped");
                             } else {
-                                info!(name, "stopping projection");
+                                info!(type_name = E::TYPE_NAME, name, "stopping projection");
                                 *running = false;
                             }
                         }
 
                         Cmd::GetState => {
                             let state = state.read().await.clone();
-                            if result_sender.send(state).is_err() {
-                                error!(name, "cannot send state");
+                            if result_in.send(state).is_err() {
+                                error!(type_name = E::TYPE_NAME, name, "cannot send state");
                             }
                         }
                     }
@@ -244,12 +202,63 @@ enum RunError<E, H> {
     Sqlx(#[from] sqlx::Error),
 }
 
-async fn run<E, L, H>(
+async fn run_projection_loop<E, L, H>(
+    name: String,
+    state: Arc<RwLock<State>>,
+    evt_log: L,
+    evt_handler: H,
+    pool: Pool<Postgres>,
+    error_strategy: ErrorStrategy,
+) where
+    E: EventSourced,
+    E::Evt: for<'de> Deserialize<'de> + 'static,
+    L: EvtLog + Sync,
+    H: EvtHandler<EventSourced = E> + Sync + 'static,
+{
+    let type_name = E::TYPE_NAME;
+    task::spawn({
+        async move {
+            loop {
+                match run_projection(type_name, &name, &evt_log, &evt_handler, &pool, &state).await
+                {
+                    Ok(_) => {
+                        info!(type_name, name, "projection stopped");
+                        break;
+                    }
+
+                    Err(error) => {
+                        error!(
+                            type_name,
+                            name,
+                            error = error_chain(error),
+                            "projection error"
+                        );
+
+                        match error_strategy {
+                            ErrorStrategy::Retry(delay) => {
+                                info!(type_name, name, ?delay, "projection retrying after error");
+                                sleep(delay).await
+                            }
+
+                            ErrorStrategy::Stop => {
+                                info!(type_name, name, "projection stopped after error");
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+async fn run_projection<E, L, H>(
+    type_name: &str,
     name: &str,
     evt_log: &L,
     handler: &H,
     pool: &Pool<Postgres>,
-    state: Arc<RwLock<State>>,
+    state: &Arc<RwLock<State>>,
 ) -> Result<(), RunError<L::Error, H::Error>>
 where
     E: EventSourced,
@@ -275,7 +284,7 @@ where
             .handle_evt(evt, &mut tx)
             .await
             .map_err(RunError::Handler)?;
-        debug!(seq_no, "handled event");
+        debug!(type_name, name, seq_no, "projection handled event");
         save_seq_no(seq_no, name, &mut tx).await?;
         tx.commit().await?;
 
