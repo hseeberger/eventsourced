@@ -125,7 +125,7 @@ impl Projection {
     async fn handle_cmd(&self, cmd: Cmd) -> Result<State, CmdError> {
         let (reply_in, reply_out) = oneshot::channel();
         self.cmd_in
-            .send((Cmd::Run, reply_in))
+            .send((cmd, reply_in))
             .await
             .map_err(|_| CmdError::SendCmd(cmd, self.name.clone()))?;
         let state = reply_out
