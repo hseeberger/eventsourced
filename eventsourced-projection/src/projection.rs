@@ -54,12 +54,14 @@ impl Projection {
                 while let Some((cmd, reply_in)) = cmd_out.recv().await {
                     match cmd {
                         Cmd::Run => {
+                            // Do not remove braces, dead-lock is waiting for you!
                             let running = { state.read().await.running };
                             if running {
                                 info!(type_name = E::TYPE_NAME, name, "projection already running");
                             } else {
                                 info!(type_name = E::TYPE_NAME, name, "running projection");
 
+                                // Do not remove braces, dead-lock is waiting for you!
                                 {
                                     let mut state = state.write().await;
                                     state.running = true;
@@ -83,13 +85,14 @@ impl Projection {
                         }
 
                         Cmd::Stop => {
-                            let running = &mut state.write().await.running;
-
-                            if !*running {
-                                info!(type_name = E::TYPE_NAME, name, "projection already stopped");
-                            } else {
+                            // Do not remove braces, dead-lock is waiting for you!
+                            let running = { state.read().await.running };
+                            if running {
                                 info!(type_name = E::TYPE_NAME, name, "stopping projection");
-                                *running = false;
+                                let mut state = state.write().await;
+                                state.running = false;
+                            } else {
+                                info!(type_name = E::TYPE_NAME, name, "projection already stopped");
                             }
 
                             if reply_in.send(state.read().await.clone()).is_err() {
