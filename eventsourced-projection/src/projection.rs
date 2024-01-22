@@ -26,7 +26,7 @@ impl Projection {
         evt_handler: H,
         error_strategy: ErrorStrategy,
         pool: Pool<Postgres>,
-    ) -> Projection
+    ) -> Self
     where
         E: EventSourced,
         E::Evt: for<'de> Deserialize<'de> + 'static,
