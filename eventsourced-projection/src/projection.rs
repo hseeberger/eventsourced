@@ -59,6 +59,7 @@ impl Projection {
                                 info!(type_name = E::TYPE_NAME, name, "projection already running");
                             } else {
                                 info!(type_name = E::TYPE_NAME, name, "running projection");
+
                                 {
                                     let mut state = state.write().await;
                                     state.running = true;
@@ -75,21 +76,29 @@ impl Projection {
                                 )
                                 .await;
                             }
+
+                            if reply_in.send(state.read().await.clone()).is_err() {
+                                error!(type_name = E::TYPE_NAME, name, "cannot send state");
+                            }
                         }
 
                         Cmd::Stop => {
                             let running = &mut state.write().await.running;
+
                             if !*running {
                                 info!(type_name = E::TYPE_NAME, name, "projection already stopped");
                             } else {
                                 info!(type_name = E::TYPE_NAME, name, "stopping projection");
                                 *running = false;
                             }
+
+                            if reply_in.send(state.read().await.clone()).is_err() {
+                                error!(type_name = E::TYPE_NAME, name, "cannot send state");
+                            }
                         }
 
                         Cmd::GetState => {
-                            let state = state.read().await.clone();
-                            if reply_in.send(state).is_err() {
+                            if reply_in.send(state.read().await.clone()).is_err() {
                                 error!(type_name = E::TYPE_NAME, name, "cannot send state");
                             }
                         }
@@ -101,33 +110,27 @@ impl Projection {
         Projection { name, cmd_in }
     }
 
-    pub async fn run(&self) -> Result<(), RunError> {
-        let (reply_in, _) = oneshot::channel();
+    pub async fn run(&self) -> Result<State, CmdError> {
+        self.handle_cmd(Cmd::Run).await
+    }
+
+    pub async fn stop(&self) -> Result<State, CmdError> {
+        self.handle_cmd(Cmd::Stop).await
+    }
+
+    pub async fn get_state(&self) -> Result<State, CmdError> {
+        self.handle_cmd(Cmd::GetState).await
+    }
+
+    async fn handle_cmd(&self, cmd: Cmd) -> Result<State, CmdError> {
+        let (reply_in, reply_out) = oneshot::channel();
         self.cmd_in
             .send((Cmd::Run, reply_in))
             .await
-            .map_err(|_| RunError(self.name.clone()))?;
-        Ok(())
-    }
-
-    pub async fn stop(&self) -> Result<(), StopError> {
-        let (reply_in, _) = oneshot::channel();
-        self.cmd_in
-            .send((Cmd::Stop, reply_in))
-            .await
-            .map_err(|_| StopError(self.name.clone()))?;
-        Ok(())
-    }
-
-    pub async fn get_state(&self) -> Result<State, GetStateError> {
-        let (reply_in, reply_out) = oneshot::channel();
-        self.cmd_in
-            .send((Cmd::GetState, reply_in))
-            .await
-            .map_err(|_| GetStateError::SendCmd(self.name.clone()))?;
+            .map_err(|_| CmdError::SendCmd(cmd, self.name.clone()))?;
         let state = reply_out
             .await
-            .map_err(|_| GetStateError::ReceiveReply(self.name.clone()))?;
+            .map_err(|_| CmdError::ReceiveResponse(cmd, self.name.clone()))?;
         Ok(state)
     }
 }
@@ -145,25 +148,15 @@ pub trait LocalEvtHandler {
     ) -> Result<(), Self::Error>;
 }
 
-/// The Run command cannot be sent from this [Projection] to its projection.
 #[derive(Debug, Error, Serialize, Deserialize)]
-#[error("cannot send Run command to projection {0}")]
-pub struct RunError(String);
+pub enum CmdError {
+    /// The command cannot be sent from this [Projection] to its projection.
+    #[error("cannot send command {0:?} to projection {1}")]
+    SendCmd(Cmd, String),
 
-/// The Stop command cannot be sent from this [Projection] to its projection.
-#[derive(Debug, Error, Serialize, Deserialize)]
-#[error("cannot send Stop command to projection {0}")]
-pub struct StopError(String);
-
-#[derive(Debug, Error, Serialize, Deserialize)]
-pub enum GetStateError {
-    /// The GetState command cannot be sent from this [Projection] to its projection.
-    #[error("cannot send GetState command to projection {0}")]
-    SendCmd(String),
-
-    /// A reply for the GetState command cannot be received from this [Projection]'s projection.
-    #[error("cannot receive reply for GetState command from projection {0}")]
-    ReceiveReply(String),
+    /// A response for the command cannot be received from this [Projection]'s projection.
+    #[error("cannot receive reply for command {0:?} from projection {1}")]
+    ReceiveResponse(Cmd, String),
 }
 
 #[derive(Debug, Clone, Copy)]
