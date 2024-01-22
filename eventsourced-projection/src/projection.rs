@@ -20,7 +20,7 @@ pub struct Projection {
 }
 
 impl Projection {
-    pub async fn spawn<E, L, H>(
+    pub async fn new<E, L, H>(
         name: String,
         evt_log: L,
         evt_handler: H,
@@ -463,7 +463,7 @@ mod tests {
             .execute(&pool)
             .await?;
 
-        let projection = Projection::spawn(
+        let projection = Projection::new(
             "test-projection".to_string(),
             TestEvtLog,
             TestHandler,
