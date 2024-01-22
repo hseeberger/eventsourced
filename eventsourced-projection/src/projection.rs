@@ -31,7 +31,7 @@ impl Projection {
         E: EventSourced,
         E::Evt: for<'de> Deserialize<'de> + 'static,
         L: EvtLog + Sync,
-        H: EvtHandler<EventSourced = E> + Send + Sync + Clone + 'static,
+        H: EvtHandler<EventSourced = E> + Clone + Send + Sync + 'static,
     {
         sqlx::query(include_str!("create_projection.sql"))
             .execute(&pool)
@@ -101,33 +101,33 @@ impl Projection {
         Projection { name, cmd_in }
     }
 
-    pub async fn run(&self) -> Result<(), CmdError> {
+    pub async fn run(&self) -> Result<(), RunError> {
         let (reply_in, _) = oneshot::channel();
         self.cmd_in
             .send((Cmd::Run, reply_in))
             .await
-            .map_err(|_| CmdError::SendCmd(Cmd::Run, self.name.clone()))?;
+            .map_err(|_| RunError(self.name.clone()))?;
         Ok(())
     }
 
-    pub async fn stop(&self) -> Result<(), CmdError> {
+    pub async fn stop(&self) -> Result<(), StopError> {
         let (reply_in, _) = oneshot::channel();
         self.cmd_in
             .send((Cmd::Stop, reply_in))
             .await
-            .map_err(|_| CmdError::SendCmd(Cmd::Stop, self.name.clone()))?;
+            .map_err(|_| StopError(self.name.clone()))?;
         Ok(())
     }
 
-    pub async fn get_state(&self) -> Result<State, CmdError> {
+    pub async fn get_state(&self) -> Result<State, GetStateError> {
         let (reply_in, reply_out) = oneshot::channel();
         self.cmd_in
             .send((Cmd::GetState, reply_in))
             .await
-            .map_err(|_| CmdError::SendCmd(Cmd::GetState, self.name.clone()))?;
+            .map_err(|_| GetStateError::SendCmd(self.name.clone()))?;
         let state = reply_out
             .await
-            .map_err(|_| CmdError::ReceiveReply(Cmd::GetState, self.name.clone()))?;
+            .map_err(|_| GetStateError::ReceiveReply(self.name.clone()))?;
         Ok(state)
     }
 }
@@ -145,15 +145,25 @@ pub trait LocalEvtHandler {
     ) -> Result<(), Self::Error>;
 }
 
+/// The Run command cannot be sent from this [Projection] to its projection.
 #[derive(Debug, Error, Serialize, Deserialize)]
-pub enum CmdError {
-    /// A command cannot be sent from this [Projection] to its projection.
-    #[error("cannot send command {0:?} to projection {1}")]
-    SendCmd(Cmd, String),
+#[error("cannot send Run command to projection {0}")]
+pub struct RunError(String);
 
-    /// A reply for a command cannot be received from this [Projection]'s projection.
-    #[error("cannot receive reply for command {0:?} from projection {1}")]
-    ReceiveReply(Cmd, String),
+/// The Stop command cannot be sent from this [Projection] to its projection.
+#[derive(Debug, Error, Serialize, Deserialize)]
+#[error("cannot send Stop command to projection {0}")]
+pub struct StopError(String);
+
+#[derive(Debug, Error, Serialize, Deserialize)]
+pub enum GetStateError {
+    /// The GetState command cannot be sent from this [Projection] to its projection.
+    #[error("cannot send GetState command to projection {0}")]
+    SendCmd(String),
+
+    /// A reply for the GetState command cannot be received from this [Projection]'s projection.
+    #[error("cannot receive reply for GetState command from projection {0}")]
+    ReceiveReply(String),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -191,7 +201,7 @@ pub enum Cmd {
 }
 
 #[derive(Debug, Error)]
-enum RunError<E, H> {
+enum IntenalRunError<E, H> {
     #[error(transparent)]
     Evts(E),
 
@@ -259,7 +269,7 @@ async fn run_projection<E, L, H>(
     handler: &H,
     pool: &Pool<Postgres>,
     state: &Arc<RwLock<State>>,
-) -> Result<(), RunError<L::Error, H::Error>>
+) -> Result<(), IntenalRunError<L::Error, H::Error>>
 where
     E: EventSourced,
     E::Evt: for<'de> Deserialize<'de> + 'static,
@@ -269,7 +279,7 @@ where
     let evts = evt_log
         .evts_by_type::<E, _, _>(state.read().await.seq_no, convert::serde_json::from_bytes)
         .await
-        .map_err(RunError::Evts)?;
+        .map_err(IntenalRunError::Evts)?;
     let mut evts = pin!(evts);
 
     while let Some(evt) = evts.next().await {
@@ -277,13 +287,13 @@ where
             break;
         };
 
-        let (seq_no, evt) = evt.map_err(RunError::Evts)?;
+        let (seq_no, evt) = evt.map_err(IntenalRunError::Evts)?;
 
         let mut tx = pool.begin().await?;
         handler
             .handle_evt(evt, &mut tx)
             .await
-            .map_err(RunError::Handler)?;
+            .map_err(IntenalRunError::Handler)?;
         debug!(type_name, name, seq_no, "projection handled event");
         save_seq_no(seq_no, name, &mut tx).await?;
         tx.commit().await?;
