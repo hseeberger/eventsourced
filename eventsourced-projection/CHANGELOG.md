@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.1.0...eventsourced-projection-v0.2.0) - 2024-01-23
+
+### Other
+- rename postgres
+
 ## [0.0.1](https://github.com/hseeberger/eventsourced/releases/tag/eventsourced-projection-v0.0.1) - 2024-01-16
 
 ### Added
