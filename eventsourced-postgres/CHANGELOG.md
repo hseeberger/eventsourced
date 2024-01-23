@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.5](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.4...eventsourced-postgres-v0.13.5) - 2024-01-23
+
+### Other
+- update Cargo.toml dependencies
+
 ## [0.13.4](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.3...eventsourced-postgres-v0.13.4) - 2024-01-16
 
 ### Added

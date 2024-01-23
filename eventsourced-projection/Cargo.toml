@@ -11,7 +11,7 @@ repository    = { workspace = true }
 documentation = "https://docs.rs/eventsourced-nats/latest/eventsourced-projection"
 
 [dependencies]
-eventsourced  = { path = "../eventsourced", version = "0.15.0", features = [ "serde_json" ] }
+eventsourced  = { path = "../eventsourced", version = "0.15.1", features = [ "serde_json" ] }
 anyhow        = { workspace = true }
 async-nats    = { workspace = true }
 bytes         = { workspace = true }
