@@ -114,18 +114,18 @@ impl Projection {
     }
 
     pub async fn run(&self) -> Result<State, CmdError> {
-        self.handle_cmd(Cmd::Run).await
+        self.dispatch_cmd(Cmd::Run).await
     }
 
     pub async fn stop(&self) -> Result<State, CmdError> {
-        self.handle_cmd(Cmd::Stop).await
+        self.dispatch_cmd(Cmd::Stop).await
     }
 
     pub async fn get_state(&self) -> Result<State, CmdError> {
-        self.handle_cmd(Cmd::GetState).await
+        self.dispatch_cmd(Cmd::GetState).await
     }
 
-    async fn handle_cmd(&self, cmd: Cmd) -> Result<State, CmdError> {
+    async fn dispatch_cmd(&self, cmd: Cmd) -> Result<State, CmdError> {
         let (reply_in, reply_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, reply_in))
