@@ -13,6 +13,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
+/// A projection of events of an [EventSourced] entity to a Postgres database.
 #[derive(Debug, Clone)]
 pub struct Projection {
     name: String,
