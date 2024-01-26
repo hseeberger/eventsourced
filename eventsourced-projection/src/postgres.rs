@@ -305,7 +305,7 @@ where
     L: EvtLog,
     H: EvtHandler<EventSourced = E>,
 {
-    let seq_no = load_seq_no(&name, &pool).await?;
+    let seq_no = load_seq_no(name, pool).await?;
     let evts = evt_log
         .evts_by_type::<E, _, _>(seq_no, convert::serde_json::from_bytes)
         .await
