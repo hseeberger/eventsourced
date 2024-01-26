@@ -166,7 +166,9 @@ pub trait EventSourcedExt: Sized {
 
         // Replay latest events.
         if snapshot_seq_no < last_seq_no {
-            let from_seq_no = snapshot_seq_no.successor();
+            let from_seq_no = snapshot_seq_no
+                .map(|n| n.saturating_add(1))
+                .unwrap_or(NonZeroU64::MIN);
             let last_seq_no = last_seq_no.unwrap(); // This is safe because of the above relation!
             debug!(?id, from_seq_no, last_seq_no, "replaying evts");
 
@@ -336,23 +338,6 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub evt_from_bytes: EvtFromBytes,
     pub state_to_bytes: StateToBytes,
     pub state_from_bytes: StateFromBytes,
-}
-
-/// Extension methods for sequence numbers.
-pub trait SeqNo<T> {
-    fn successor(self) -> T;
-}
-
-impl SeqNo<NonZeroU64> for NonZeroU64 {
-    fn successor(self) -> NonZeroU64 {
-        self.saturating_add(1)
-    }
-}
-
-impl SeqNo<NonZeroU64> for Option<NonZeroU64> {
-    fn successor(self) -> NonZeroU64 {
-        self.map(|n| n.saturating_add(1)).unwrap_or(NonZeroU64::MIN)
-    }
 }
 
 /// Format the given error with its whole error chain, implemented by using `anyhow`.

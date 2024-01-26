@@ -187,13 +187,13 @@ pub enum ErrorStrategy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
-    seq_no: NonZeroU64,
+    seq_no: Option<NonZeroU64>,
     running: bool,
     error: Option<String>,
 }
 
 impl State {
-    pub fn seq_no(&self) -> NonZeroU64 {
+    pub fn seq_no(&self) -> Option<NonZeroU64> {
         self.seq_no
     }
 
@@ -228,7 +228,7 @@ enum IntenalRunError<E, H> {
     LoadStateError(#[from] Error),
 }
 
-async fn load_seq_no(name: &str, pool: &Pool<Postgres>) -> Result<NonZeroU64, Error> {
+async fn load_seq_no(name: &str, pool: &Pool<Postgres>) -> Result<Option<NonZeroU64>, Error> {
     let seq_no = sqlx::query("SELECT seq_no FROM projection WHERE name=$1")
         .bind(name)
         .fetch_optional(pool)
@@ -236,8 +236,7 @@ async fn load_seq_no(name: &str, pool: &Pool<Postgres>) -> Result<NonZeroU64, Er
         .map(|row| row.try_get::<i64, _>(0))
         .transpose()?
         .map(|seq_no| (seq_no as u64).try_into())
-        .transpose()?
-        .unwrap_or(NonZeroU64::MIN);
+        .transpose()?;
     Ok(seq_no)
 }
 
@@ -305,7 +304,10 @@ where
     L: EvtLog,
     H: EvtHandler<EventSourced = E>,
 {
-    let seq_no = load_seq_no(name, pool).await?;
+    let seq_no = load_seq_no(name, pool)
+        .await?
+        .map(|n| n.saturating_add(1))
+        .unwrap_or(NonZeroU64::MIN);
     let evts = evt_log
         .evts_by_type::<E, _, _>(seq_no, convert::serde_json::from_bytes)
         .await
@@ -328,7 +330,7 @@ where
         save_seq_no(seq_no, name, &mut tx).await?;
         tx.commit().await?;
 
-        state.write().await.seq_no = seq_no;
+        state.write().await.seq_no = Some(seq_no);
     }
 
     Ok(())
@@ -511,14 +513,14 @@ mod tests {
 
         sqlx::query("INSERT INTO projection VALUES ($1, $2)")
             .bind("test-projection")
-            .bind(11)
+            .bind(10)
             .execute(&pool)
             .await?;
 
         projection.run().await?;
 
         let mut state = projection.get_state().await?;
-        let max = NonZeroU64::new(100).unwrap();
+        let max = Some(NonZeroU64::new(100).unwrap());
         while state.seq_no < max {
             sleep(Duration::from_millis(100)).await;
             state = projection.get_state().await?;
