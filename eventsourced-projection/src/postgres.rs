@@ -1,9 +1,14 @@
 use eventsourced::{convert, error_chain, EventSourced, EvtLog};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Postgres, Transaction};
+use sqlx::{Pool, Postgres, Row, Transaction};
 use std::{
-    error::Error as StdError, fmt::Debug, num::NonZeroU64, pin::pin, sync::Arc, time::Duration,
+    error::Error as StdError,
+    fmt::Debug,
+    num::{NonZeroU64, TryFromIntError},
+    pin::pin,
+    sync::Arc,
+    time::Duration,
 };
 use thiserror::Error;
 use tokio::{
@@ -27,7 +32,7 @@ impl Projection {
         evt_handler: H,
         error_strategy: ErrorStrategy,
         pool: Pool<Postgres>,
-    ) -> Self
+    ) -> Result<Self, LoadStateError>
     where
         E: EventSourced,
         E::Evt: for<'de> Deserialize<'de> + 'static,
@@ -39,8 +44,10 @@ impl Projection {
             .await
             .expect("create projection table");
 
+        let seq_no = load_seq_no(&name, &pool).await?;
+
         let state = Arc::new(RwLock::new(State {
-            seq_no: NonZeroU64::MIN,
+            seq_no,
             running: false,
             error: None,
         }));
@@ -111,7 +118,7 @@ impl Projection {
             }
         });
 
-        Projection { name, cmd_in }
+        Ok(Projection { name, cmd_in })
     }
 
     pub async fn run(&self) -> Result<State, CmdError> {
@@ -150,6 +157,15 @@ pub trait LocalEvtHandler {
         evt: <Self::EventSourced as EventSourced>::Evt,
         tx: &mut Transaction<'static, Postgres>,
     ) -> Result<(), Self::Error>;
+}
+
+#[derive(Debug, Error)]
+pub enum LoadStateError {
+    #[error("cannot load projection state")]
+    Sqlx(#[from] sqlx::Error),
+
+    #[error("cannot convert loaded seq_no into non zero value")]
+    TryFromInt(#[from] TryFromIntError),
 }
 
 #[derive(Debug, Error, Serialize, Deserialize)]
@@ -207,6 +223,22 @@ enum IntenalRunError<E, H> {
 
     #[error(transparent)]
     Sqlx(#[from] sqlx::Error),
+
+    #[error(transparent)]
+    LoadStateError(#[from] LoadStateError),
+}
+
+async fn load_seq_no(name: &str, pool: &Pool<Postgres>) -> Result<NonZeroU64, LoadStateError> {
+    let seq_no = sqlx::query("SELECT seq_no FROM projection WHERE name=$1")
+        .bind(name)
+        .fetch_optional(pool)
+        .await?
+        .map(|row| row.try_get::<i64, _>(0))
+        .transpose()?
+        .map(|seq_no| (seq_no as u64).try_into())
+        .transpose()?
+        .unwrap_or(NonZeroU64::MIN);
+    Ok(seq_no)
 }
 
 async fn run_projection_loop<E, L, H>(
@@ -273,8 +305,9 @@ where
     L: EvtLog,
     H: EvtHandler<EventSourced = E>,
 {
+    let seq_no = load_seq_no(name, pool).await?;
     let evts = evt_log
-        .evts_by_type::<E, _, _>(state.read().await.seq_no, convert::serde_json::from_bytes)
+        .evts_by_type::<E, _, _>(seq_no, convert::serde_json::from_bytes)
         .await
         .map_err(IntenalRunError::Evts)?;
     let mut evts = pin!(evts);
@@ -319,7 +352,6 @@ async fn save_seq_no(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anyhow::Context;
     use bytes::Bytes;
     use futures::{stream, Stream};
     use sqlx::{
@@ -329,6 +361,7 @@ mod tests {
     use std::convert::Infallible;
     use testcontainers::{clients::Cli, RunnableImage};
     use testcontainers_modules::postgres::Postgres as TCPostgres;
+    // use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
     use uuid::Uuid;
 
     #[derive(Debug)]
@@ -449,15 +482,18 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<(), Box<dyn StdError>> {
+        // let _ = tracing_subscriber::registry()
+        //     .with(EnvFilter::from_default_env())
+        //     .with(fmt::layer().pretty())
+        //     .try_init()?;
+
         let testcontainers_client = Cli::default();
         let container = testcontainers_client
             .run(RunnableImage::from(TCPostgres::default()).with_tag("16-alpine"));
         let port = container.get_host_port_ipv4(5432);
 
         let cnn_url = format!("postgresql://postgres:postgres@localhost:{port}");
-        let cnn_options = cnn_url
-            .parse::<PgConnectOptions>()
-            .context("parse PgConnectOptions")?;
+        let cnn_options = cnn_url.parse::<PgConnectOptions>()?;
         let pool = PgPoolOptions::new().connect_with(cnn_options).await?;
 
         sqlx::query("CREATE TABLE test (n bigint PRIMARY KEY);")
@@ -471,7 +507,13 @@ mod tests {
             ErrorStrategy::Stop,
             pool.clone(),
         )
-        .await;
+        .await?;
+
+        sqlx::query("INSERT INTO projection VALUES ($1, $2)")
+            .bind("test-projection")
+            .bind(11)
+            .execute(&pool)
+            .await?;
 
         projection.run().await?;
 
@@ -489,7 +531,7 @@ mod tests {
             .into_iter()
             .map(|row| row.try_get::<i64, _>(0))
             .try_fold(0i64, |acc, n| n.map(|n| acc + n))?;
-        assert_eq!(sum, 5050);
+        assert_eq!(sum, 4_995); // sum(1..100) - sum(1..10)
 
         projection.stop().await?;
         sleep(Duration::from_millis(100)).await;
