@@ -685,6 +685,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "trait-variant",
  "uuid",
 ]

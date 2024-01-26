@@ -1,10 +1,10 @@
 set shell := ["bash", "-uc"]
 
 check:
-	cargo check --tests --package eventsourced --all-features
-	cargo check --tests --package eventsourced-nats
-	cargo check --tests --package eventsourced-postgres
-	cargo check --tests --package eventsourced-projection
+	cargo check --package eventsourced --all-features
+	cargo check --package eventsourced-nats
+	cargo check --package eventsourced-postgres
+	cargo check --package eventsourced-projection
 
 fmt toolchain="+nightly":
 	cargo {{toolchain}} fmt
