@@ -32,7 +32,7 @@ impl Projection {
         evt_handler: H,
         error_strategy: ErrorStrategy,
         pool: Pool<Postgres>,
-    ) -> Result<Self, LoadStateError>
+    ) -> Result<Self, Error>
     where
         E: EventSourced,
         E::Evt: for<'de> Deserialize<'de> + 'static,
@@ -160,11 +160,11 @@ pub trait LocalEvtHandler {
 }
 
 #[derive(Debug, Error)]
-pub enum LoadStateError {
-    #[error("cannot load projection state")]
+pub enum Error {
+    #[error("cannot create Projection, b/c cannot load state from database")]
     Sqlx(#[from] sqlx::Error),
 
-    #[error("cannot convert loaded seq_no into non zero value")]
+    #[error("cannot create Projection, b/c cannot convert loaded seq_no into non zero value")]
     TryFromInt(#[from] TryFromIntError),
 }
 
@@ -225,10 +225,10 @@ enum IntenalRunError<E, H> {
     Sqlx(#[from] sqlx::Error),
 
     #[error(transparent)]
-    LoadStateError(#[from] LoadStateError),
+    LoadStateError(#[from] Error),
 }
 
-async fn load_seq_no(name: &str, pool: &Pool<Postgres>) -> Result<NonZeroU64, LoadStateError> {
+async fn load_seq_no(name: &str, pool: &Pool<Postgres>) -> Result<NonZeroU64, Error> {
     let seq_no = sqlx::query("SELECT seq_no FROM projection WHERE name=$1")
         .bind(name)
         .fetch_optional(pool)
