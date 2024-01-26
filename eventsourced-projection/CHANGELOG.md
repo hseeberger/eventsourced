@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.3.0...eventsourced-projection-v0.3.1) - 2024-01-26
+
+### Fixed
+- projection run adds one to stored seq_no ([#159](https://github.com/hseeberger/eventsourced/pull/159))
+
 ## [0.3.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.2.1...eventsourced-projection-v0.3.0) - 2024-01-26
 
 ### Other
