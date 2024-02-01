@@ -1,4 +1,5 @@
-use eventsourced::{convert, error_chain, EventSourced, EvtLog};
+use crate::error_chain;
+use eventsourced::{convert, EventSourced, EvtLog};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Row, Transaction};
