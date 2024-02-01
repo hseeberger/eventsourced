@@ -341,7 +341,7 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
 }
 
 /// Format the given error with its whole error chain, implemented by using `anyhow`.
-pub fn error_chain<E>(error: E) -> String
+fn error_chain<E>(error: E) -> String
 where
     E: StdError + Send + Sync + 'static,
 {
