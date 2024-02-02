@@ -48,11 +48,15 @@ where
                 counter
                     .handle_cmd(Cmd::Inc(n as u64))
                     .await
+                    .context("send/receive Inc command")
+                    .unwrap()
                     .context("handle Inc command")
                     .unwrap();
                 counter
                     .handle_cmd(Cmd::Dec(n as u64))
                     .await
+                    .context("send/receive Dec command")
+                    .unwrap()
                     .context("handle Dec command")
                     .unwrap();
             }
