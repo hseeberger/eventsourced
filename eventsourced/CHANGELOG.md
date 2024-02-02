@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.17.0...eventsourced-v0.18.0) - 2024-02-02
+
+### Other
+- rework handle_cmd error ([#167](https://github.com/hseeberger/eventsourced/pull/167))
+
 ## [0.17.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.16.0...eventsourced-v0.17.0) - 2024-02-01
 
 ### Other
