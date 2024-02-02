@@ -301,36 +301,23 @@ where
 {
     /// Invoke the command handler of the entity.
     #[instrument(skip(self))]
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError<E>> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, HandleCmdError> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
             .await
-            .map_err(|_| HandleCmdError::Internal("cannot send command".to_string()))?;
+            .map_err(|_| HandleCmdError("cannot send command".to_string()))?;
         result_out
             .await
-            .map_err(|_| {
-                HandleCmdError::Internal("cannot receive command handler result".to_string())
-            })?
-            .map_err(HandleCmdError::Handler)
+            .map_err(|_| HandleCmdError("cannot receive command handler result".to_string()))
     }
 }
 
-/// Error from an [EntityRef].
+/// A command cannot be sent from an [EntityRef] to its entity or the result cannot be received
+/// from its entity.
 #[derive(Debug, Error, Serialize, Deserialize)]
-pub enum HandleCmdError<E>
-where
-    E: EventSourced,
-{
-    /// A command cannot be sent from an [EntityRef] to its entity or the result cannot be received
-    /// from its entity.
-    #[error("{0}")]
-    Internal(String),
-
-    /// Command handler result.
-    #[error(transparent)]
-    Handler(E::Error),
-}
+#[error("{0}")]
+pub struct HandleCmdError(String);
 
 /// Collection of conversion functions from and to [Bytes] for events and snapshots.
 pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
@@ -513,7 +500,7 @@ mod tests {
         )
         .await?;
 
-        entity.handle_cmd(()).await?;
+        entity.handle_cmd(()).await??;
 
         assert!(logs_contain("state=42"));
 
