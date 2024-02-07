@@ -591,6 +591,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "error-ext"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6014aa81f36ffbe8a255856f4866c45d3f6d59e793db1b137a496aecd34b0f6f"
+
+[[package]]
 name = "etcetera"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -614,6 +620,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytes",
+ "error-ext",
  "futures",
  "prost",
  "serde",
@@ -674,6 +681,7 @@ dependencies = [
  "anyhow",
  "async-nats",
  "bytes",
+ "error-ext",
  "eventsourced",
  "futures",
  "prost",

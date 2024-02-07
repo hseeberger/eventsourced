@@ -1,4 +1,4 @@
-use crate::error_chain;
+use error_ext::StdErrorExt;
 use eventsourced::{convert, EventSourced, EvtLog};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -267,10 +267,8 @@ async fn run_projection_loop<E, L, H>(
 
                     Err(error) => {
                         error!(
-                            type_name,
-                            name,
-                            error = error_chain(error),
-                            "projection error"
+                            error = error.as_chain(),
+                            type_name, name, "projection error"
                         );
 
                         match error_strategy {

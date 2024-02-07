@@ -36,8 +36,8 @@ mod snapshot_store;
 pub use evt_log::*;
 pub use snapshot_store::*;
 
-use anyhow::anyhow;
 use bytes::Bytes;
+use error_ext::StdErrorExt;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -235,7 +235,7 @@ pub trait EventSourcedExt: Sized {
                                 .save(&id, seq_no, &state, &state_to_bytes)
                                 .await
                             {
-                                error!(?id, error = error_chain(error), "cannot save snapshot");
+                                error!(error = error.as_chain(), ?id, "cannot save snapshot");
                             };
                         }
 
@@ -245,7 +245,7 @@ pub trait EventSourcedExt: Sized {
                     }
 
                     Err(error) => {
-                        error!(?id, error = error_chain(error), "cannot persist event");
+                        error!(error = error.as_chain(), ?id, "cannot persist event");
                         // This is fatal, we must terminate the entity!
                         break;
                     }
@@ -325,14 +325,6 @@ pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
     pub evt_from_bytes: EvtFromBytes,
     pub state_to_bytes: StateToBytes,
     pub state_from_bytes: StateFromBytes,
-}
-
-/// Format the given error with its whole error chain, implemented by using `anyhow`.
-fn error_chain<E>(error: E) -> String
-where
-    E: StdError + Send + Sync + 'static,
-{
-    format!("{:#}", anyhow!(error))
 }
 
 #[cfg(all(test, feature = "serde_json"))]
