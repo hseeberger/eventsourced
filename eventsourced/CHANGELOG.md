@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.18.0...eventsourced-v0.18.1) - 2024-02-07
+
+### Other
+- use error-ext crate ([#169](https://github.com/hseeberger/eventsourced/pull/169))
+
 ## [0.18.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.17.0...eventsourced-v0.18.0) - 2024-02-02
 
 ### Other
