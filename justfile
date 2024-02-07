@@ -18,13 +18,10 @@ lint:
 test:
 	cargo test --all-features
 
-coverage:
-	cargo llvm-cov --workspace --lcov --output-path lcov.info --all-features
-
 fix:
 	cargo fix --allow-dirty --allow-staged --all-features
 
-doc toolchain="+nightly":
+doc toolchain="+nightly-2024-01-29":
 	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo {{toolchain}} doc --no-deps --all-features
 
 all: check fmt lint test doc

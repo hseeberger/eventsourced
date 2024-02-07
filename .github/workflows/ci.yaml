@@ -174,7 +174,8 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
+          toolchain: nightly-2024-01-29
+          # toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
 
       - name: Install just
         uses: taiki-e/install-action@v2
@@ -190,8 +191,8 @@ jobs:
 
       - name: just doc
         run: |
-          rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
-          just doc ''
+          # rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
+          just doc +nightly-2024-01-29
 
   dependabot:
     runs-on: ubuntu-latest
