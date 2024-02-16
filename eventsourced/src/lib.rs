@@ -76,7 +76,7 @@ pub trait EventSourced {
     fn handle_cmd(
         id: &Self::Id,
         state: &Self::State,
-        cmd: Self::Cmd,
+        cmd: &Self::Cmd,
     ) -> Result<Self::Evt, Self::Error>;
 
     /// Event handler.
@@ -100,8 +100,10 @@ pub trait EventSourcedExt: Sized {
     /// spawning.
     #[allow(async_fn_in_trait)]
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(evt_log, snapshot_store, binarizer))]
+    #[instrument(skip(reply, evt_log, snapshot_store, binarizer))]
     async fn spawn<
+        F,
+        T,
         L,
         S,
         EvtToBytes,
@@ -116,12 +118,15 @@ pub trait EventSourcedExt: Sized {
         id: Self::Id,
         snapshot_after: Option<NonZeroU64>,
         cmd_buffer: NonZeroUsize,
+        reply: F,
         mut evt_log: L,
         mut snapshot_store: S,
         binarizer: Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes>,
-    ) -> Result<EntityRef<Self>, SpawnError>
+    ) -> Result<EntityRef<Self, T>, SpawnError>
     where
         Self: EventSourced,
+        F: Fn(&Self::Cmd, &Self::State) -> T + Send + Sync + 'static,
+        T: Send + Sync + 'static,
         L: EvtLog<Id = Self::Id>,
         S: SnapshotStore<Id = Self::Id>,
         EvtToBytes: Fn(&Self::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
@@ -190,16 +195,14 @@ pub trait EventSourcedExt: Sized {
         }
 
         let mut evt_count = 0u64;
-        let (cmd_in, mut cmd_out) = mpsc::channel::<(
-            Self::Cmd,
-            oneshot::Sender<Result<(), Self::Error>>,
-        )>(cmd_buffer.get());
+        let (cmd_in, mut cmd_out) =
+            mpsc::channel::<(Self::Cmd, oneshot::Sender<Result<T, Self::Error>>)>(cmd_buffer.get());
 
         // Spawn handler loop.
         task::spawn(async move {
             while let Some((cmd, result_sender)) = cmd_out.recv().await {
                 debug!(?id, ?cmd, "handling command");
-                let result = Self::handle_cmd(&id, &state, cmd);
+                let result = Self::handle_cmd(&id, &state, &cmd);
                 debug!(?id, ?result, "handled command");
 
                 // This ugliness seems to be needed unfortunately, because matching on result
@@ -239,7 +242,8 @@ pub trait EventSourcedExt: Sized {
                             };
                         }
 
-                        if result_sender.send(Ok(())).is_err() {
+                        let r = reply(&cmd, &state);
+                        if result_sender.send(Ok(r)).is_err() {
                             error!(?id, "cannot send command handler OK");
                         };
                     }
@@ -288,20 +292,20 @@ impl<E> EventSourcedExt for E where E: EventSourced {}
 /// A handle for a spawned event sourced entity which can be used to invoke its command handler.
 #[derive(Debug, Clone)]
 #[allow(clippy::type_complexity)]
-pub struct EntityRef<E>
+pub struct EntityRef<E, T>
 where
     E: EventSourced,
 {
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<(), E::Error>>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<T, E::Error>>)>,
 }
 
-impl<E> EntityRef<E>
+impl<E, T> EntityRef<E, T>
 where
     E: EventSourced,
 {
     /// Invoke the command handler of the entity.
     #[instrument(skip(self))]
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, HandleCmdError> {
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<T, E::Error>, HandleCmdError> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
@@ -350,7 +354,7 @@ mod tests {
         fn handle_cmd(
             _id: &Self::Id,
             _state: &Self::State,
-            _cmd: Self::Cmd,
+            _cmd: &Self::Cmd,
         ) -> Result<Self::Evt, Self::Error> {
             Ok(())
         }
@@ -486,6 +490,7 @@ mod tests {
             Uuid::from_u128(1),
             None,
             unsafe { NonZeroUsize::new_unchecked(1) },
+            |_, _| (),
             evt_log,
             snapshot_store,
             convert::serde_json::binarizer(),
