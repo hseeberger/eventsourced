@@ -165,38 +165,37 @@ jobs:
           rustup override set ${{needs.toolchain.outputs.toolchain}}
           just test
 
-  # doc:
-  #   runs-on: ubuntu-latest
-  #   needs: [toolchain, check, fmt-check]
-  #   steps:
-  #     - uses: actions/checkout@v4
+  doc:
+    runs-on: ubuntu-latest
+    needs: [toolchain, check, fmt-check]
+    steps:
+      - uses: actions/checkout@v4
 
-  #     - name: Install Rust
-  #       uses: dtolnay/rust-toolchain@master
-  #       with:
-  #         toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
 
-  #     - name: Install just
-  #       uses: taiki-e/install-action@v2
-  #       with:
-  #         tool: just
+      - name: Install just
+        uses: taiki-e/install-action@v2
+        with:
+          tool: just
 
-  #     - name: Install protoc
-  #       uses: arduino/setup-protoc@v3
-  #       with:
-  #         repo-token: ${{secrets.GITHUB_TOKEN}}
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{secrets.GITHUB_TOKEN}}
 
-  #     - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2
 
-  #     - name: just doc
-  #       run: |
-  #         rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
-  #         just doc ''
+      - name: just doc
+        run: |
+          rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
+          just doc ''
 
   dependabot:
     runs-on: ubuntu-latest
-    # needs: [doc, lint, test]
-    needs: [lint, test]
+    needs: [doc, lint, test]
     if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
     permissions:
       contents: write
