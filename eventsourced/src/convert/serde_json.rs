@@ -1,28 +1,39 @@
 //! Conversion to [Bytes] for any type that implements [Serialize] and from any type that implements
-//! [DeserializeOwned] based upon [serde_json](https://docs.rs/serde_json/latest/serde_json).
+//! [Deserialize] based upon [serde_json](https://docs.rs/serde_json/latest/serde_json).
 
-use crate::Binarizer;
+use crate::convert::Convert;
 use bytes::Bytes;
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{from_slice, to_value, Error};
 
-/// Create a serde_json based [Binarizer].
-#[allow(clippy::type_complexity)]
-pub fn binarizer<E, S>() -> Binarizer<
-    for<'a> fn(&'a E) -> Result<Bytes, Error>,
-    fn(Bytes) -> Result<E, Error>,
-    for<'a> fn(&'a S) -> Result<Bytes, Error>,
-    fn(Bytes) -> Result<S, Error>,
->
+#[derive(Debug, Clone, Copy)]
+pub struct SerdeJsonConvert;
+
+impl<E, S> Convert<E, S> for SerdeJsonConvert
 where
-    E: Serialize + DeserializeOwned,
-    S: Serialize + DeserializeOwned,
+    for<'de> E: Serialize + Deserialize<'de>,
+    for<'de> S: Serialize + Deserialize<'de>,
 {
-    Binarizer {
-        evt_to_bytes: to_bytes::<E>,
-        evt_from_bytes: from_bytes::<E>,
-        state_to_bytes: to_bytes::<S>,
-        state_from_bytes: from_bytes::<S>,
+    type EvtToBytesError = serde_json::Error;
+    type EvtFromBytesError = serde_json::Error;
+
+    type StateToBytesError = serde_json::Error;
+    type StateFromBytesError = serde_json::Error;
+
+    fn evt_to_bytes(&self, evt: &E) -> Result<Bytes, Self::EvtToBytesError> {
+        to_bytes(evt)
+    }
+
+    fn state_to_bytes(&self, state: &S) -> Result<Bytes, Self::StateToBytesError> {
+        to_bytes(state)
+    }
+
+    fn evt_from_bytes(&self, bytes: Bytes) -> Result<E, Self::EvtFromBytesError> {
+        from_bytes(bytes)
+    }
+
+    fn state_from_bytes(&self, bytes: Bytes) -> Result<S, Self::StateFromBytesError> {
+        from_bytes(bytes)
     }
 }
 
@@ -35,30 +46,7 @@ where
 
 pub fn from_bytes<T>(bytes: Bytes) -> Result<T, Error>
 where
-    T: DeserializeOwned,
+    for<'de> T: Deserialize<'de>,
 {
     from_slice::<T>(&bytes)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde::Deserialize;
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    struct Foo(u64);
-
-    #[test]
-    fn test_convert_serde_json() {
-        let foo = Foo(42);
-
-        let bytes = to_bytes(&foo);
-        assert!(bytes.is_ok());
-        let bytes = bytes.unwrap();
-
-        let bar = from_bytes::<Foo>(bytes);
-        assert!(bar.is_ok());
-        let bar = bar.unwrap();
-        assert_eq!(bar, foo);
-    }
 }

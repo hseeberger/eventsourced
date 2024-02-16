@@ -24,6 +24,7 @@ tokio-postgres  = { workspace = true }
 tracing         = { workspace = true }
 
 [dev-dependencies]
+error-ext              = { workspace = true }
 eventsourced           = { path = "../eventsourced", version = "0.18.0", features = [ "serde_json" ] }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true, features = [ "postgres" ] }

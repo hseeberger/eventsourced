@@ -230,13 +230,14 @@ mod proto {
 mod tests {
     use super::*;
     use crate::tests::NATS_VERSION;
+    use error_ext::BoxError;
     use eventsourced::convert;
     use testcontainers::{clients::Cli, core::WaitFor};
     use testcontainers_modules::testcontainers::GenericImage;
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_snapshot_store() -> Result<(), BoxError> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));

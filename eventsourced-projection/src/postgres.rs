@@ -363,6 +363,7 @@ mod tests {
     use testcontainers::{clients::Cli, RunnableImage};
     use testcontainers_modules::postgres::Postgres as TCPostgres;
     // use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    use error_ext::BoxError;
     use uuid::Uuid;
 
     #[derive(Debug)]
@@ -460,7 +461,7 @@ mod tests {
 
     #[derive(Debug, Error)]
     #[error("TestEvtLogError")]
-    struct TestEvtLogError(#[source] Box<dyn StdError + Send + Sync>);
+    struct TestEvtLogError(#[source] BoxError);
 
     #[derive(Clone)]
     struct TestHandler;
@@ -482,7 +483,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test() -> Result<(), Box<dyn StdError>> {
+    async fn test() -> Result<(), BoxError> {
         // let _ = tracing_subscriber::registry()
         //     .with(EnvFilter::from_default_env())
         //     .with(fmt::layer().pretty())

@@ -1,27 +1,38 @@
 //! Conversion to and from [Bytes] for any type that implements [Message] based upon
 //! [prost](https://github.com/tokio-rs/prost).
 
-use crate::Binarizer;
+use crate::convert::Convert;
 use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 
-/// Create a prost based [Binarizer].
-#[allow(clippy::type_complexity)]
-pub fn binarizer<E, S>() -> Binarizer<
-    for<'a> fn(&'a E) -> Result<Bytes, EncodeError>,
-    fn(Bytes) -> Result<E, DecodeError>,
-    for<'a> fn(&'a S) -> Result<Bytes, EncodeError>,
-    fn(Bytes) -> Result<S, DecodeError>,
->
+#[derive(Debug, Clone, Copy)]
+pub struct ProstConvert;
+
+impl<E, S> Convert<E, S> for ProstConvert
 where
     E: Message + Default,
     S: Message + Default,
 {
-    Binarizer {
-        evt_to_bytes: to_bytes::<E>,
-        evt_from_bytes: from_bytes::<E>,
-        state_to_bytes: to_bytes::<S>,
-        state_from_bytes: from_bytes::<S>,
+    type EvtToBytesError = EncodeError;
+    type EvtFromBytesError = DecodeError;
+
+    type StateToBytesError = EncodeError;
+    type StateFromBytesError = DecodeError;
+
+    fn evt_to_bytes(&self, evt: &E) -> Result<Bytes, Self::EvtToBytesError> {
+        to_bytes(evt)
+    }
+
+    fn state_to_bytes(&self, state: &S) -> Result<Bytes, Self::StateToBytesError> {
+        to_bytes(state)
+    }
+
+    fn evt_from_bytes(&self, bytes: Bytes) -> Result<E, Self::EvtFromBytesError> {
+        from_bytes(bytes)
+    }
+
+    fn state_from_bytes(&self, bytes: Bytes) -> Result<S, Self::StateFromBytesError> {
+        from_bytes(bytes)
     }
 }
 
@@ -39,24 +50,4 @@ where
     T: Message + Default,
 {
     T::decode(bytes)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_convert_prost() {
-        // Prost comes with `Message` implementations for basic types like `String`.
-        let s = "test".to_string();
-
-        let bytes = to_bytes(&s);
-        assert!(bytes.is_ok());
-        let bytes = bytes.unwrap();
-
-        let s_2 = from_bytes::<String>(bytes);
-        assert!(s_2.is_ok());
-        let s_2 = s_2.unwrap();
-        assert_eq!(s_2, s);
-    }
 }

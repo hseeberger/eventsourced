@@ -7,8 +7,8 @@ mod snapshot_store;
 pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
 pub use snapshot_store::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore};
 
+use error_ext::BoxError;
 use prost::{DecodeError, EncodeError};
-use std::error::Error as StdError;
 use thiserror::Error;
 
 /// Errors from the [NatsEvtLog] or [NatsSnapshotStore].
@@ -19,11 +19,11 @@ pub enum Error {
 
     /// Event cannot be converted into bytes.
     #[error("cannot convert event to bytes")]
-    IntoBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
+    IntoBytes(#[source] BoxError),
 
     /// Bytes cannot be converted to event.
     #[error("cannot convert bytes to event")]
-    FromBytes(#[source] Box<dyn StdError + Send + Sync + 'static>),
+    FromBytes(#[source] BoxError),
 
     /// Snapshot cannot be encoded as Protocol Buffers.
     #[error("cannot encode snapshot as Protocol Buffers")]

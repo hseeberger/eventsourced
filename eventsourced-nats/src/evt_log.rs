@@ -375,6 +375,7 @@ fn evt_stream_max_bytes_default() -> i64 {
 mod tests {
     use super::*;
     use crate::tests::NATS_VERSION;
+    use error_ext::BoxError;
     use eventsourced::convert;
     use futures::TryStreamExt;
     use std::{convert::Infallible, future};
@@ -408,7 +409,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_evt_log() -> Result<(), BoxError> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
