@@ -24,5 +24,4 @@ fix:
 doc toolchain="+nightly":
 	RUSTDOCFLAGS="-D warnings --cfg docsrs" cargo {{toolchain}} doc --no-deps --all-features
 
-# all: check fmt lint test doc
-all: check fmt lint test
+all: check fmt lint test doc

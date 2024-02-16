@@ -21,12 +21,12 @@
 //! Calling [spawn](EventSourcedExt::spawn) results in a cloneable [EntityRef] which can be used to
 //! pass commands to the spawned entity by invoking [handle_cmd](EntityRef::handle_cmd). Commands
 //! are handled by the command handler of the spawned entity. They can be rejected by returning an
-//! error. Valid commands produce an event with an optional tag which gets persisted to the [EvtLog]
-//! and then applied to the event handler of the respective entity. The event handler may decide to
-//! save a snapshot which is used to speed up future spawning.
+//! error. Valid commands produce an event which gets persisted to the [EvtLog] and then applied to
+//! the event handler of the respective entity. Snapshots can be taken to speed up future spawning.
 //!
-//! Events can be queried from the event log by ID or by tag. These queries can be used to build
-//! read side projections.
+//! Events can be queried from the event log by ID or by entity type. These queries can be used to
+//! build read side projections. There is early support for projections in the
+//! `eventsourced-projection` crate.
 
 pub mod convert;
 
