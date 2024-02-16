@@ -15,7 +15,6 @@ all-features = true
 rustdoc-args = [ "--cfg", "docsrs" ]
 
 [dependencies]
-anyhow        = { workspace = true }
 bytes         = { workspace = true }
 error-ext     = { workspace = true }
 futures       = { workspace = true }
