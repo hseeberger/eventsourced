@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.9](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.13.8...eventsourced-nats-v0.13.9) - 2024-02-17
+
+### Other
+- major cleanup ([#177](https://github.com/hseeberger/eventsourced/pull/177))
+
 ## [0.13.8](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.13.7...eventsourced-nats-v0.13.8) - 2024-02-02
 
 ### Other

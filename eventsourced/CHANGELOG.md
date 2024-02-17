@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.18.0...eventsourced-v0.19.0) - 2024-02-17
+
+### Other
+- major cleanup ([#177](https://github.com/hseeberger/eventsourced/pull/177))
+- some cleanup, activate step in GH workflows again ([#175](https://github.com/hseeberger/eventsourced/pull/175))
+- update deps ([#173](https://github.com/hseeberger/eventsourced/pull/173))
+- use error-ext crate ([#169](https://github.com/hseeberger/eventsourced/pull/169))
+
 ## [0.18.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.17.0...eventsourced-v0.18.0) - 2024-02-02
 
 ### Other
