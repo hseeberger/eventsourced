@@ -375,7 +375,8 @@ fn evt_stream_max_bytes_default() -> i64 {
 mod tests {
     use super::*;
     use crate::tests::NATS_VERSION;
-    use eventsourced::convert;
+    use error_ext::BoxError;
+    use eventsourced::binarize;
     use futures::TryStreamExt;
     use std::{convert::Infallible, future};
     use testcontainers::{clients::Cli, core::WaitFor};
@@ -408,7 +409,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_evt_log() -> Result<(), BoxError> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
@@ -430,16 +431,16 @@ mod tests {
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = evt_log
-            .persist::<Dummy, _, _>(&1, &id, None, &convert::serde_json::to_bytes)
+            .persist::<Dummy, _, _>(&1, &id, None, &binarize::serde_json::to_bytes)
             .await?;
         assert!(last_seq_no.get() == 1);
 
         evt_log
-            .persist::<Dummy, _, _>(&2, &id, Some(last_seq_no), &convert::serde_json::to_bytes)
+            .persist::<Dummy, _, _>(&2, &id, Some(last_seq_no), &binarize::serde_json::to_bytes)
             .await?;
 
         let result = evt_log
-            .persist::<Dummy, _, _>(&3, &id, Some(last_seq_no), &convert::serde_json::to_bytes)
+            .persist::<Dummy, _, _>(&3, &id, Some(last_seq_no), &binarize::serde_json::to_bytes)
             .await;
         assert!(result.is_err());
 
@@ -448,7 +449,7 @@ mod tests {
                 &3,
                 &id,
                 Some(last_seq_no.checked_add(1).expect("overflow")),
-                &convert::serde_json::to_bytes,
+                &binarize::serde_json::to_bytes,
             )
             .await?;
 
@@ -456,7 +457,7 @@ mod tests {
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
         let evts = evt_log
-            .evts_by_id::<Dummy, _, _>(&id, 2.try_into()?, convert::serde_json::from_bytes)
+            .evts_by_id::<Dummy, _, _>(&id, 2.try_into()?, binarize::serde_json::from_bytes)
             .await?;
         let sum = evts
             .take(2)
@@ -465,16 +466,16 @@ mod tests {
         assert_eq!(sum, 5);
 
         let evts = evt_log
-            .evts_by_type::<Dummy, _, _>(NonZeroU64::MIN, convert::serde_json::from_bytes)
+            .evts_by_type::<Dummy, _, _>(NonZeroU64::MIN, binarize::serde_json::from_bytes)
             .await?;
 
         let last_seq_no = evt_log
             .clone()
-            .persist::<Dummy, _, _>(&4, &id, last_seq_no, &convert::serde_json::to_bytes)
+            .persist::<Dummy, _, _>(&4, &id, last_seq_no, &binarize::serde_json::to_bytes)
             .await?;
         evt_log
             .clone()
-            .persist::<Dummy, _, _>(&5, &id, Some(last_seq_no), &convert::serde_json::to_bytes)
+            .persist::<Dummy, _, _>(&5, &id, Some(last_seq_no), &binarize::serde_json::to_bytes)
             .await?;
         let last_seq_no = evt_log.last_seq_no::<Dummy>(&id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));

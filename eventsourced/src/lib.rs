@@ -14,7 +14,7 @@
 //!
 //! The [spawn](EventSourcedExt::spawn) function provides for creating event sourced entities,
 //! identifiable by an ID, for some event log and  some snapshot store. Conversion of events and
-//! snapshot state to and from bytes happens via given [Binarizer] functions; for
+//! snapshot state to and from bytes happens via the given [Binarize] implementation; for
 //! [prost](https://github.com/tokio-rs/prost) and
 //! [serde_json](https://github.com/serde-rs/json) these are already provided.
 //!
@@ -28,7 +28,7 @@
 //! build read side projections. There is early support for projections in the
 //! `eventsourced-projection` crate.
 
-pub mod convert;
+pub mod binarize;
 
 mod evt_log;
 mod snapshot_store;
@@ -36,9 +36,9 @@ mod snapshot_store;
 pub use evt_log::*;
 pub use snapshot_store::*;
 
-use bytes::Bytes;
-use error_ext::StdErrorExt;
-use futures::StreamExt;
+use crate::binarize::Binarize;
+use error_ext::{BoxError, StdErrorExt};
+use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
@@ -47,7 +47,6 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
-    pin,
     sync::{mpsc, oneshot},
     task,
 };
@@ -94,57 +93,29 @@ pub trait EventSourcedExt: Sized {
     /// [EntityRef] which uses a buffered channel with the given size.
     ///
     /// Commands are handled by the command handler of the spawned entity. They can be rejected by
-    /// returning an error. Valid commands produce an event with an optional tag which gets
-    /// persisted to the [EvtLog] and then applied to the event handler of the respective
-    /// entity. The event handler may decide to save a snapshot which is used to speed up future
-    /// spawning.
+    /// returning an error. Valid commands produce an event which gets persisted to the [EvtLog]
+    /// and then applied to the event handler of the respective entity. Snapshots can be taken
+    /// to speed up future spawning.
     #[allow(async_fn_in_trait)]
     #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(evt_log, snapshot_store, binarizer))]
-    async fn spawn<
-        L,
-        S,
-        EvtToBytes,
-        EvtToBytesError,
-        StateToBytes,
-        StateToBytesError,
-        EvtFromBytes,
-        EvtFromBytesError,
-        StateFromBytes,
-        StateFromBytesError,
-    >(
+    #[instrument(skip(evt_log, snapshot_store, binarize))]
+    async fn spawn<L, S, B>(
         id: Self::Id,
         snapshot_after: Option<NonZeroU64>,
         cmd_buffer: NonZeroUsize,
         mut evt_log: L,
         mut snapshot_store: S,
-        binarizer: Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes>,
+        binarize: B,
     ) -> Result<EntityRef<Self>, SpawnError>
     where
         Self: EventSourced,
         L: EvtLog<Id = Self::Id>,
         S: SnapshotStore<Id = Self::Id>,
-        EvtToBytes: Fn(&Self::Evt) -> Result<Bytes, EvtToBytesError> + Send + Sync + 'static,
-        EvtToBytesError: StdError + Send + Sync + 'static,
-        StateToBytes: Fn(&Self::State) -> Result<Bytes, StateToBytesError> + Send + Sync + 'static,
-        StateToBytesError: StdError + Send + Sync + 'static,
-        EvtFromBytes:
-            Fn(Bytes) -> Result<Self::Evt, EvtFromBytesError> + Copy + Send + Sync + 'static,
-        EvtFromBytesError: StdError + Send + Sync + 'static,
-        StateFromBytes:
-            Fn(Bytes) -> Result<Self::State, StateFromBytesError> + Copy + Send + Sync + 'static,
-        StateFromBytesError: StdError + Send + Sync + 'static,
+        B: Binarize<Self::Evt, Self::State>,
     {
-        let Binarizer {
-            evt_to_bytes,
-            evt_from_bytes,
-            state_to_bytes,
-            state_from_bytes,
-        } = binarizer;
-
         // Restore snapshot.
         let (snapshot_seq_no, state) = snapshot_store
-            .load::<Self::State, _, _>(&id, state_from_bytes)
+            .load::<Self::State, _, _>(&id, |bytes| binarize.state_from_bytes(bytes))
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
@@ -152,8 +123,6 @@ pub trait EventSourcedExt: Sized {
                 (seq_no, state)
             })
             .unzip();
-
-        let mut state = state.unwrap_or_default();
 
         // Get and validate last sequence number.
         let mut last_seq_no = evt_log
@@ -165,94 +134,102 @@ pub trait EventSourcedExt: Sized {
         };
 
         // Replay latest events.
+        let mut state = state.unwrap_or_default();
         if snapshot_seq_no < last_seq_no {
             let from_seq_no = snapshot_seq_no
                 .map(|n| n.saturating_add(1))
                 .unwrap_or(NonZeroU64::MIN);
-            let last_seq_no = last_seq_no.unwrap(); // This is safe because of the above relation!
-            debug!(?id, from_seq_no, last_seq_no, "replaying evts");
+            let to_seq_no = last_seq_no.unwrap(); // This is safe because of the above relation!
+            debug!(?id, from_seq_no, to_seq_no, "replaying evts");
 
             let evts = evt_log
-                .evts_by_id::<Self, _, _>(&id, from_seq_no, evt_from_bytes)
+                .evts_by_id::<Self, _, _>(&id, from_seq_no, move |bytes| {
+                    binarize.evt_from_bytes(bytes)
+                })
                 .await
                 .map_err(|error| SpawnError::EvtsById(error.into()))?;
 
-            pin!(evts);
-            while let Some(evt) = evts.next().await {
-                let (seq_no, evt) = evt.map_err(|error| SpawnError::NextEvt(error.into()))?;
-                state = Self::handle_evt(state, evt);
-                if seq_no == last_seq_no {
-                    break;
-                }
-            }
+            state = evts
+                .map_err(|error| SpawnError::NextEvt(error.into()))
+                .try_take_while(|(seq_no, _)| ok(*seq_no <= to_seq_no))
+                .try_fold(state, |state, (_, evt)| ok(Self::handle_evt(state, evt)))
+                .await?;
 
             debug!(?id, ?state, "replayed evts");
         }
 
-        let mut evt_count = 0u64;
+        // Spawn handler loop.
         let (cmd_in, mut cmd_out) = mpsc::channel::<(
             Self::Cmd,
             oneshot::Sender<Result<(), Self::Error>>,
         )>(cmd_buffer.get());
+        task::spawn({
+            let mut evt_count = 0u64;
 
-        // Spawn handler loop.
-        task::spawn(async move {
-            while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                debug!(?id, ?cmd, "handling command");
-                let result = Self::handle_cmd(&id, &state, cmd);
-                debug!(?id, ?result, "handled command");
+            async move {
+                while let Some((cmd, result_sender)) = cmd_out.recv().await {
+                    debug!(?id, ?cmd, "handling command");
 
-                // This ugliness seems to be needed unfortunately, because matching on result
-                // prevents from using `state` below, because would still be
-                // borrowed.
-                if let Err(error) = result {
-                    if result_sender.send(Err(error)).is_err() {
-                        error!(?id, "cannot send command handler error");
-                    };
-                    continue;
-                };
-                let evt = result.unwrap();
+                    match Self::handle_cmd(&id, &state, cmd) {
+                        Ok(evt) => {
+                            debug!(?id, ?evt, "persisting event");
 
-                debug!(?id, ?evt, "persisting event");
-                match evt_log
-                    .persist::<Self, _, _>(&evt, &id, last_seq_no, &evt_to_bytes)
-                    .await
-                {
-                    Ok(seq_no) => {
-                        debug!(?id, ?evt, seq_no, "persited event");
-
-                        last_seq_no = Some(seq_no);
-                        state = Self::handle_evt(state, evt);
-
-                        evt_count += 1;
-                        if snapshot_after
-                            .map(|a| evt_count % a == 0)
-                            .unwrap_or_default()
-                        {
-                            debug!(?id, seq_no, evt_count, "saving snapshot");
-
-                            if let Err(error) = snapshot_store
-                                .save(&id, seq_no, &state, &state_to_bytes)
+                            match evt_log
+                                .persist::<Self, _, _>(&evt, &id, last_seq_no, &|evt| {
+                                    binarize.evt_to_bytes(evt)
+                                })
                                 .await
                             {
-                                error!(error = error.as_chain(), ?id, "cannot save snapshot");
-                            };
+                                Ok(seq_no) => {
+                                    debug!(?id, ?evt, seq_no, "persited event");
+
+                                    last_seq_no = Some(seq_no);
+                                    state = Self::handle_evt(state, evt);
+
+                                    evt_count += 1;
+                                    if snapshot_after
+                                        .map(|a| evt_count % a == 0)
+                                        .unwrap_or_default()
+                                    {
+                                        debug!(?id, seq_no, evt_count, "saving snapshot");
+
+                                        if let Err(error) = snapshot_store
+                                            .save(&id, seq_no, &state, &|state| {
+                                                binarize.state_to_bytes(state)
+                                            })
+                                            .await
+                                        {
+                                            error!(
+                                                error = error.as_chain(),
+                                                ?id,
+                                                "cannot save snapshot"
+                                            );
+                                        };
+                                    }
+
+                                    if result_sender.send(Ok(())).is_err() {
+                                        error!(?id, "cannot send command handler OK");
+                                    };
+                                }
+
+                                Err(error) => {
+                                    error!(error = error.as_chain(), ?id, "cannot persist event");
+                                    // This is fatal, we must terminate the entity!
+                                    break;
+                                }
+                            }
                         }
 
-                        if result_sender.send(Ok(())).is_err() {
-                            error!(?id, "cannot send command handler OK");
-                        };
-                    }
-
-                    Err(error) => {
-                        error!(error = error.as_chain(), ?id, "cannot persist event");
-                        // This is fatal, we must terminate the entity!
-                        break;
-                    }
+                        Err(error) => {
+                            if result_sender.send(Err(error)).is_err() {
+                                error!(?id, "cannot send command handler error");
+                            }
+                        }
+                    };
                 }
-            }
 
-            debug!(?id, "entity terminated");
+                debug!(?id, "entity terminated");
+            }
         });
 
         Ok(EntityRef { cmd_in })
@@ -264,7 +241,7 @@ pub trait EventSourcedExt: Sized {
 pub enum SpawnError {
     /// A snapshot cannot be loaded from the snapshot store.
     #[error("cannot load snapshot from snapshot store")]
-    LoadSnapshot(#[source] Box<dyn StdError + Send + Sync>),
+    LoadSnapshot(#[source] BoxError),
 
     /// The last sequence number is less than the snapshot sequence number.
     #[error("last sequence number {0:?} less than snapshot sequence number {0:?}")]
@@ -272,15 +249,15 @@ pub enum SpawnError {
 
     /// The last seqence number cannot be obtained from the event log.
     #[error("cannot get last seqence number from event log")]
-    LastNonZeroU64(#[source] Box<dyn StdError + Send + Sync>),
+    LastNonZeroU64(#[source] BoxError),
 
     /// Events by ID cannot be obtained from the event log.
     #[error("cannot get events by ID from event log")]
-    EvtsById(#[source] Box<dyn StdError + Send + Sync>),
+    EvtsById(#[source] BoxError),
 
     /// The next event cannot be obtained from the event log.
     #[error("cannot get next event from event log")]
-    NextEvt(#[source] Box<dyn StdError + Send + Sync>),
+    NextEvt(#[source] BoxError),
 }
 
 impl<E> EventSourcedExt for E where E: EventSourced {}
@@ -319,18 +296,11 @@ where
 #[error("{0}")]
 pub struct HandleCmdError(String);
 
-/// Collection of conversion functions from and to [Bytes] for events and snapshots.
-pub struct Binarizer<EvtToBytes, EvtFromBytes, StateToBytes, StateFromBytes> {
-    pub evt_to_bytes: EvtToBytes,
-    pub evt_from_bytes: EvtFromBytes,
-    pub state_to_bytes: StateToBytes,
-    pub state_from_bytes: StateFromBytes,
-}
-
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
-    use futures::{stream, Stream};
+    use bytes::Bytes;
+    use futures::{stream, Stream, StreamExt};
     use std::{convert::Infallible, iter};
     use tracing_test::traced_test;
     use uuid::Uuid;
@@ -430,7 +400,7 @@ mod tests {
 
     #[derive(Debug, Error)]
     #[error("TestEvtLogError")]
-    struct TestEvtLogError(#[source] Box<dyn StdError + Send + Sync>);
+    struct TestEvtLogError(#[source] BoxError);
 
     #[derive(Debug, Clone)]
     struct TestSnapshotStore;
@@ -478,7 +448,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_spawn_handle_cmd() -> Result<(), Box<dyn StdError>> {
+    async fn test_spawn_handle_cmd() -> Result<(), BoxError> {
         let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
@@ -488,7 +458,7 @@ mod tests {
             unsafe { NonZeroUsize::new_unchecked(1) },
             evt_log,
             snapshot_store,
-            convert::serde_json::binarizer(),
+            binarize::serde_json::SerdeJsonConvert,
         )
         .await?;
 

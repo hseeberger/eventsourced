@@ -230,13 +230,14 @@ mod proto {
 mod tests {
     use super::*;
     use crate::tests::NATS_VERSION;
-    use eventsourced::convert;
+    use error_ext::BoxError;
+    use eventsourced::binarize;
     use testcontainers::{clients::Cli, core::WaitFor};
     use testcontainers_modules::testcontainers::GenericImage;
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_snapshot_store() -> Result<(), Box<dyn StdError + Send + Sync>> {
+    async fn test_snapshot_store() -> Result<(), BoxError> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
@@ -253,7 +254,7 @@ mod tests {
         let id = Uuid::now_v7();
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(&id, &convert::serde_json::from_bytes)
+            .load::<i32, _, _>(&id, &binarize::serde_json::from_bytes)
             .await?;
         assert!(snapshot.is_none());
 
@@ -261,11 +262,11 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(&id, seq_no, &state, &convert::serde_json::to_bytes)
+            .save(&id, seq_no, &state, &binarize::serde_json::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(&id, &convert::serde_json::from_bytes)
+            .load::<i32, _, _>(&id, &binarize::serde_json::from_bytes)
             .await?;
 
         assert!(snapshot.is_some());

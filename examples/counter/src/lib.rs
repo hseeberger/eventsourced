@@ -2,7 +2,7 @@ pub mod counter;
 
 use crate::counter::{Cmd, Counter};
 use anyhow::{Context, Result};
-use eventsourced::{convert, EventSourcedExt, EvtLog, SnapshotStore};
+use eventsourced::{binarize, EventSourcedExt, EvtLog, SnapshotStore};
 use serde::Deserialize;
 use std::{num::NonZeroUsize, time::Instant};
 use tokio::task::JoinSet;
@@ -35,7 +35,7 @@ where
             NonZeroUsize::new(42).expect("42 is not zero"),
             evt_log,
             snapshot_store,
-            convert::serde_json::binarizer(),
+            binarize::serde_json::SerdeJsonConvert,
         )
         .await
         .context("spawn counter entity")?;
@@ -85,7 +85,7 @@ where
                 NonZeroUsize::new(42).expect("42 is not zero"),
                 evt_log,
                 snapshot_store,
-                convert::serde_json::binarizer(),
+                binarize::serde_json::SerdeJsonConvert,
             )
             .await
             .unwrap();
