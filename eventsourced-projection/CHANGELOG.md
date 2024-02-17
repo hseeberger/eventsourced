@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.3.3...eventsourced-projection-v0.3.4) - 2024-02-17
+
+### Other
+- major cleanup ([#177](https://github.com/hseeberger/eventsourced/pull/177))
+- some cleanup, activate step in GH workflows again ([#175](https://github.com/hseeberger/eventsourced/pull/175))
+- update deps ([#173](https://github.com/hseeberger/eventsourced/pull/173))
+- use error-ext crate ([#169](https://github.com/hseeberger/eventsourced/pull/169))
+
 ## [0.3.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.3.2...eventsourced-projection-v0.3.3) - 2024-02-02
 
 ### Other
