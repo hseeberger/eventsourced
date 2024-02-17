@@ -1,5 +1,5 @@
 use error_ext::StdErrorExt;
-use eventsourced::{convert, EventSourced, EvtLog};
+use eventsourced::{binarize, EventSourced, EvtLog};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Row, Transaction};
@@ -308,7 +308,7 @@ where
         .map(|n| n.saturating_add(1))
         .unwrap_or(NonZeroU64::MIN);
     let evts = evt_log
-        .evts_by_type::<E, _, _>(seq_no, convert::serde_json::from_bytes)
+        .evts_by_type::<E, _, _>(seq_no, binarize::serde_json::from_bytes)
         .await
         .map_err(IntenalRunError::Evts)?;
     let mut evts = pin!(evts);

@@ -14,7 +14,7 @@
 //!
 //! The [spawn](EventSourcedExt::spawn) function provides for creating event sourced entities,
 //! identifiable by an ID, for some event log and  some snapshot store. Conversion of events and
-//! snapshot state to and from bytes happens via the given [Convert] implementation; for
+//! snapshot state to and from bytes happens via the given [Binarize] implementation; for
 //! [prost](https://github.com/tokio-rs/prost) and
 //! [serde_json](https://github.com/serde-rs/json) these are already provided.
 //!
@@ -28,7 +28,7 @@
 //! build read side projections. There is early support for projections in the
 //! `eventsourced-projection` crate.
 
-pub mod convert;
+pub mod binarize;
 
 mod evt_log;
 mod snapshot_store;
@@ -36,7 +36,7 @@ mod snapshot_store;
 pub use evt_log::*;
 pub use snapshot_store::*;
 
-use crate::convert::Convert;
+use crate::binarize::Binarize;
 use error_ext::{BoxError, StdErrorExt};
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -111,7 +111,7 @@ pub trait EventSourcedExt: Sized {
         Self: EventSourced,
         L: EvtLog<Id = Self::Id>,
         S: SnapshotStore<Id = Self::Id>,
-        B: Convert<Self::Evt, Self::State>,
+        B: Binarize<Self::Evt, Self::State>,
     {
         // Restore snapshot.
         let (snapshot_seq_no, state) = snapshot_store
@@ -458,7 +458,7 @@ mod tests {
             unsafe { NonZeroUsize::new_unchecked(1) },
             evt_log,
             snapshot_store,
-            convert::serde_json::SerdeJsonConvert,
+            binarize::serde_json::SerdeJsonConvert,
         )
         .await?;
 

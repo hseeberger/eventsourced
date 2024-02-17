@@ -1,14 +1,14 @@
 //! Conversion to and from [Bytes] for any type that implements [Message] based upon
 //! [prost](https://github.com/tokio-rs/prost).
 
-use crate::convert::Convert;
+use crate::binarize::Binarize;
 use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProstConvert;
 
-impl<E, S> Convert<E, S> for ProstConvert
+impl<E, S> Binarize<E, S> for ProstConvert
 where
     E: Message + Default,
     S: Message + Default,

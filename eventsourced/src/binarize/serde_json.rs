@@ -1,7 +1,7 @@
 //! Conversion to [Bytes] for any type that implements [Serialize] and from any type that implements
 //! [Deserialize] based upon [serde_json](https://docs.rs/serde_json/latest/serde_json).
 
-use crate::convert::Convert;
+use crate::binarize::Binarize;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{from_slice, to_value, Error};
@@ -9,7 +9,7 @@ use serde_json::{from_slice, to_value, Error};
 #[derive(Debug, Clone, Copy)]
 pub struct SerdeJsonConvert;
 
-impl<E, S> Convert<E, S> for SerdeJsonConvert
+impl<E, S> Binarize<E, S> for SerdeJsonConvert
 where
     for<'de> E: Serialize + Deserialize<'de>,
     for<'de> S: Serialize + Deserialize<'de>,

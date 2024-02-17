@@ -194,7 +194,7 @@ fn snapshots_table_default() -> String {
 mod tests {
     use super::*;
     use error_ext::BoxError;
-    use eventsourced::convert;
+    use eventsourced::binarize;
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
@@ -215,7 +215,7 @@ mod tests {
         let id = Uuid::now_v7();
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(&id, &convert::serde_json::from_bytes)
+            .load::<i32, _, _>(&id, &binarize::serde_json::from_bytes)
             .await?;
         assert!(snapshot.is_none());
 
@@ -223,11 +223,11 @@ mod tests {
         let state = 666;
 
         snapshot_store
-            .save(&id, seq_no, &state, &convert::serde_json::to_bytes)
+            .save(&id, seq_no, &state, &binarize::serde_json::to_bytes)
             .await?;
 
         let snapshot = snapshot_store
-            .load::<i32, _, _>(&id, &convert::serde_json::from_bytes)
+            .load::<i32, _, _>(&id, &binarize::serde_json::from_bytes)
             .await?;
 
         assert!(snapshot.is_some());
