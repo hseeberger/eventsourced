@@ -35,7 +35,7 @@ where
             NonZeroUsize::new(42).expect("42 is not zero"),
             evt_log,
             snapshot_store,
-            binarize::serde_json::SerdeJsonConvert,
+            binarize::serde_json::SerdeJsonBinarize,
         )
         .await
         .context("spawn counter entity")?;
@@ -85,7 +85,7 @@ where
                 NonZeroUsize::new(42).expect("42 is not zero"),
                 evt_log,
                 snapshot_store,
-                binarize::serde_json::SerdeJsonConvert,
+                binarize::serde_json::SerdeJsonBinarize,
             )
             .await
             .unwrap();

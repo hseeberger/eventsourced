@@ -458,7 +458,7 @@ mod tests {
             unsafe { NonZeroUsize::new_unchecked(1) },
             evt_log,
             snapshot_store,
-            binarize::serde_json::SerdeJsonConvert,
+            binarize::serde_json::SerdeJsonBinarize,
         )
         .await?;
 
