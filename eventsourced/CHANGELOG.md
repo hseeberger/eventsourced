@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.19.0...eventsourced-v0.20.0) - 2024-02-19
+
+### Other
+- cleanup ([#180](https://github.com/hseeberger/eventsourced/pull/180))
+
 ## [0.19.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.18.0...eventsourced-v0.19.0) - 2024-02-17
 
 ### Other
