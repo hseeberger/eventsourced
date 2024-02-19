@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{from_slice, to_value, Error};
 
 #[derive(Debug, Clone, Copy)]
-pub struct SerdeJsonConvert;
+pub struct SerdeJsonBinarize;
 
-impl<E, S> Binarize<E, S> for SerdeJsonConvert
+impl<E, S> Binarize<E, S> for SerdeJsonBinarize
 where
     for<'de> E: Serialize + Deserialize<'de>,
     for<'de> S: Serialize + Deserialize<'de>,

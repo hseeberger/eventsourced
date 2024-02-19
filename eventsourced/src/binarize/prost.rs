@@ -6,9 +6,9 @@ use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 
 #[derive(Debug, Clone, Copy)]
-pub struct ProstConvert;
+pub struct ProstBinarize;
 
-impl<E, S> Binarize<E, S> for ProstConvert
+impl<E, S> Binarize<E, S> for ProstBinarize
 where
     E: Message + Default,
     S: Message + Default,
