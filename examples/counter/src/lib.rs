@@ -1,6 +1,6 @@
 pub mod counter;
 
-use crate::counter::{Counter, CounterExt as _};
+use crate::counter::{Cmd, Counter};
 use anyhow::{Context, Result};
 use eventsourced::{binarize, EventSourcedExt, EvtLog, SnapshotStore};
 use serde::Deserialize;
@@ -46,14 +46,14 @@ where
                     println!("{id}: {} events persisted", n * 2);
                 }
                 let res1 = counter
-                    .inc(n as u64)
+                    .ask(|r| Cmd::Inc(n as u64, r))
                     .await
                     .context("send/receive Inc command")
                     .unwrap()
                     .context("handle Inc command")
                     .unwrap();
                 let res2 = counter
-                    .dec(n as u64)
+                    .ask(|r| Cmd::Dec(n as u64, r))
                     .await
                     .context("send/receive Dec command")
                     .unwrap()

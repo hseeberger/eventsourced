@@ -1,6 +1,4 @@
-use std::future::Future;
-
-use eventsourced::{CommandResult, EntityRef, EventSourced, HandleCmdError, Reply};
+use eventsourced::{CommandResult, EventSourced, Reply};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -51,19 +49,6 @@ pub enum Cmd {
 pub enum Evt {
     Increased(u64),
     Decreased(u64),
-}
-
-pub trait CounterExt {
-    fn inc(&self, inc: u64) -> impl Future<Output = Result<Result<u64, Error>, HandleCmdError>>;
-    fn dec(&self, dec: u64) -> impl Future<Output = Result<Result<u64, Error>, HandleCmdError>>;
-}
-impl CounterExt for EntityRef<Counter> {
-    fn dec(&self, dec: u64) -> impl Future<Output = Result<Result<u64, Error>, HandleCmdError>> {
-        self.ask(move |r| Cmd::Dec(dec, r))
-    }
-    fn inc(&self, inc: u64) -> impl Future<Output = Result<Result<u64, Error>, HandleCmdError>> {
-        self.ask(move |r| Cmd::Inc(inc, r))
-    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

@@ -55,11 +55,17 @@ use tracing::{debug, error, instrument};
 pub struct Reply<T> {
     phantom: std::marker::PhantomData<T>,
 }
-impl<T: Send + Sync + 'static> Reply<T> {
-    pub fn new() -> Self {
+impl<T: Send + Sync + 'static> Default for Reply<T> {
+    fn default() -> Self {
         Self {
             phantom: std::marker::PhantomData,
         }
+    }
+}
+
+impl<T: Send + Sync + 'static> Reply<T> {
+    pub fn new() -> Self {
+        Self::default()
     }
     fn wrap(self, value: T) -> WrappedReply {
         WrappedReply(Box::new(value))
