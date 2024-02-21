@@ -41,7 +41,6 @@ use error_ext::{BoxError, StdErrorExt};
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    error::Error as StdError,
     fmt::Debug,
     num::{NonZeroU64, NonZeroUsize},
 };
@@ -62,13 +61,41 @@ impl<T: Send + Sync + 'static> Reply<T> {
             phantom: std::marker::PhantomData,
         }
     }
-    pub fn send(self, value: T) -> WrappedReply {
+    fn wrap(self, value: T) -> WrappedReply {
         WrappedReply(Box::new(value))
+    }
+    pub fn with<Evt>(self, value: T) -> CommandResult<Evt> {
+        CommandResult::reply(self, value)
     }
 }
 
 pub struct WrappedReply(pub Box<dyn std::any::Any + Send + 'static>);
-pub struct CommandResult<Evt, Error>(pub Result<(Evt, WrappedReply), Error>);
+pub struct CommandResult<Evt> {
+    emit_event: Option<Evt>,
+    reply: Option<WrappedReply>,
+}
+impl<Evt> CommandResult<Evt> {
+    pub fn emit(evt: Evt) -> Self {
+        Self {
+            emit_event: Some(evt),
+            reply: None,
+        }
+    }
+    pub fn reply<T: Send + Sync + 'static>(reply: Reply<T>, t: T) -> Self {
+        Self {
+            emit_event: None,
+            reply: Some(reply.wrap(t)),
+        }
+    }
+    pub fn and_emit(mut self, evt: Evt) -> Self {
+        self.emit_event = Some(evt);
+        self
+    }
+    pub fn and_reply<T: Send + Sync + 'static>(mut self, reply: Reply<T>, t: T) -> Self {
+        self.reply = Some(reply.wrap(t));
+        self
+    }
+}
 
 /// Command and event handling for an event sourced entity.
 pub trait EventSourced {
@@ -84,17 +111,10 @@ pub trait EventSourced {
     /// State type.
     type State: Debug + Default + Send + Sync + 'static;
 
-    /// Error type for rejected (a.k.a. invalid) commands.
-    type Error: StdError + Send + Sync + 'static;
-
     const TYPE_NAME: &'static str;
 
     /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(
-        id: &Self::Id,
-        state: &Self::State,
-        cmd: Self::Cmd,
-    ) -> CommandResult<Self::Evt, Self::Error>;
+    fn handle_cmd(id: &Self::Id, state: &Self::State, cmd: Self::Cmd) -> CommandResult<Self::Evt>;
 
     /// Event handler.
     fn handle_evt(state: Self::State, evt: Self::Evt) -> Self::State;
@@ -177,10 +197,8 @@ pub trait EventSourcedExt: Sized {
         }
 
         // Spawn handler loop.
-        let (cmd_in, mut cmd_out) = mpsc::channel::<(
-            Self::Cmd,
-            oneshot::Sender<Result<WrappedReply, Self::Error>>,
-        )>(cmd_buffer.get());
+        let (cmd_in, mut cmd_out) =
+            mpsc::channel::<(Self::Cmd, oneshot::Sender<Option<WrappedReply>>)>(cmd_buffer.get());
         task::spawn({
             let mut evt_count = 0u64;
 
@@ -188,8 +206,9 @@ pub trait EventSourcedExt: Sized {
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
                     debug!(?id, ?cmd, "handling command");
 
-                    match Self::handle_cmd(&id, &state, cmd).0 {
-                        Ok((evt, reply)) => {
+                    let result = Self::handle_cmd(&id, &state, cmd);
+                    match result.emit_event {
+                        Some(evt) => {
                             debug!(?id, ?evt, "persisting event");
 
                             match evt_log
@@ -225,25 +244,23 @@ pub trait EventSourcedExt: Sized {
                                         };
                                     }
 
-                                    if result_sender.send(Ok(reply)).is_err() {
+                                    if result_sender.send(result.reply).is_err() {
                                         error!(?id, "cannot send command handler OK");
                                     };
                                 }
-
                                 Err(error) => {
                                     error!(error = error.as_chain(), ?id, "cannot persist event");
                                     // This is fatal, we must terminate the entity!
                                     break;
-                                }
+                                } //}
                             }
                         }
-
-                        Err(error) => {
-                            if result_sender.send(Err(error)).is_err() {
-                                error!(?id, "cannot send command handler error");
-                            }
+                        None => {
+                            if result_sender.send(result.reply).is_err() {
+                                error!(?id, "cannot send command handler OK");
+                            };
                         }
-                    };
+                    }
                 }
 
                 debug!(?id, "entity terminated");
@@ -287,7 +304,7 @@ pub struct EntityRef<E>
 where
     E: EventSourced,
 {
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<WrappedReply, E::Error>>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Option<WrappedReply>>)>,
 }
 
 impl<E> EntityRef<E>
@@ -296,27 +313,37 @@ where
 {
     /// Invoke the command handler of the entity.
     #[instrument(skip(self))]
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, HandleCmdError> {
-        self.ask::<()>(|_| cmd)
-            .await
-            .map(|result| result.map(|_| ()))
+    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError> {
+        self.send_command(cmd).await.map(|_| ()) // ignore reply
     }
+
     /// Invoke the command handler of the entity.
     #[instrument(skip(self, cmd))]
     pub async fn ask<T: Send + Sync + 'static>(
         &self,
         cmd: impl FnOnce(Reply<T>) -> E::Cmd,
-    ) -> Result<Result<T, E::Error>, HandleCmdError> {
-        let (result_in, result_out) = oneshot::channel();
+    ) -> Result<T, HandleCmdError> {
         let reply = Reply::new();
+        let cmd = cmd(reply);
+        self.send_command(cmd).await.map(|reply| {
+            *reply
+                .expect("Handler should reply")
+                .0
+                .downcast()
+                .expect("Handler should have replied with the right type")
+        })
+    }
+
+    async fn send_command(&self, cmd: E::Cmd) -> Result<Option<WrappedReply>, HandleCmdError> {
+        let (result_in, result_out) = oneshot::channel();
+
         self.cmd_in
-            .send((cmd(reply), result_in))
+            .send((cmd, result_in))
             .await
             .map_err(|_| HandleCmdError("cannot send command".to_string()))?;
         result_out
             .await
             .map_err(|_| HandleCmdError("cannot receive command handler result".to_string()))
-            .map(|x| x.map(|x| *x.0.downcast().unwrap()))
     }
 }
 
@@ -331,7 +358,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use futures::{stream, Stream, StreamExt};
-    use std::{convert::Infallible, iter};
+    use std::iter;
     use tracing_test::traced_test;
     use uuid::Uuid;
 
@@ -343,7 +370,6 @@ mod tests {
         type Cmd = ();
         type Evt = ();
         type State = u64;
-        type Error = Infallible;
 
         const TYPE_NAME: &'static str = "simple";
 
@@ -351,8 +377,8 @@ mod tests {
             _id: &Self::Id,
             _state: &Self::State,
             _cmd: Self::Cmd,
-        ) -> CommandResult<Self::Evt, Self::Error> {
-            CommandResult(Ok(((), WrappedReply(Box::new(())))))
+        ) -> CommandResult<Self::Evt> {
+            CommandResult::emit(())
         }
 
         fn handle_evt(mut state: Self::State, _evt: Self::Evt) -> Self::State {
@@ -492,7 +518,7 @@ mod tests {
         )
         .await?;
 
-        entity.handle_cmd(()).await??;
+        entity.handle_cmd(()).await?;
 
         assert!(logs_contain("state=42"));
 
