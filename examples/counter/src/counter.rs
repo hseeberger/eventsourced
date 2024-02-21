@@ -1,4 +1,4 @@
-use eventsourced::{CommandResult, EventSourced, Reply};
+use eventsourced::{CmdResult, CommandResult, EventSourced};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -18,16 +18,16 @@ impl EventSourced for Counter {
 
         match cmd {
             Cmd::Inc(inc, reply) if inc > u64::MAX - value => {
-                CommandResult::reply(reply, Err(Error::Overflow { value, inc }))
+                CommandResult::reply_err(reply, Error::Overflow { value, inc })
             }
             Cmd::Inc(inc, reply) => {
-                CommandResult::emit_and_reply(Evt::Increased(inc), reply, Ok(value + inc))
+                CommandResult::emit_and_reply(Evt::Increased(inc), reply, value + inc)
             }
             Cmd::Dec(dec, reply) if dec > value => {
-                CommandResult::reply(reply, Err(Error::Underflow { value, dec }))
+                CommandResult::reply_err(reply, Error::Underflow { value, dec })
             }
             Cmd::Dec(dec, reply) => {
-                CommandResult::emit_and_reply(Evt::Decreased(dec), reply, Ok(value - dec))
+                CommandResult::emit_and_reply(Evt::Decreased(dec), reply, value - dec)
             }
         }
     }
@@ -41,10 +41,10 @@ impl EventSourced for Counter {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub enum Cmd {
-    Inc(u64, Reply<Result<u64, Error>>),
-    Dec(u64, Reply<Result<u64, Error>>),
+    Inc(u64, CmdResult<u64, Error>),
+    Dec(u64, CmdResult<u64, Error>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

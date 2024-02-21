@@ -51,30 +51,31 @@ use tokio::{
 };
 use tracing::{debug, error, instrument};
 
-#[derive(Debug, Clone, Copy)]
-pub struct Reply<T> {
-    phantom: std::marker::PhantomData<T>,
+/// A marker type to define the result of a command to be sent back to the
+/// calling code.
+#[derive(Debug)]
+pub struct CmdResult<T, E> {
+    _phantom_t: std::marker::PhantomData<T>,
+    _phantom_e: std::marker::PhantomData<E>,
 }
-impl<T: Send + Sync + 'static> Default for Reply<T> {
+impl<T, E> Default for CmdResult<T, E> {
     fn default() -> Self {
         Self {
-            phantom: std::marker::PhantomData,
+            _phantom_t: std::marker::PhantomData,
+            _phantom_e: std::marker::PhantomData,
         }
     }
 }
 
-impl<T: Send + Sync + 'static> Reply<T> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    fn wrap(self, value: T) -> WrappedReply {
+impl<T: Send + Sync + 'static, E: Send + Sync + 'static> CmdResult<T, E> {
+    fn wrap(self, value: Result<T, E>) -> WrappedReply {
         WrappedReply(Box::new(value))
     }
 }
 
-pub struct WrappedReply(pub Box<dyn std::any::Any + Send + 'static>);
+struct WrappedReply(Box<dyn std::any::Any + Send + 'static>);
 impl WrappedReply {
-    fn unwrap<T: 'static>(self) -> T {
+    fn unwrap<T: 'static, E: 'static>(self) -> Result<T, E> {
         *self
             .0
             .downcast()
@@ -82,21 +83,38 @@ impl WrappedReply {
     }
 }
 
+/// Represents the result of a command handler.
 pub struct CommandResult<Evt> {
     emit_event: Option<Evt>,
     reply: WrappedReply,
 }
 impl<Evt> CommandResult<Evt> {
-    pub fn emit_and_reply<T: Send + Sync + 'static>(evt: Evt, reply: Reply<T>, t: T) -> Self {
+    pub fn emit_and_reply<T: Send + Sync + 'static, E: Send + Sync + 'static>(
+        evt: Evt,
+        reply: CmdResult<T, E>,
+        t: T,
+    ) -> Self {
         Self {
             emit_event: Some(evt),
-            reply: reply.wrap(t),
+            reply: reply.wrap(Ok(t)),
         }
     }
-    pub fn reply<T: Send + Sync + 'static>(reply: Reply<T>, t: T) -> Self {
+    pub fn reply_ok<T: Send + Sync + 'static, E: Send + Sync + 'static>(
+        reply: CmdResult<T, E>,
+        t: T,
+    ) -> Self {
         Self {
             emit_event: None,
-            reply: reply.wrap(t),
+            reply: reply.wrap(Ok(t)),
+        }
+    }
+    pub fn reply_err<T: Send + Sync + 'static, E: Send + Sync + 'static>(
+        reply: CmdResult<T, E>,
+        e: E,
+    ) -> Self {
+        Self {
+            emit_event: None,
+            reply: reply.wrap(Err(e)),
         }
     }
 }
@@ -317,12 +335,11 @@ where
 {
     /// Invoke the command handler of the entity.
     #[instrument(skip(self, cmd))]
-    pub async fn handle_cmd<T: Send + Sync + 'static>(
+    pub async fn handle_cmd<T: Send + Sync + 'static, Error: Send + Sync + 'static>(
         &self,
-        cmd: impl FnOnce(Reply<T>) -> E::Cmd,
-    ) -> Result<T, HandleCmdError> {
-        let reply = Reply::new();
-        let cmd = cmd(reply);
+        cmd: impl FnOnce(CmdResult<T, Error>) -> E::Cmd,
+    ) -> Result<Result<T, Error>, HandleCmdError> {
+        let cmd = cmd(Default::default());
         let (result_in, result_out) = oneshot::channel();
 
         self.cmd_in
