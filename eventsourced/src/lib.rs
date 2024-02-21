@@ -68,13 +68,14 @@ impl<T, E> Default for CmdResult<T, E> {
 }
 
 impl<T: Send + Sync + 'static, E: Send + Sync + 'static> CmdResult<T, E> {
-    fn wrap(self, value: Result<T, E>) -> WrappedReply {
-        WrappedReply(Box::new(value))
+    fn wrap(self, value: Result<T, E>) -> WrappedResult {
+        WrappedResult(Box::new(value))
     }
 }
 
-struct WrappedReply(Box<dyn std::any::Any + Send + 'static>);
-impl WrappedReply {
+/// Internal type that wraps a dynamic result type to be sent back to the calling code.
+struct WrappedResult(Box<dyn std::any::Any + Send + 'static>);
+impl WrappedResult {
     fn unwrap<T: 'static, E: 'static>(self) -> Result<T, E> {
         *self
             .0
@@ -86,7 +87,7 @@ impl WrappedReply {
 /// Represents the result of a command handler.
 pub struct CommandResult<Evt> {
     emit_event: Option<Evt>,
-    reply: WrappedReply,
+    reply: WrappedResult,
 }
 impl<Evt> CommandResult<Evt> {
     pub fn emit_and_reply<T: Send + Sync + 'static, E: Send + Sync + 'static>(
@@ -220,7 +221,7 @@ pub trait EventSourcedExt: Sized {
 
         // Spawn handler loop.
         let (cmd_in, mut cmd_out) =
-            mpsc::channel::<(Self::Cmd, oneshot::Sender<WrappedReply>)>(cmd_buffer.get());
+            mpsc::channel::<(Self::Cmd, oneshot::Sender<WrappedResult>)>(cmd_buffer.get());
         task::spawn({
             let mut evt_count = 0u64;
 
@@ -326,7 +327,7 @@ pub struct EntityRef<E>
 where
     E: EventSourced,
 {
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<WrappedReply>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<WrappedResult>)>,
 }
 
 impl<E> EntityRef<E>
