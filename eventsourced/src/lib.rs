@@ -52,6 +52,24 @@ use tokio::{
 };
 use tracing::{debug, error, instrument};
 
+#[derive(Debug, Clone, Copy)]
+pub struct Reply<T> {
+    phantom: std::marker::PhantomData<T>,
+}
+impl<T: Send + Sync + 'static> Reply<T> {
+    pub fn new() -> Self {
+        Self {
+            phantom: std::marker::PhantomData,
+        }
+    }
+    pub fn send(self, value: T) -> WrappedReply {
+        WrappedReply(Box::new(value))
+    }
+}
+
+pub struct WrappedReply(pub Box<dyn std::any::Any + Send + 'static>);
+pub struct CommandResult<Evt, Error>(pub Result<(Evt, WrappedReply), Error>);
+
 /// Command and event handling for an event sourced entity.
 pub trait EventSourced {
     /// Id type.
@@ -76,7 +94,7 @@ pub trait EventSourced {
         id: &Self::Id,
         state: &Self::State,
         cmd: Self::Cmd,
-    ) -> Result<Self::Evt, Self::Error>;
+    ) -> CommandResult<Self::Evt, Self::Error>;
 
     /// Event handler.
     fn handle_evt(state: Self::State, evt: Self::Evt) -> Self::State;
@@ -161,7 +179,7 @@ pub trait EventSourcedExt: Sized {
         // Spawn handler loop.
         let (cmd_in, mut cmd_out) = mpsc::channel::<(
             Self::Cmd,
-            oneshot::Sender<Result<(), Self::Error>>,
+            oneshot::Sender<Result<WrappedReply, Self::Error>>,
         )>(cmd_buffer.get());
         task::spawn({
             let mut evt_count = 0u64;
@@ -170,8 +188,8 @@ pub trait EventSourcedExt: Sized {
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
                     debug!(?id, ?cmd, "handling command");
 
-                    match Self::handle_cmd(&id, &state, cmd) {
-                        Ok(evt) => {
+                    match Self::handle_cmd(&id, &state, cmd).0 {
+                        Ok((evt, reply)) => {
                             debug!(?id, ?evt, "persisting event");
 
                             match evt_log
@@ -207,7 +225,7 @@ pub trait EventSourcedExt: Sized {
                                         };
                                     }
 
-                                    if result_sender.send(Ok(())).is_err() {
+                                    if result_sender.send(Ok(reply)).is_err() {
                                         error!(?id, "cannot send command handler OK");
                                     };
                                 }
@@ -269,7 +287,7 @@ pub struct EntityRef<E>
 where
     E: EventSourced,
 {
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<(), E::Error>>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<WrappedReply, E::Error>>)>,
 }
 
 impl<E> EntityRef<E>
@@ -279,14 +297,26 @@ where
     /// Invoke the command handler of the entity.
     #[instrument(skip(self))]
     pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, HandleCmdError> {
+        self.ask::<()>(|_| cmd)
+            .await
+            .map(|result| result.map(|_| ()))
+    }
+    /// Invoke the command handler of the entity.
+    #[instrument(skip(self, cmd))]
+    pub async fn ask<T: Send + Sync + 'static>(
+        &self,
+        cmd: impl FnOnce(Reply<T>) -> E::Cmd,
+    ) -> Result<Result<T, E::Error>, HandleCmdError> {
         let (result_in, result_out) = oneshot::channel();
+        let reply = Reply::new();
         self.cmd_in
-            .send((cmd, result_in))
+            .send((cmd(reply), result_in))
             .await
             .map_err(|_| HandleCmdError("cannot send command".to_string()))?;
         result_out
             .await
             .map_err(|_| HandleCmdError("cannot receive command handler result".to_string()))
+            .map(|x| x.map(|x| *x.0.downcast().unwrap()))
     }
 }
 
@@ -321,8 +351,8 @@ mod tests {
             _id: &Self::Id,
             _state: &Self::State,
             _cmd: Self::Cmd,
-        ) -> Result<Self::Evt, Self::Error> {
-            Ok(())
+        ) -> CommandResult<Self::Evt, Self::Error> {
+            CommandResult(Ok(((), WrappedReply(Box::new(())))))
         }
 
         fn handle_evt(mut state: Self::State, _evt: Self::Evt) -> Self::State {

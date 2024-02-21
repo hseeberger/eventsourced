@@ -45,20 +45,22 @@ where
                 if n > 0 && n % 2_500 == 0 {
                     println!("{id}: {} events persisted", n * 2);
                 }
-                counter
-                    .handle_cmd(Cmd::Inc(n as u64))
+                let res1 = counter
+                    .ask(|r| Cmd::Inc(n as u64, r))
                     .await
                     .context("send/receive Inc command")
                     .unwrap()
                     .context("handle Inc command")
                     .unwrap();
-                counter
-                    .handle_cmd(Cmd::Dec(n as u64))
+                let res2 = counter
+                    .ask(|r| Cmd::Dec(n as u64, r))
                     .await
                     .context("send/receive Dec command")
                     .unwrap()
                     .context("handle Dec command")
                     .unwrap();
+
+                println!("{id}: Inc result: {}, Dec result: {}", res1, res2);
             }
         });
     }

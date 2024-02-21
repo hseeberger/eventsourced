@@ -1,5 +1,4 @@
-use anyhow::Result;
-use eventsourced::EventSourced;
+use eventsourced::{CommandResult, EventSourced, Reply};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -19,16 +18,17 @@ impl EventSourced for Counter {
         _id: &Self::Id,
         state: &Self::State,
         cmd: Self::Cmd,
-    ) -> Result<Self::Evt, Self::Error> {
+    ) -> CommandResult<Self::Evt, Self::Error> {
         let value = state.value;
 
-        match cmd {
-            Cmd::Inc(inc) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
-            Cmd::Inc(inc) => Ok(Evt::Increased(inc)),
+        let res = match cmd {
+            Cmd::Inc(inc, _) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
+            Cmd::Inc(inc, reply) => Ok((Evt::Increased(inc), reply.send(value + inc))),
 
-            Cmd::Dec(dec) if dec > value => Err(Error::Underflow { value, dec }),
-            Cmd::Dec(dec) => Ok(Evt::Decreased(dec)),
-        }
+            Cmd::Dec(dec, _) if dec > value => Err(Error::Underflow { value, dec }),
+            Cmd::Dec(dec, reply) => Ok((Evt::Decreased(dec), reply.send(value - dec))),
+        };
+        CommandResult(res)
     }
 
     fn handle_evt(mut state: Self::State, evt: Self::Evt) -> Self::State {
@@ -40,10 +40,10 @@ impl EventSourced for Counter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub enum Cmd {
-    Inc(u64),
-    Dec(u64),
+    Inc(u64, Reply<u64>),
+    Dec(u64, Reply<u64>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
