@@ -18,14 +18,16 @@ impl EventSourced for Counter {
 
         match cmd {
             Cmd::Inc(inc, reply) if inc > u64::MAX - value => {
-                reply.with(Err(Error::Overflow { value, inc }))
+                CommandResult::reply(reply, Err(Error::Overflow { value, inc }))
             }
             Cmd::Inc(inc, reply) => {
-                CommandResult::emit(Evt::Increased(inc)).and_reply(reply, Ok(value + inc))
+                CommandResult::emit_and_reply(Evt::Increased(inc), reply, Ok(value + inc))
             }
-            Cmd::Dec(dec, reply) if dec > value => reply.with(Err(Error::Underflow { value, dec })),
+            Cmd::Dec(dec, reply) if dec > value => {
+                CommandResult::reply(reply, Err(Error::Underflow { value, dec }))
+            }
             Cmd::Dec(dec, reply) => {
-                CommandResult::emit(Evt::Decreased(dec)).and_reply(reply, Ok(value - dec))
+                CommandResult::emit_and_reply(Evt::Decreased(dec), reply, Ok(value - dec))
             }
         }
     }

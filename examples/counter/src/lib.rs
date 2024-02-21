@@ -46,14 +46,14 @@ where
                     println!("{id}: {} events persisted", n * 2);
                 }
                 let res1 = counter
-                    .ask(|r| Cmd::Inc(n as u64, r))
+                    .handle_cmd(|r| Cmd::Inc(n as u64, r))
                     .await
                     .context("send/receive Inc command")
                     .unwrap()
                     .context("handle Inc command")
                     .unwrap();
                 let res2 = counter
-                    .ask(|r| Cmd::Dec(n as u64, r))
+                    .handle_cmd(|r| Cmd::Dec(n as u64, r))
                     .await
                     .context("send/receive Dec command")
                     .unwrap()

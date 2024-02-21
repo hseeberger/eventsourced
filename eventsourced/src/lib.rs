@@ -70,36 +70,34 @@ impl<T: Send + Sync + 'static> Reply<T> {
     fn wrap(self, value: T) -> WrappedReply {
         WrappedReply(Box::new(value))
     }
-    pub fn with<Evt>(self, value: T) -> CommandResult<Evt> {
-        CommandResult::reply(self, value)
-    }
 }
 
 pub struct WrappedReply(pub Box<dyn std::any::Any + Send + 'static>);
+impl WrappedReply {
+    fn unwrap<T: 'static>(self) -> T {
+        *self
+            .0
+            .downcast()
+            .expect("Handler should have replied with the right type")
+    }
+}
+
 pub struct CommandResult<Evt> {
     emit_event: Option<Evt>,
-    reply: Option<WrappedReply>,
+    reply: WrappedReply,
 }
 impl<Evt> CommandResult<Evt> {
-    pub fn emit(evt: Evt) -> Self {
+    pub fn emit_and_reply<T: Send + Sync + 'static>(evt: Evt, reply: Reply<T>, t: T) -> Self {
         Self {
             emit_event: Some(evt),
-            reply: None,
+            reply: reply.wrap(t),
         }
     }
     pub fn reply<T: Send + Sync + 'static>(reply: Reply<T>, t: T) -> Self {
         Self {
             emit_event: None,
-            reply: Some(reply.wrap(t)),
+            reply: reply.wrap(t),
         }
-    }
-    pub fn and_emit(mut self, evt: Evt) -> Self {
-        self.emit_event = Some(evt);
-        self
-    }
-    pub fn and_reply<T: Send + Sync + 'static>(mut self, reply: Reply<T>, t: T) -> Self {
-        self.reply = Some(reply.wrap(t));
-        self
     }
 }
 
@@ -204,7 +202,7 @@ pub trait EventSourcedExt: Sized {
 
         // Spawn handler loop.
         let (cmd_in, mut cmd_out) =
-            mpsc::channel::<(Self::Cmd, oneshot::Sender<Option<WrappedReply>>)>(cmd_buffer.get());
+            mpsc::channel::<(Self::Cmd, oneshot::Sender<WrappedReply>)>(cmd_buffer.get());
         task::spawn({
             let mut evt_count = 0u64;
 
@@ -310,7 +308,7 @@ pub struct EntityRef<E>
 where
     E: EventSourced,
 {
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Option<WrappedReply>>)>,
+    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<WrappedReply>)>,
 }
 
 impl<E> EntityRef<E>
@@ -318,29 +316,13 @@ where
     E: EventSourced,
 {
     /// Invoke the command handler of the entity.
-    #[instrument(skip(self))]
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<(), HandleCmdError> {
-        self.send_command(cmd).await.map(|_| ()) // ignore reply
-    }
-
-    /// Invoke the command handler of the entity.
     #[instrument(skip(self, cmd))]
-    pub async fn ask<T: Send + Sync + 'static>(
+    pub async fn handle_cmd<T: Send + Sync + 'static>(
         &self,
         cmd: impl FnOnce(Reply<T>) -> E::Cmd,
     ) -> Result<T, HandleCmdError> {
         let reply = Reply::new();
         let cmd = cmd(reply);
-        self.send_command(cmd).await.map(|reply| {
-            *reply
-                .expect("Handler should reply")
-                .0
-                .downcast()
-                .expect("Handler should have replied with the right type")
-        })
-    }
-
-    async fn send_command(&self, cmd: E::Cmd) -> Result<Option<WrappedReply>, HandleCmdError> {
         let (result_in, result_out) = oneshot::channel();
 
         self.cmd_in
@@ -350,6 +332,7 @@ where
         result_out
             .await
             .map_err(|_| HandleCmdError("cannot receive command handler result".to_string()))
+            .map(|reply| reply.unwrap())
     }
 }
 
