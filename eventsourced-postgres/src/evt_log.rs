@@ -418,7 +418,7 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eventsourced::binarize;
+    use eventsourced::{binarize, CmdResult, CommandResult};
     use std::{convert::Infallible, future};
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
@@ -429,10 +429,9 @@ mod tests {
 
     impl EventSourced for Dummy {
         type Id = Uuid;
-        type Cmd = ();
+        type Cmd = CmdResult<(), Infallible>;
         type Evt = u32;
         type State = u64;
-        type Error = Infallible;
 
         const TYPE_NAME: &'static str = "simple";
 
@@ -440,7 +439,7 @@ mod tests {
             _id: &Self::Id,
             _state: &Self::State,
             _cmd: Self::Cmd,
-        ) -> Result<Self::Evt, Self::Error> {
+        ) -> CommandResult<Self::Evt> {
             todo!()
         }
 

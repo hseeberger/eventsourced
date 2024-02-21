@@ -354,6 +354,7 @@ async fn save_seq_no(
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use eventsourced::{CmdResult, CommandResult};
     use futures::{stream, Stream};
     use sqlx::{
         postgres::{PgConnectOptions, PgPoolOptions},
@@ -371,10 +372,9 @@ mod tests {
 
     impl EventSourced for Dummy {
         type Id = Uuid;
-        type Cmd = ();
+        type Cmd = CmdResult<(), Infallible>;
         type Evt = i32;
         type State = u64;
-        type Error = Infallible;
 
         const TYPE_NAME: &'static str = "simple";
 
@@ -382,7 +382,7 @@ mod tests {
             _id: &Self::Id,
             _state: &Self::State,
             _cmd: Self::Cmd,
-        ) -> Result<Self::Evt, Self::Error> {
+        ) -> CommandResult<Self::Evt> {
             todo!()
         }
 

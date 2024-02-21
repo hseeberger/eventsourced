@@ -376,7 +376,7 @@ mod tests {
     use super::*;
     use crate::tests::NATS_VERSION;
     use error_ext::BoxError;
-    use eventsourced::binarize;
+    use eventsourced::{binarize, CmdResult, CommandResult};
     use futures::TryStreamExt;
     use std::{convert::Infallible, future};
     use testcontainers::{clients::Cli, core::WaitFor};
@@ -388,10 +388,9 @@ mod tests {
 
     impl EventSourced for Dummy {
         type Id = Uuid;
-        type Cmd = ();
+        type Cmd = CmdResult<u32, Infallible>;
         type Evt = u32;
         type State = u64;
-        type Error = Infallible;
 
         const TYPE_NAME: &'static str = "simple";
 
@@ -399,7 +398,7 @@ mod tests {
             _id: &Self::Id,
             _state: &Self::State,
             _cmd: Self::Cmd,
-        ) -> Result<Self::Evt, Self::Error> {
+        ) -> CommandResult<Self::Evt> {
             todo!()
         }
 

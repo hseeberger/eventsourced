@@ -365,6 +365,7 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use futures::{stream, Stream, StreamExt};
+    use std::error::Error as StdError;
     use std::iter;
     use tracing_test::traced_test;
     use uuid::Uuid;
@@ -374,7 +375,7 @@ mod tests {
 
     impl EventSourced for Simple {
         type Id = Uuid;
-        type Cmd = ();
+        type Cmd = CmdResult<(), ()>;
         type Evt = ();
         type State = u64;
 
@@ -383,9 +384,9 @@ mod tests {
         fn handle_cmd(
             _id: &Self::Id,
             _state: &Self::State,
-            _cmd: Self::Cmd,
+            cmd: Self::Cmd,
         ) -> CommandResult<Self::Evt> {
-            CommandResult::emit(())
+            CommandResult::emit_and_reply((), cmd, ())
         }
 
         fn handle_evt(mut state: Self::State, _evt: Self::Evt) -> Self::State {
@@ -525,7 +526,7 @@ mod tests {
         )
         .await?;
 
-        entity.handle_cmd(()).await?;
+        entity.handle_cmd(|r| r).await?.unwrap();
 
         assert!(logs_contain("state=42"));
 
