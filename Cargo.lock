@@ -2382,9 +2382,9 @@ dependencies = [
 
 [[package]]
 name = "testcontainers-modules"
-version = "0.3.4"
+version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c391cd115649a8a14e5638d0606648d5348b216700a31f402987f57e58693766"
+checksum = "1d0334776e1e8ee7c504a922c5236daf865ffe413aa630d84ae91dcce0b10bc3"
 dependencies = [
  "testcontainers",
 ]
