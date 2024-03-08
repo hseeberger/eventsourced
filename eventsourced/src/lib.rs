@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,
     fmt::Debug,
+    marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
 };
 use thiserror::Error;
@@ -51,6 +52,84 @@ use tokio::{
     task,
 };
 use tracing::{debug, error, instrument};
+
+pub struct Entity<I, E, S, EvtHandler, T, Tail> {
+    id: I,
+    state: S,
+    evt_handler: EvtHandler,
+    _e: PhantomData<E>,
+    _t: PhantomData<T>,
+    _tail: PhantomData<Tail>,
+}
+
+impl<I, E, S, EvtHandler, T, Tail> Entity<I, E, S, EvtHandler, T, Tail>
+where
+    EvtHandler: Fn(S, E) -> S,
+{
+    pub fn new<C, CmdHandler>(
+        id: I,
+        state: S,
+        evt_handler: EvtHandler,
+        cmd_handler: CmdHandler,
+    ) -> Entity<I, E, S, EvtHandler, C, ()>
+    where
+        C: Cmd,
+        CmdHandler: Fn(&I, &S, C) -> Result<E, C::Error>,
+    {
+        Entity {
+            id,
+            state,
+            evt_handler,
+            _e: PhantomData,
+            _t: PhantomData,
+            _tail: PhantomData,
+        }
+    }
+
+    pub fn with_cmd_handler<C, CmdHandler>(
+        self,
+        cmd_handler: CmdHandler,
+    ) -> Entity<I, E, S, EvtHandler, C, Cmds<T, Tail>>
+    where
+        C: Cmd,
+        CmdHandler: Fn(&I, &S, C) -> Result<E, C::Error>,
+    {
+        Entity {
+            id: self.id,
+            state: self.state,
+            evt_handler: self.evt_handler,
+            _e: PhantomData,
+            _t: PhantomData,
+            _tail: PhantomData,
+        }
+    }
+
+    fn handle_cmd<C, X>(&self, cmd: C)
+    where
+        Cmds<T, Tail>: Contains<C, X>,
+    {
+    }
+}
+
+pub trait Cmd {
+    type Error;
+}
+
+// Inspired by https://stackoverflow.com/questions/77845550/how-to-define-either-or-trait-bounds-in-rust/77845861#77845861.
+
+pub struct Cmds<T, Tail>(PhantomData<T>, Tail);
+
+trait Contains<T, X> {}
+
+struct Zero;
+
+impl<T, Tail> Contains<T, Zero> for Cmds<T, Tail> {}
+
+struct Next<N>(N);
+
+impl<T, T2, Tail, N> Contains<T, Next<N>> for Cmds<T2, Tail> where Tail: Contains<T, N> {}
+
+// ================================================================================================
 
 /// Command and event handling for an event sourced entity.
 pub trait EventSourced {
