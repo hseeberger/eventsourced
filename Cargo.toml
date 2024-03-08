@@ -19,7 +19,7 @@ repository = "https://github.com/hseeberger/eventsourced"
 
 [workspace.dependencies]
 anyhow                 = { version = "1.0" }
-async-nats             = { version = "0.33" }
+async-nats             = { version = "0.34" }
 async-stream           = { version = "0.3" }
 bb8-postgres           = { version = "0.8" }
 bytes                  = { version = "1.5" }
