@@ -1,11 +1,12 @@
 pub mod counter;
 
-use crate::counter::{Cmd, Counter};
+use crate::counter::{Counter, Decrease, Increase};
 use anyhow::{Context, Result};
-use eventsourced::{binarize, EventSourcedExt, EvtLog, SnapshotStore};
+use eventsourced::{binarize, Entity, EvtLog, SnapshotStore};
 use serde::Deserialize;
-use std::{num::NonZeroUsize, time::Instant};
+use std::{iter, num::NonZeroUsize, time::Instant};
 use tokio::task::JoinSet;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -16,11 +17,11 @@ pub struct Config {
 
 pub async fn run<L, S>(config: Config, evt_log: L, snapshot_store: S) -> Result<()>
 where
-    L: EvtLog<Id = String>,
-    S: SnapshotStore<Id = String>,
+    L: EvtLog<Id = Uuid>,
+    S: SnapshotStore<Id = Uuid>,
 {
-    let ids = (0..config.entity_count)
-        .map(|n| n.to_string())
+    let ids = iter::repeat_with(Uuid::now_v7)
+        .take(config.entity_count)
         .collect::<Vec<_>>();
 
     println!("Spawning and sending a lot of commands ...");
@@ -29,16 +30,17 @@ where
     for id in ids.clone() {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
-        let counter = Counter::spawn(
-            id.clone(),
-            None,
-            NonZeroUsize::new(42).expect("42 is not zero"),
-            evt_log,
-            snapshot_store,
-            binarize::serde_json::SerdeJsonBinarize,
-        )
-        .await
-        .context("spawn counter entity")?;
+        let counter = Entity::new::<Increase>("counter", id, Counter::handle_evt)
+            .add_cmd::<Decrease>()
+            .spawn(
+                None,
+                NonZeroUsize::new(2).expect("2 is not zero"),
+                evt_log,
+                snapshot_store,
+                binarize::serde_json::SerdeJsonBinarize,
+            )
+            .await
+            .context("spawn counter entity")?;
 
         tasks.spawn(async move {
             for n in 0..config.evt_count / 2 {
@@ -46,19 +48,15 @@ where
                     println!("{id}: {} events persisted", n * 2);
                 }
                 counter
-                    .handle_cmd(Cmd::Inc(n as u64))
+                    .handle_cmd(Increase(n as u64))
                     .await
-                    .context("send/receive Inc command")
-                    .unwrap()
-                    .context("handle Inc command")
-                    .unwrap();
+                    .expect("send/receive Inc command")
+                    .expect("handle Inc command");
                 counter
-                    .handle_cmd(Cmd::Dec(n as u64))
+                    .handle_cmd(Decrease(n as u64))
                     .await
-                    .context("send/receive Dec command")
-                    .unwrap()
-                    .context("handle Dec command")
-                    .unwrap();
+                    .expect("send/receive Dec command")
+                    .expect("handle Dec command");
             }
         });
     }
@@ -79,16 +77,17 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
-            let _counter = Counter::spawn(
-                id,
-                None,
-                NonZeroUsize::new(42).expect("42 is not zero"),
-                evt_log,
-                snapshot_store,
-                binarize::serde_json::SerdeJsonBinarize,
-            )
-            .await
-            .unwrap();
+            let _ = Entity::new::<Increase>("counter", id, Counter::handle_evt)
+                .add_cmd::<Decrease>()
+                .spawn(
+                    None,
+                    NonZeroUsize::new(2).expect("2 is not zero"),
+                    evt_log,
+                    snapshot_store,
+                    binarize::serde_json::SerdeJsonBinarize,
+                )
+                .await
+                .expect("spawn counter entity");
         });
     }
     while tasks.join_next().await.is_some() {}

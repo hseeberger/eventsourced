@@ -1,67 +1,70 @@
 use anyhow::Result;
-use eventsourced::EventSourced;
+use eventsourced::Cmd;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug)]
-pub struct Counter;
+pub struct Increase(pub u64);
 
-impl EventSourced for Counter {
-    type Id = String;
-    type Cmd = Cmd;
-    type Evt = Evt;
-    type State = State;
-    type Error = Error;
+impl Cmd<Uuid, Evt, Counter> for Increase {
+    type Error = Overflow;
 
-    const TYPE_NAME: &'static str = "counter";
+    type Reply = u64;
 
-    fn handle_cmd(
-        _id: &Self::Id,
-        state: &Self::State,
-        cmd: Self::Cmd,
-    ) -> Result<Self::Evt, Self::Error> {
-        let value = state.value;
-
-        match cmd {
-            Cmd::Inc(inc) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
-            Cmd::Inc(inc) => Ok(Evt::Increased(inc)),
-
-            Cmd::Dec(dec) if dec > value => Err(Error::Underflow { value, dec }),
-            Cmd::Dec(dec) => Ok(Evt::Decreased(dec)),
+    fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        if u64::MAX - state.0 < self.0 {
+            Err(Overflow)
+        } else {
+            Ok(Evt::Increased(*id, self.0))
         }
     }
 
-    fn handle_evt(mut state: Self::State, evt: Self::Evt) -> Self::State {
-        match evt {
-            Evt::Increased(inc) => state.value += inc,
-            Evt::Decreased(dec) => state.value -= dec,
-        };
-        state
+    fn reply(state: &Counter) -> Self::Reply {
+        state.0
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cmd {
-    Inc(u64),
-    Dec(u64),
+#[derive(Debug)]
+pub struct Overflow;
+
+#[derive(Debug)]
+pub struct Decrease(pub u64);
+
+impl Cmd<Uuid, Evt, Counter> for Decrease {
+    type Error = Underflow;
+
+    type Reply = u64;
+
+    fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        if state.0 < self.0 {
+            Err(Underflow)
+        } else {
+            Ok(Evt::Decreased(*id, self.0))
+        }
+    }
+
+    fn reply(state: &Counter) -> Self::Reply {
+        state.0
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct Underflow;
+
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Evt {
-    Increased(u64),
-    Decreased(u64),
+    Increased(Uuid, u64),
+    Decreased(Uuid, u64),
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct State {
-    value: u64,
-}
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+pub struct Counter(u64);
 
-#[derive(Debug, Clone, Copy, Error)]
-pub enum Error {
-    #[error("Overflow: value={value}, increment={inc}")]
-    Overflow { value: u64, inc: u64 },
-
-    #[error("Underflow: value={value}, decrement={dec}")]
-    Underflow { value: u64, dec: u64 },
+impl Counter {
+    pub fn handle_evt(self, evt: Evt) -> Self {
+        match evt {
+            Evt::Increased(_, n) => Self(self.0 + n),
+            Evt::Decreased(_, n) => Self(self.0 - n),
+        }
+    }
 }

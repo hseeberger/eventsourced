@@ -12,17 +12,21 @@
 //! store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/)
 //! these are implemented in the respective crates.
 //!
-//! The [spawn](EventSourcedExt::spawn) function provides for creating event sourced entities,
-//! identifiable by an ID, for some event log and  some snapshot store. Conversion of events and
-//! snapshot state to and from bytes happens via the given [Binarize] implementation; for
-//! [prost](https://github.com/tokio-rs/prost) and
-//! [serde_json](https://github.com/serde-rs/json) these are already provided.
+//! The [Entity] struct represents event sourced entities, identifiable by a type name and ID. To
+//! create one, an event handler function and one or more commands – implementations of the `Cmd`
+//! trait – have to be given. `Cmd` defines a command handler function to either reject a command or
+//! return an event. An event gets persisted to the event log and then applied to the event handler
+//! to return the new state of the entity.
 //!
-//! Calling [spawn](EventSourcedExt::spawn) results in a cloneable [EntityRef] which can be used to
-//! pass commands to the spawned entity by invoking [handle_cmd](EntityRef::handle_cmd). Commands
-//! are handled by the command handler of the spawned entity. They can be rejected by returning an
-//! error. Valid commands produce an event which gets persisted to the [EvtLog] and then applied to
-//! the event handler of the respective entity. Snapshots can be taken to speed up future spawning.
+//! [Entity::spawn] puts the entity on the given event log and snapshot store, returning an
+//! [EntityRef] which can be cheaply cloned and used to pass commands to the entity. Conversion of
+//! events and snapshot state to and from bytes happens via the given [Binarize] implementation; for
+//! [prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json)
+//! these are already provided. Snapshots are taken after the configured number of processed events
+//! to speed up future spawning.
+//!
+//! [EntityRef::handle_cmd] either returns `Cmd::Error` for a rejected command or `Cmd::Reply` for
+//! an accepted one.
 //!
 //! Events can be queried from the event log by ID or by entity type. These queries can be used to
 //! build read side projections. There is early support for projections in the
@@ -37,13 +41,16 @@ mod util;
 pub use evt_log::*;
 pub use snapshot_store::*;
 
-use crate::{binarize::Binarize, util::StreamExt as EventSourcedStreamExt};
+use crate::{binarize::Binarize, util::StreamExt as ThisStreamExt};
 use error_ext::{BoxError, StdErrorExt};
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
-    error::Error as StdError,
+    any::{Any, TypeId},
+    collections::HashMap,
     fmt::Debug,
+    iter::once,
+    marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
 };
 use thiserror::Error;
@@ -53,81 +60,118 @@ use tokio::{
 };
 use tracing::{debug, error, instrument};
 
-/// Command and event handling for an event sourced entity.
-pub trait EventSourced {
-    /// Id type.
-    type Id: Debug + Send + 'static;
+type BoxedAny = Box<dyn Any + Send>;
+type BoxedCmdHandler<I, E, S> = Box<dyn Fn(BoxedAny, &I, &S) -> Result<E, BoxedAny> + Send>;
+type BoxedMakeReply<S> = Box<dyn Fn(&S) -> BoxedAny + Send + Sync>;
+type CmdHandlerMakeReply<I, E, S> = HashMap<TypeId, (BoxedCmdHandler<I, E, S>, BoxedMakeReply<S>)>;
 
-    /// Command type.
-    type Cmd: Debug + Send + Sync + 'static;
-
-    /// Event type.
-    type Evt: Debug + Send + Sync;
-
-    /// State type.
-    type State: Debug + Default + Send + Sync + 'static;
-
-    /// Error type for rejected (a.k.a. invalid) commands.
-    type Error: StdError + Send + Sync + 'static;
-
-    const TYPE_NAME: &'static str;
-
-    /// Command handler, returning the to be persisted event or an error.
-    fn handle_cmd(
-        id: &Self::Id,
-        state: &Self::State,
-        cmd: Self::Cmd,
-    ) -> Result<Self::Evt, Self::Error>;
-
-    /// Event handler.
-    fn handle_evt(state: Self::State, evt: Self::Evt) -> Self::State;
+/// An event sourced entity.
+pub struct Entity<I, E, S, EvtHandler, T, Tail> {
+    type_name: &'static str,
+    id: I,
+    evt_handler: EvtHandler,
+    cmd_handler_make_reply: CmdHandlerMakeReply<I, E, S>,
+    _e: PhantomData<E>,
+    _s: PhantomData<S>,
+    _t: PhantomData<T>,
+    _tail: PhantomData<Tail>,
 }
 
-/// Extension methods for types implementing [EventSourced].
-pub trait EventSourcedExt: Sized {
-    /// Spawns an event sourced entity and creates an [EntityRef] as a handle for it.
-    ///
-    /// First the given [SnapshotStore] is used to find and possibly load a snapshot. Then the
-    /// [EvtLog] is used to find the last sequence number and then to load any remaining events.
-    ///
-    /// Commands can be passed to the spawned entity by invoking `handle_cmd` on the returned
-    /// [EntityRef] which uses a buffered channel with the given size.
-    ///
-    /// Commands are handled by the command handler of the spawned entity. They can be rejected by
-    /// returning an error. Valid commands produce an event which gets persisted to the [EvtLog]
-    /// and then applied to the event handler of the respective entity. Snapshots can be taken
-    /// to speed up future spawning.
-    #[allow(async_fn_in_trait)]
-    #[allow(clippy::too_many_arguments)]
-    #[instrument(skip(evt_log, snapshot_store, binarize))]
-    async fn spawn<L, S, B>(
-        id: Self::Id,
+impl<I, E, S, EvtHandler> Entity<I, E, S, EvtHandler, (), ()> {
+    /// Create a new event sourced entity with the given type name, ID, event handler and command
+    /// `C`.
+    pub fn new<C>(
+        type_name: &'static str,
+        id: I,
+        evt_handler: EvtHandler,
+    ) -> Entity<I, E, S, EvtHandler, C, ()>
+    where
+        I: 'static,
+        E: 'static,
+        S: 'static,
+        C: Cmd<I, E, S>,
+    {
+        let type_id = TypeId::of::<C>();
+        let cmd_handler = boxed_cmd_handler::<I, E, S, C>();
+        let reply_handler = boxed_reply_handler::<I, E, S, C>();
+        let cmd_reply_handlers = HashMap::from_iter(once((type_id, (cmd_handler, reply_handler))));
+
+        Entity {
+            type_name,
+            id,
+            evt_handler,
+            cmd_handler_make_reply: cmd_reply_handlers,
+            _e: PhantomData,
+            _s: PhantomData,
+            _t: PhantomData,
+            _tail: PhantomData,
+        }
+    }
+}
+
+impl<I, E, S, EvtHandler, T, Tail> Entity<I, E, S, EvtHandler, T, Tail>
+where
+    I: Debug + Clone + Send + 'static,
+    E: Debug + Send + Sync + 'static,
+    S: Debug + Default + Send + Sync + 'static,
+    EvtHandler: Fn(S, E) -> S + Send + 'static,
+    T: Send + 'static,
+    Tail: Send + 'static,
+{
+    /// Add another command `C` to the event sourced entity.
+    pub fn add_cmd<C>(mut self) -> Entity<I, E, S, EvtHandler, C, Cmds<T, Tail>>
+    where
+        C: Cmd<I, E, S>,
+    {
+        let type_id = TypeId::of::<C>();
+        let cmd_handler = boxed_cmd_handler::<I, E, S, C>();
+        let reply_handler = boxed_reply_handler::<I, E, S, C>();
+        self.cmd_handler_make_reply
+            .insert(type_id, (cmd_handler, reply_handler));
+
+        Entity {
+            id: self.id,
+            type_name: self.type_name,
+            evt_handler: self.evt_handler,
+            cmd_handler_make_reply: self.cmd_handler_make_reply,
+            _e: PhantomData,
+            _s: PhantomData,
+            _t: PhantomData,
+            _tail: PhantomData,
+        }
+    }
+
+    /// Spawn this event sourced entity with the given settings, event log, snapshot store and
+    /// `Binarize` functions.
+    #[instrument(skip(self, evt_log, snapshot_store, binarize))]
+    pub async fn spawn<L, M, B>(
+        self,
         snapshot_after: Option<NonZeroU64>,
         cmd_buffer: NonZeroUsize,
         mut evt_log: L,
-        mut snapshot_store: S,
+        mut snapshot_store: M,
         binarize: B,
-    ) -> Result<EntityRef<Self>, SpawnError>
+    ) -> Result<EntityRef<I, E, S, T, Tail>, SpawnError>
     where
-        Self: EventSourced,
-        L: EvtLog<Id = Self::Id>,
-        S: SnapshotStore<Id = Self::Id>,
-        B: Binarize<Self::Evt, Self::State>,
+        L: EvtLog<Id = I>,
+        M: SnapshotStore<Id = I>,
+        B: Binarize<E, S>,
     {
         // Restore snapshot.
         let (snapshot_seq_no, state) = snapshot_store
-            .load::<Self::State, _, _>(&id, |bytes| binarize.state_from_bytes(bytes))
+            .load::<S, _, _>(&self.id, |bytes| binarize.state_from_bytes(bytes))
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(?id, seq_no, ?state, "restored snapshot");
+                debug!(id = ?self.id, seq_no, ?state, "restored snapshot");
                 (seq_no, state)
             })
             .unzip();
+        let mut state = state.unwrap_or_default();
 
         // Get and validate last sequence number.
         let mut last_seq_no = evt_log
-            .last_seq_no::<Self>(&id)
+            .last_seq_no(self.type_name, &self.id)
             .await
             .map_err(|error| SpawnError::LastNonZeroU64(error.into()))?;
         if last_seq_no < snapshot_seq_no {
@@ -135,16 +179,15 @@ pub trait EventSourcedExt: Sized {
         };
 
         // Replay latest events.
-        let mut state = state.unwrap_or_default();
         if snapshot_seq_no < last_seq_no {
-            let from_seq_no = snapshot_seq_no
+            let seq_no = snapshot_seq_no
                 .map(|n| n.saturating_add(1))
                 .unwrap_or(NonZeroU64::MIN);
             let to_seq_no = last_seq_no.unwrap(); // This is safe because of the above relation!
-            debug!(?id, from_seq_no, to_seq_no, "replaying evts");
+            debug!(id = ?self.id, seq_no, to_seq_no, "replaying evts");
 
             let evts = evt_log
-                .evts_by_id::<Self, _, _>(&id, from_seq_no, move |bytes| {
+                .evts_by_id::<E, _, _>(self.type_name, &self.id, seq_no, move |bytes| {
                     binarize.evt_from_bytes(bytes)
                 })
                 .await
@@ -159,68 +202,80 @@ pub trait EventSourcedExt: Sized {
                         .map(|&(seq_no, _)| seq_no >= to_seq_no)
                         .unwrap_or(true)
                 })
-                .try_fold(state, |state, (_, evt)| ok(Self::handle_evt(state, evt)))
+                .try_fold(state, |state, (_, evt)| ok((self.evt_handler)(state, evt)))
                 .await?;
 
-            debug!(?id, ?state, "replayed evts");
+            debug!(id = ?self.id, state = ?state, "replayed evts");
         }
 
         // Spawn handler loop.
         let (cmd_in, mut cmd_out) = mpsc::channel::<(
-            Self::Cmd,
-            oneshot::Sender<Result<(), Self::Error>>,
+            BoxedAny,
+            oneshot::Sender<Result<BoxedAny, BoxedAny>>,
         )>(cmd_buffer.get());
+        let id = self.id.clone();
         task::spawn({
             let mut evt_count = 0u64;
 
             async move {
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                    debug!(?id, ?cmd, "handling command");
+                    debug!(id = ?self.id, "handling cmd");
 
-                    match Self::handle_cmd(&id, &state, cmd) {
+                    let type_id = cmd.as_ref().type_id();
+                    let (cmd_handler, reply_handler) = self
+                        .cmd_handler_make_reply
+                        .get(&type_id)
+                        .expect("get cmd handler");
+                    let result = cmd_handler(cmd, &self.id, &state);
+                    match result {
                         Ok(evt) => {
-                            debug!(?id, ?evt, "persisting event");
+                            debug!(id = ?self.id, ?evt, "persisting event");
 
                             match evt_log
-                                .persist::<Self, _, _>(&evt, &id, last_seq_no, &|evt| {
-                                    binarize.evt_to_bytes(evt)
-                                })
+                                .persist::<E, _, _>(
+                                    self.type_name,
+                                    &self.id,
+                                    last_seq_no,
+                                    &evt,
+                                    &|evt| binarize.evt_to_bytes(evt),
+                                )
                                 .await
                             {
                                 Ok(seq_no) => {
-                                    debug!(?id, ?evt, seq_no, "persited event");
+                                    debug!(id = ?self.id, ?evt, seq_no, "persited event");
 
                                     last_seq_no = Some(seq_no);
-                                    state = Self::handle_evt(state, evt);
+                                    state = (self.evt_handler)(state, evt);
 
                                     evt_count += 1;
                                     if snapshot_after
                                         .map(|a| evt_count % a == 0)
                                         .unwrap_or_default()
                                     {
-                                        debug!(?id, seq_no, evt_count, "saving snapshot");
+                                        debug!(id = ?self.id, seq_no, evt_count, "saving snapshot");
 
                                         if let Err(error) = snapshot_store
-                                            .save(&id, seq_no, &state, &|state| {
+                                            .save(&self.id, seq_no, &state, &|state| {
                                                 binarize.state_to_bytes(state)
                                             })
                                             .await
                                         {
                                             error!(
                                                 error = error.as_chain(),
-                                                ?id,
+                                                id = ?self.id,
                                                 "cannot save snapshot"
                                             );
                                         };
                                     }
 
-                                    if result_sender.send(Ok(())).is_err() {
-                                        error!(?id, "cannot send command handler OK");
+                                    let reply = reply_handler(&state);
+                                    if result_sender.send(Ok(reply)).is_err() {
+                                        error!(id = ?self.id, "cannot send cmd reply");
                                     };
                                 }
 
                                 Err(error) => {
-                                    error!(error = error.as_chain(), ?id, "cannot persist event");
+                                    error!(error = error.as_chain(), id = ?self.id, "cannot persist event");
                                     // This is fatal, we must terminate the entity!
                                     break;
                                 }
@@ -229,114 +284,165 @@ pub trait EventSourcedExt: Sized {
 
                         Err(error) => {
                             if result_sender.send(Err(error)).is_err() {
-                                error!(?id, "cannot send command handler error");
+                                error!(id = ?self.id, "cannot send cmd error");
                             }
                         }
                     };
                 }
 
-                debug!(?id, "entity terminated");
+                debug!(id = ?self.id, "entity terminated");
             }
         });
 
-        Ok(EntityRef { cmd_in })
+        Ok(EntityRef {
+            cmd_in,
+            id,
+            _e: PhantomData,
+            _s: PhantomData,
+            _t: PhantomData,
+            _tail: PhantomData,
+        })
     }
 }
 
-/// Error from spawning an event sourced entity.
+/// Error for spawning an event sourced entity.
 #[derive(Debug, Error)]
 pub enum SpawnError {
-    /// A snapshot cannot be loaded from the snapshot store.
     #[error("cannot load snapshot from snapshot store")]
     LoadSnapshot(#[source] BoxError),
 
-    /// The last sequence number is less than the snapshot sequence number.
     #[error("last sequence number {0:?} less than snapshot sequence number {0:?}")]
     InvalidLastSeqNo(Option<NonZeroU64>, Option<NonZeroU64>),
 
-    /// The last seqence number cannot be obtained from the event log.
     #[error("cannot get last seqence number from event log")]
     LastNonZeroU64(#[source] BoxError),
 
-    /// Events by ID cannot be obtained from the event log.
     #[error("cannot get events by ID from event log")]
     EvtsById(#[source] BoxError),
 
-    /// The next event cannot be obtained from the event log.
     #[error("cannot get next event from event log")]
     NextEvt(#[source] BoxError),
 }
 
-impl<E> EventSourcedExt for E where E: EventSourced {}
-
-/// A handle for a spawned event sourced entity which can be used to invoke its command handler.
+/// A handle representing a spawned [Entity], which can be used to pass it commands implementing
+/// [Cmd].
 #[derive(Debug, Clone)]
-#[allow(clippy::type_complexity)]
-pub struct EntityRef<E>
-where
-    E: EventSourced,
-{
-    cmd_in: mpsc::Sender<(E::Cmd, oneshot::Sender<Result<(), E::Error>>)>,
+pub struct EntityRef<I, E, S, T, Tail> {
+    cmd_in: mpsc::Sender<(BoxedAny, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>,
+    id: I,
+    _e: PhantomData<E>,
+    _s: PhantomData<S>,
+    _t: PhantomData<T>,
+    _tail: PhantomData<Tail>,
 }
 
-impl<E> EntityRef<E>
+impl<I, E, S, T, Tail> EntityRef<I, E, S, T, Tail>
 where
-    E: EventSourced,
+    E: 'static,
 {
-    /// Invoke the command handler of the entity.
+    /// The ID of the represented [Entity].
+    pub fn id(&self) -> &I {
+        &self.id
+    }
+
+    /// Pass the given command to the represented [Entity].
     #[instrument(skip(self))]
-    pub async fn handle_cmd(&self, cmd: E::Cmd) -> Result<Result<(), E::Error>, HandleCmdError> {
+    pub async fn handle_cmd<C, X>(
+        &self,
+        cmd: C,
+    ) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
+    where
+        C: Cmd<I, E, S> + Debug + Send,
+        Cmds<T, Tail>: Contains<C, X>,
+    {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
-            .send((cmd, result_in))
+            .send((Box::new(cmd), result_in))
             .await
-            .map_err(|_| HandleCmdError("cannot send command".to_string()))?;
-        result_out
+            .map_err(|_| HandleCmdError("cannot send cmd".to_string()))?;
+        let result = result_out
             .await
-            .map_err(|_| HandleCmdError("cannot receive command handler result".to_string()))
+            .map_err(|_| HandleCmdError("cannot receive cmd handler result".to_string()))?;
+        let result = result
+            .map_err(|error| *error.downcast::<C::Error>().expect("downcast error"))
+            .map(|reply| *reply.downcast::<C::Reply>().expect("downcast reply"));
+        Ok(result)
     }
 }
 
-/// A command cannot be sent from an [EntityRef] to its entity or the result cannot be received
-/// from its entity.
+/// A command cannot be sent from an [EntityRef] to its [Entity] or the result cannot be received
+/// from its [Entity].
 #[derive(Debug, Error, Serialize, Deserialize)]
 #[error("{0}")]
 pub struct HandleCmdError(String);
 
+/// A command for an [Entity].
+pub trait Cmd<I, E, S>
+where
+    Self: 'static,
+{
+    /// The type for rejecting this command.
+    type Error: Send + 'static;
+
+    /// The type returned by the [reply](Cmd::reply) function.
+    type Reply: Send + 'static;
+
+    /// The command handler function, taking this command, and references to the ID and the state of
+    /// the [Entity], either rejecting this command via [Self::Error] or returning an event.
+    fn handle(self, id: &I, state: &S) -> Result<E, Self::Error>;
+
+    /// The reply function.
+    fn reply(state: &S) -> Self::Reply;
+}
+
+// Inspired by https://stackoverflow.com/questions/77845550/how-to-define-either-or-trait-bounds-in-rust/77845861#77845861.
+
+/// Helper for type magic.
+pub struct Cmds<T, Tail>(PhantomData<T>, Tail);
+
+/// Helper for type magic.
+pub trait Contains<T, X> {}
+
+/// Helper for type magic.
+pub struct Zero;
+
+impl<T, Tail> Contains<T, Zero> for Cmds<T, Tail> {}
+
+/// Helper for type magic.
+pub struct Next<N>(N);
+
+impl<T, T2, Tail, N> Contains<T, Next<N>> for Cmds<T2, Tail> where Tail: Contains<T, N> {}
+
+fn boxed_cmd_handler<I, E, S, C>() -> BoxedCmdHandler<I, E, S>
+where
+    C: Cmd<I, E, S>,
+{
+    Box::new(move |cmd, id, state| {
+        let cmd = *cmd.downcast::<C>().expect("downcast cmd");
+        C::handle(cmd, id, state).map_err(|error| {
+            let error: BoxedAny = Box::new(error);
+            error
+        })
+    })
+}
+
+fn boxed_reply_handler<I, E, S, C>() -> Box<dyn Fn(&S) -> BoxedAny + Send + Sync>
+where
+    C: Cmd<I, E, S>,
+    C::Reply: 'static,
+{
+    Box::new(move |state| Box::new(C::reply(state)))
+}
+
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
+    use assert_matches::assert_matches;
     use bytes::Bytes;
     use futures::{stream, Stream, StreamExt};
-    use std::{convert::Infallible, iter};
+    use std::{error::Error as StdError, iter};
     use tracing_test::traced_test;
     use uuid::Uuid;
-
-    #[derive(Debug)]
-    struct Simple;
-
-    impl EventSourced for Simple {
-        type Id = Uuid;
-        type Cmd = ();
-        type Evt = ();
-        type State = u64;
-        type Error = Infallible;
-
-        const TYPE_NAME: &'static str = "simple";
-
-        fn handle_cmd(
-            _id: &Self::Id,
-            _state: &Self::State,
-            _cmd: Self::Cmd,
-        ) -> Result<Self::Evt, Self::Error> {
-            Ok(())
-        }
-
-        fn handle_evt(mut state: Self::State, _evt: Self::Evt) -> Self::State {
-            state += 1;
-            state
-        }
-    }
 
     #[derive(Debug, Clone)]
     struct TestEvtLog;
@@ -347,44 +453,48 @@ mod tests {
 
         async fn persist<E, ToBytes, ToBytesError>(
             &mut self,
-            _evt: &E::Evt,
+            _type_name: &'static str,
             _id: &Self::Id,
             last_seq_no: Option<NonZeroU64>,
+            _evt: &E,
             _to_bytes: &ToBytes,
         ) -> Result<NonZeroU64, Self::Error>
         where
-            E: EventSourced,
-            ToBytes: Fn(&E::Evt) -> Result<Bytes, ToBytesError> + Sync,
+            E: Sync,
+            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
         {
             let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
             Ok(seq_no)
         }
 
-        async fn last_seq_no<E>(
+        async fn last_seq_no(
             &self,
-            _entity_id: &Self::Id,
-        ) -> Result<Option<NonZeroU64>, Self::Error>
-        where
-            E: EventSourced,
-        {
+            _type_name: &'static str,
+            _id: &Self::Id,
+        ) -> Result<Option<NonZeroU64>, Self::Error> {
             Ok(Some(42.try_into().unwrap()))
         }
 
         async fn evts_by_id<E, FromBytes, FromBytesError>(
             &self,
-            _id: &Self::Id,
-            seq_no: NonZeroU64,
-            evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
+            _type_name: &'static str,
+            id: &Self::Id,
+            from_seq_no: NonZeroU64,
+            from_bytes: FromBytes,
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
-            E: EventSourced,
-            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send + Sync,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
             FromBytesError: StdError + Send + Sync + 'static,
         {
-            let successors = iter::successors(Some(seq_no), |n| n.checked_add(1));
+            let successors = iter::successors(Some(from_seq_no), |n| n.checked_add(1));
             let evts = stream::iter(successors).map(move |n| {
-                let evt = evt_from_bytes(serde_json::to_vec(&()).unwrap().into()).unwrap();
+                let evt = from_bytes(
+                    serde_json::to_vec(&Evt::Increased(id.to_owned()))
+                        .unwrap()
+                        .into(),
+                )
+                .unwrap();
                 Ok((n, evt))
             });
 
@@ -393,12 +503,13 @@ mod tests {
 
         async fn evts_by_type<E, FromBytes, FromBytesError>(
             &self,
+            _type_name: &'static str,
             _seq_no: NonZeroU64,
-            _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
+            _from_bytes: FromBytes,
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
-            E: EventSourced,
-            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send,
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             Ok(stream::empty())
@@ -453,25 +564,97 @@ mod tests {
     #[error("TestSnapshotStoreError")]
     struct TestSnapshotStoreError;
 
+    #[derive(Debug)]
+    struct Increase(u64);
+
+    impl Cmd<Uuid, Evt, Counter> for Increase {
+        type Error = Overflow;
+
+        type Reply = u64;
+
+        fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+            if u64::MAX - state.0 < self.0 {
+                Err(Overflow)
+            } else {
+                Ok(Evt::Increased(*id))
+            }
+        }
+
+        fn reply(state: &Counter) -> Self::Reply {
+            state.0
+        }
+    }
+
+    #[derive(Debug)]
+    struct Overflow;
+
+    #[derive(Debug)]
+    struct Decrease(u64);
+
+    impl Cmd<Uuid, Evt, Counter> for Decrease {
+        type Error = Underflow;
+
+        type Reply = Counter;
+
+        fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+            if state.0 < self.0 {
+                Err(Underflow)
+            } else {
+                Ok(Evt::Decreased(*id))
+            }
+        }
+
+        fn reply(state: &Counter) -> Self::Reply {
+            *state
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Underflow;
+
+    #[derive(Debug, Serialize, Deserialize)]
+    enum Evt {
+        Increased(Uuid),
+        Decreased(Uuid),
+    }
+
+    #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+    struct Counter(u64);
+
+    impl Counter {
+        fn handle_evt(self, evt: Evt) -> Self {
+            match evt {
+                Evt::Increased(_) => Self(self.0 + 1),
+                Evt::Decreased(_) => Self(self.0 - 1),
+            }
+        }
+    }
+
     #[tokio::test]
     #[traced_test]
-    async fn test_spawn_handle_cmd() -> Result<(), BoxError> {
+    async fn test() -> Result<(), BoxError> {
         let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity = Simple::spawn(
-            Uuid::from_u128(1),
-            None,
-            unsafe { NonZeroUsize::new_unchecked(1) },
-            evt_log,
-            snapshot_store,
-            binarize::serde_json::SerdeJsonBinarize,
-        )
-        .await?;
+        let entity = Entity::new::<Increase>("counter", Uuid::from_u128(1), Counter::handle_evt)
+            .add_cmd::<Decrease>()
+            .spawn(
+                None,
+                unsafe { NonZeroUsize::new_unchecked(1) },
+                evt_log,
+                snapshot_store,
+                binarize::serde_json::SerdeJsonBinarize,
+            )
+            .await?;
 
-        entity.handle_cmd(()).await??;
+        let reply = entity.handle_cmd(Increase(1)).await?;
+        assert_matches!(reply, Ok(43));
+        let reply = entity.handle_cmd(Decrease(100)).await?;
+        assert_matches!(reply, Err(error) if error == Underflow);
+        let reply = entity.handle_cmd(Decrease(1)).await?;
+        assert_matches!(reply, Ok(Counter(42)));
 
-        assert!(logs_contain("state=42"));
+        assert!(logs_contain("state=Counter(42)"));
 
         Ok(())
     }

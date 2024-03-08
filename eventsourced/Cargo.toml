@@ -28,7 +28,8 @@ tracing       = { workspace = true }
 trait-variant = { workspace = true }
 
 [dev-dependencies]
-async-stream = { workspace = true }
-tokio        = { workspace = true, features = [ "macros", "rt-multi-thread", "time" ] }
-tracing-test = { workspace = true }
-uuid         = { workspace = true }
+assert_matches = { workspace = true }
+async-stream   = { workspace = true }
+tokio          = { workspace = true, features = [ "macros", "rt-multi-thread", "time" ] }
+tracing-test   = { workspace = true }
+uuid           = { workspace = true }

@@ -3,7 +3,7 @@ members = [
   "eventsourced",
   "eventsourced-nats",
   "eventsourced-postgres",
-  "eventsourced-projection",
+  # "eventsourced-projection",
   "examples/counter",
   "examples/counter-nats",
   "examples/counter-postgres",
@@ -19,6 +19,7 @@ repository = "https://github.com/hseeberger/eventsourced"
 
 [workspace.dependencies]
 anyhow                 = { version = "1.0" }
+assert_matches         = { version = "1.5" }
 async-nats             = { version = "0.34" }
 async-stream           = { version = "0.3" }
 bb8-postgres           = { version = "0.8" }
