@@ -124,6 +124,12 @@ where
 
     /// Spawn this event sourced entity with the given settings, event log, snapshot store and
     /// `Binarize` functions.
+    ///
+    /// The resulting type will look like the following example, where `Uuid` is used as ID type,
+    /// `Increase` and `Decrease` are registered as `Cmd`s in that order, `Evt` is the event type
+    /// and `Counter` is the state type:
+    ///
+    /// `EntityRef<Uuid, Coprod!(Decrease, Increase), Evt, Counter>`
     #[instrument(skip(self, evt_log, snapshot_store, binarize))]
     pub async fn spawn<L, M, B>(
         self,
@@ -539,17 +545,18 @@ mod tests {
         let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity = Entity::new("counter", Uuid::from_u128(1))
-            .add_cmd::<Increase>()
-            .add_cmd::<Decrease>()
-            .spawn(
-                None,
-                unsafe { NonZeroUsize::new_unchecked(1) },
-                evt_log,
-                snapshot_store,
-                binarize::serde_json::SerdeJsonBinarize,
-            )
-            .await?;
+        let entity: EntityRef<Uuid, Coprod!(Decrease, Increase), Evt, Counter> =
+            Entity::new("counter", Uuid::from_u128(1))
+                .add_cmd::<Increase>()
+                .add_cmd::<Decrease>()
+                .spawn(
+                    None,
+                    unsafe { NonZeroUsize::new_unchecked(1) },
+                    evt_log,
+                    snapshot_store,
+                    binarize::serde_json::SerdeJsonBinarize,
+                )
+                .await?;
 
         let reply = entity.handle_cmd(Increase(1)).await?;
         assert_matches!(reply, Ok(43));
