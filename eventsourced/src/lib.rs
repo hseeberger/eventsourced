@@ -44,7 +44,10 @@ pub use snapshot_store::*;
 
 use crate::{binarize::Binarize, util::StreamExt as ThisStreamExt};
 use error_ext::{BoxError, StdErrorExt};
-use frunk::{coproduct::CoproductSelector, Coprod};
+use frunk::{
+    coproduct::{CNil, CoproductSelector},
+    Coprod,
+};
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -71,7 +74,7 @@ where
     Self: EventSourced + Sized,
 {
     /// Create a new event sourced entity with the given type name, ID and this [EventSourced].
-    fn entity(self, type_name: &'static str, id: Self::Id) -> EventSourcedEntity<Self, ()> {
+    fn entity(self, type_name: &'static str, id: Self::Id) -> EventSourcedEntity<Self, CNil> {
         EventSourcedEntity {
             e: self,
             type_name,
@@ -631,7 +634,7 @@ mod tests {
         let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity = Counter::default()
+        let entity: EntityRef<Counter, Coprod!(Decrease, Increase)> = Counter::default()
             .entity("counter", Uuid::from_u128(1))
             .cmd::<Increase>()
             .cmd::<Decrease>()
