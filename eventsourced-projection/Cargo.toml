@@ -1,7 +1,7 @@
 [package]
 name          = "eventsourced-projection"
 description   = "Projections for EventSourced."
-version       = "0.3.5"
+version       = "0.3.6"
 readme        = "README.md"
 edition       = { workspace = true }
 authors       = { workspace = true }
@@ -11,7 +11,7 @@ repository    = { workspace = true }
 documentation = "https://docs.rs/eventsourced-nats/latest/eventsourced-projection"
 
 [dependencies]
-eventsourced  = { path = "../eventsourced", version = "0.20.0", features = [ "serde_json" ] }
+eventsourced  = { path = "../eventsourced", version = "0.20.1", features = [ "serde_json" ] }
 bytes         = { workspace = true }
 error-ext     = { workspace = true }
 futures       = { workspace = true }
