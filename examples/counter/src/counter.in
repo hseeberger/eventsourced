@@ -55,8 +55,8 @@ pub enum Evt {
 #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Counter(u64);
 
-impl Counter {
-    pub fn handle_evt(self, evt: Evt) -> Self {
+impl State<Evt> for Counter {
+    fn handle_evt(self, evt: Evt) -> Self {
         match evt {
             Evt::Increased(_, n) => Self(self.0 + n),
             Evt::Decreased(_, n) => Self(self.0 - n),

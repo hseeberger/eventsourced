@@ -1,6 +1,6 @@
 pub mod counter;
 
-use crate::counter::{Counter, Decrease, Increase};
+use crate::counter::{Decrease, Increase};
 use anyhow::{Context, Result};
 use eventsourced::{binarize, Entity, EvtLog, SnapshotStore};
 use serde::Deserialize;
@@ -30,7 +30,7 @@ where
     for id in ids.clone() {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
-        let counter = Entity::new("counter", id, Counter::handle_evt)
+        let counter = Entity::new("counter", id)
             .add_cmd::<Increase>()
             .add_cmd::<Decrease>()
             .spawn(
@@ -78,7 +78,7 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
-            let _ = Entity::new("counter", id, Counter::handle_evt)
+            let _ = Entity::new("counter", id)
                 .add_cmd::<Increase>()
                 .add_cmd::<Decrease>()
                 .spawn(

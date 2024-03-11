@@ -66,23 +66,18 @@ type BoxedMakeReply<S> = Box<dyn Fn(&S) -> BoxedAny + Send + Sync>;
 type CmdHandlerMakeReply<I, E, S> = HashMap<TypeId, (BoxedCmdHandler<I, E, S>, BoxedMakeReply<S>)>;
 
 /// An event sourced entity.
-pub struct Entity<I, T, E, S, EvtHandler> {
+pub struct Entity<I, T, E, S> {
     type_name: &'static str,
     id: I,
-    evt_handler: EvtHandler,
     cmd_handler_make_reply: CmdHandlerMakeReply<I, E, S>,
     _t: PhantomData<T>,
     _e: PhantomData<E>,
     _s: PhantomData<S>,
 }
 
-impl<I, E, S, EvtHandler> Entity<I, (), E, S, EvtHandler> {
+impl<I, E, S> Entity<I, (), E, S> {
     /// Create a new event sourced entity with the given type name, ID and event handler.
-    pub fn new(
-        type_name: &'static str,
-        id: I,
-        evt_handler: EvtHandler,
-    ) -> Entity<I, Coprod!(), E, S, EvtHandler>
+    pub fn new(type_name: &'static str, id: I) -> Entity<I, Coprod!(), E, S>
     where
         I: 'static,
         E: 'static,
@@ -91,7 +86,6 @@ impl<I, E, S, EvtHandler> Entity<I, (), E, S, EvtHandler> {
         Entity {
             type_name,
             id,
-            evt_handler,
             cmd_handler_make_reply: HashMap::new(),
             _t: PhantomData,
             _e: PhantomData,
@@ -100,16 +94,15 @@ impl<I, E, S, EvtHandler> Entity<I, (), E, S, EvtHandler> {
     }
 }
 
-impl<I, T, E, S, EvtHandler> Entity<I, T, E, S, EvtHandler>
+impl<I, T, E, S> Entity<I, T, E, S>
 where
     I: Debug + Clone + Send + 'static,
     E: Debug + Send + Sync + 'static,
-    S: Debug + Default + Send + Sync + 'static,
-    EvtHandler: Fn(S, E) -> S + Send + 'static,
+    S: State<E> + Debug + Default + Send + Sync + 'static,
     T: Send + 'static,
 {
     /// Add another command `C` to the event sourced entity.
-    pub fn add_cmd<C>(mut self) -> Entity<I, Coprod!(C, ...T), E, S, EvtHandler>
+    pub fn add_cmd<C>(mut self) -> Entity<I, Coprod!(C, ...T), E, S>
     where
         C: Cmd<I, E, S>,
     {
@@ -122,7 +115,6 @@ where
         Entity {
             id: self.id,
             type_name: self.type_name,
-            evt_handler: self.evt_handler,
             cmd_handler_make_reply: self.cmd_handler_make_reply,
             _t: PhantomData,
             _e: PhantomData,
@@ -191,7 +183,7 @@ where
                         .map(|&(seq_no, _)| seq_no >= to_seq_no)
                         .unwrap_or(true)
                 })
-                .try_fold(state, |state, (_, evt)| ok((self.evt_handler)(state, evt)))
+                .try_fold(state, |state, (_, evt)| ok(state.handle_evt(evt)))
                 .await?;
 
             debug!(id = ?self.id, state = ?state, "replayed evts");
@@ -234,7 +226,7 @@ where
                                     debug!(id = ?self.id, ?evt, seq_no, "persited event");
 
                                     last_seq_no = Some(seq_no);
-                                    state = (self.evt_handler)(state, evt);
+                                    state = state.handle_evt(evt);
 
                                     evt_count += 1;
                                     if snapshot_after
@@ -312,6 +304,31 @@ pub enum SpawnError {
     NextEvt(#[source] BoxError),
 }
 
+/// A command and its handling for an [Entity].
+pub trait Cmd<I, E, S>
+where
+    Self: 'static,
+{
+    /// The type for rejecting this command.
+    type Error: Send + 'static;
+
+    /// The type returned by the [reply](Cmd::reply) function.
+    type Reply: Send + 'static;
+
+    /// The command handler function, taking this command, and references to the ID and the state of
+    /// the [Entity], either rejecting this command via [Self::Error] or returning an event.
+    fn handle(self, id: &I, state: &S) -> Result<E, Self::Error>;
+
+    /// The reply function.
+    fn reply(state: &S) -> Self::Reply;
+}
+
+/// State and event handling for an [Entity].
+pub trait State<E> {
+    /// Event handler.
+    fn handle_evt(self, evt: E) -> Self;
+}
+
 /// A handle representing a spawned [Entity], which can be used to pass it commands implementing
 /// [Cmd].
 #[derive(Debug, Clone)]
@@ -362,25 +379,6 @@ where
 #[derive(Debug, Error, Serialize, Deserialize)]
 #[error("{0}")]
 pub struct HandleCmdError(String);
-
-/// A command for an [Entity].
-pub trait Cmd<I, E, S>
-where
-    Self: 'static,
-{
-    /// The type for rejecting this command.
-    type Error: Send + 'static;
-
-    /// The type returned by the [reply](Cmd::reply) function.
-    type Reply: Send + 'static;
-
-    /// The command handler function, taking this command, and references to the ID and the state of
-    /// the [Entity], either rejecting this command via [Self::Error] or returning an event.
-    fn handle(self, id: &I, state: &S) -> Result<E, Self::Error>;
-
-    /// The reply function.
-    fn reply(state: &S) -> Self::Reply;
-}
 
 fn boxed_cmd_handler<I, C, E, S>() -> BoxedCmdHandler<I, E, S>
 where
@@ -541,7 +539,7 @@ mod tests {
         let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity = Entity::new("counter", Uuid::from_u128(1), Counter::handle_evt)
+        let entity = Entity::new("counter", Uuid::from_u128(1))
             .add_cmd::<Increase>()
             .add_cmd::<Decrease>()
             .spawn(

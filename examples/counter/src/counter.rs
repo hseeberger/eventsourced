@@ -1,4 +1,4 @@
-use eventsourced::Cmd;
+use eventsourced::{Cmd, State};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
