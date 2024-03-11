@@ -32,11 +32,12 @@ pub mod binarize;
 
 mod evt_log;
 mod snapshot_store;
+mod util;
 
 pub use evt_log::*;
 pub use snapshot_store::*;
 
-use crate::binarize::Binarize;
+use crate::{binarize::Binarize, util::StreamExt as EventSourcedStreamExt};
 use error_ext::{BoxError, StdErrorExt};
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -151,7 +152,13 @@ pub trait EventSourcedExt: Sized {
 
             state = evts
                 .map_err(|error| SpawnError::NextEvt(error.into()))
-                .try_take_while(|(seq_no, _)| ok(*seq_no <= to_seq_no))
+                .take_until_predicate(move |result| {
+                    result
+                        .as_ref()
+                        .ok()
+                        .map(|&(seq_no, _)| seq_no >= to_seq_no)
+                        .unwrap_or(true)
+                })
                 .try_fold(state, |state, (_, evt)| ok(Self::handle_evt(state, evt)))
                 .await?;
 
