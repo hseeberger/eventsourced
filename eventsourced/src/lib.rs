@@ -457,6 +457,7 @@ mod tests {
             from_bytes: FromBytes,
         ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
+            E: Send,
             FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
             FromBytesError: StdError + Send + Sync + 'static,
         {
