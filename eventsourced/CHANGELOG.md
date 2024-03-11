@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.20.0...eventsourced-v0.20.1) - 2024-03-11
+
+### Fixed
+- hanging evts_by_id stream on replaying events ([#193](https://github.com/hseeberger/eventsourced/pull/193))
+
 ## [0.20.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.19.0...eventsourced-v0.20.0) - 2024-02-19
 
 ### Other
