@@ -30,7 +30,8 @@ where
     for id in ids.clone() {
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
-        let counter = Entity::new::<Increase>("counter", id, Counter::handle_evt)
+        let counter = Entity::new("counter", id, Counter::handle_evt)
+            .add_cmd::<Increase>()
             .add_cmd::<Decrease>()
             .spawn(
                 None,
@@ -77,7 +78,8 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
-            let _ = Entity::new::<Increase>("counter", id, Counter::handle_evt)
+            let _ = Entity::new("counter", id, Counter::handle_evt)
+                .add_cmd::<Increase>()
                 .add_cmd::<Decrease>()
                 .spawn(
                     None,

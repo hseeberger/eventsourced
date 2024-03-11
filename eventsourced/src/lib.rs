@@ -43,13 +43,13 @@ pub use snapshot_store::*;
 
 use crate::{binarize::Binarize, util::StreamExt as ThisStreamExt};
 use error_ext::{BoxError, StdErrorExt};
+use frunk::{coproduct::CoproductSelector, Coprod};
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
     fmt::Debug,
-    iter::once,
     marker::PhantomData,
     num::{NonZeroU64, NonZeroUsize},
 };
@@ -66,66 +66,56 @@ type BoxedMakeReply<S> = Box<dyn Fn(&S) -> BoxedAny + Send + Sync>;
 type CmdHandlerMakeReply<I, E, S> = HashMap<TypeId, (BoxedCmdHandler<I, E, S>, BoxedMakeReply<S>)>;
 
 /// An event sourced entity.
-pub struct Entity<I, E, S, EvtHandler, T, Tail> {
+pub struct Entity<I, T, E, S, EvtHandler> {
     type_name: &'static str,
     id: I,
     evt_handler: EvtHandler,
     cmd_handler_make_reply: CmdHandlerMakeReply<I, E, S>,
+    _t: PhantomData<T>,
     _e: PhantomData<E>,
     _s: PhantomData<S>,
-    _t: PhantomData<T>,
-    _tail: PhantomData<Tail>,
 }
 
-impl<I, E, S, EvtHandler> Entity<I, E, S, EvtHandler, (), ()> {
-    /// Create a new event sourced entity with the given type name, ID, event handler and command
-    /// `C`.
-    pub fn new<C>(
+impl<I, E, S, EvtHandler> Entity<I, (), E, S, EvtHandler> {
+    /// Create a new event sourced entity with the given type name, ID and event handler.
+    pub fn new(
         type_name: &'static str,
         id: I,
         evt_handler: EvtHandler,
-    ) -> Entity<I, E, S, EvtHandler, C, ()>
+    ) -> Entity<I, Coprod!(), E, S, EvtHandler>
     where
         I: 'static,
         E: 'static,
         S: 'static,
-        C: Cmd<I, E, S>,
     {
-        let type_id = TypeId::of::<C>();
-        let cmd_handler = boxed_cmd_handler::<I, E, S, C>();
-        let reply_handler = boxed_reply_handler::<I, E, S, C>();
-        let cmd_reply_handlers = HashMap::from_iter(once((type_id, (cmd_handler, reply_handler))));
-
         Entity {
             type_name,
             id,
             evt_handler,
-            cmd_handler_make_reply: cmd_reply_handlers,
+            cmd_handler_make_reply: HashMap::new(),
+            _t: PhantomData,
             _e: PhantomData,
             _s: PhantomData,
-            _t: PhantomData,
-            _tail: PhantomData,
         }
     }
 }
 
-impl<I, E, S, EvtHandler, T, Tail> Entity<I, E, S, EvtHandler, T, Tail>
+impl<I, T, E, S, EvtHandler> Entity<I, T, E, S, EvtHandler>
 where
     I: Debug + Clone + Send + 'static,
     E: Debug + Send + Sync + 'static,
     S: Debug + Default + Send + Sync + 'static,
     EvtHandler: Fn(S, E) -> S + Send + 'static,
     T: Send + 'static,
-    Tail: Send + 'static,
 {
     /// Add another command `C` to the event sourced entity.
-    pub fn add_cmd<C>(mut self) -> Entity<I, E, S, EvtHandler, C, Cmds<T, Tail>>
+    pub fn add_cmd<C>(mut self) -> Entity<I, Coprod!(C, ...T), E, S, EvtHandler>
     where
         C: Cmd<I, E, S>,
     {
         let type_id = TypeId::of::<C>();
-        let cmd_handler = boxed_cmd_handler::<I, E, S, C>();
-        let reply_handler = boxed_reply_handler::<I, E, S, C>();
+        let cmd_handler = boxed_cmd_handler::<I, C, E, S>();
+        let reply_handler = boxed_reply_handler::<I, C, E, S>();
         self.cmd_handler_make_reply
             .insert(type_id, (cmd_handler, reply_handler));
 
@@ -134,10 +124,9 @@ where
             type_name: self.type_name,
             evt_handler: self.evt_handler,
             cmd_handler_make_reply: self.cmd_handler_make_reply,
+            _t: PhantomData,
             _e: PhantomData,
             _s: PhantomData,
-            _t: PhantomData,
-            _tail: PhantomData,
         }
     }
 
@@ -151,7 +140,7 @@ where
         mut evt_log: L,
         mut snapshot_store: M,
         binarize: B,
-    ) -> Result<EntityRef<I, E, S, T, Tail>, SpawnError>
+    ) -> Result<EntityRef<I, T, E, S>, SpawnError>
     where
         L: EvtLog<Id = I>,
         M: SnapshotStore<Id = I>,
@@ -297,10 +286,9 @@ where
         Ok(EntityRef {
             cmd_in,
             id,
+            _t: PhantomData,
             _e: PhantomData,
             _s: PhantomData,
-            _t: PhantomData,
-            _tail: PhantomData,
         })
     }
 }
@@ -327,16 +315,15 @@ pub enum SpawnError {
 /// A handle representing a spawned [Entity], which can be used to pass it commands implementing
 /// [Cmd].
 #[derive(Debug, Clone)]
-pub struct EntityRef<I, E, S, T, Tail> {
+pub struct EntityRef<I, T, E, S> {
     cmd_in: mpsc::Sender<(BoxedAny, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>,
     id: I,
+    _t: PhantomData<T>,
     _e: PhantomData<E>,
     _s: PhantomData<S>,
-    _t: PhantomData<T>,
-    _tail: PhantomData<Tail>,
 }
 
-impl<I, E, S, T, Tail> EntityRef<I, E, S, T, Tail>
+impl<I, T, E, S> EntityRef<I, T, E, S>
 where
     E: 'static,
 {
@@ -353,7 +340,7 @@ where
     ) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
     where
         C: Cmd<I, E, S> + Debug + Send,
-        Cmds<T, Tail>: Contains<C, X>,
+        T: CoproductSelector<C, X>,
     {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
@@ -395,25 +382,7 @@ where
     fn reply(state: &S) -> Self::Reply;
 }
 
-// Inspired by https://stackoverflow.com/questions/77845550/how-to-define-either-or-trait-bounds-in-rust/77845861#77845861.
-
-/// Helper for type magic.
-pub struct Cmds<T, Tail>(PhantomData<T>, Tail);
-
-/// Helper for type magic.
-pub trait Contains<T, X> {}
-
-/// Helper for type magic.
-pub struct Zero;
-
-impl<T, Tail> Contains<T, Zero> for Cmds<T, Tail> {}
-
-/// Helper for type magic.
-pub struct Next<N>(N);
-
-impl<T, T2, Tail, N> Contains<T, Next<N>> for Cmds<T2, Tail> where Tail: Contains<T, N> {}
-
-fn boxed_cmd_handler<I, E, S, C>() -> BoxedCmdHandler<I, E, S>
+fn boxed_cmd_handler<I, C, E, S>() -> BoxedCmdHandler<I, E, S>
 where
     C: Cmd<I, E, S>,
 {
@@ -426,7 +395,7 @@ where
     })
 }
 
-fn boxed_reply_handler<I, E, S, C>() -> Box<dyn Fn(&S) -> BoxedAny + Send + Sync>
+fn boxed_reply_handler<I, C, E, S>() -> Box<dyn Fn(&S) -> BoxedAny + Send + Sync>
 where
     C: Cmd<I, E, S>,
     C::Reply: 'static,
@@ -490,7 +459,7 @@ mod tests {
             let successors = iter::successors(Some(from_seq_no), |n| n.checked_add(1));
             let evts = stream::iter(successors).map(move |n| {
                 let evt = from_bytes(
-                    serde_json::to_vec(&Evt::Increased(id.to_owned()))
+                    serde_json::to_vec(&Evt::Increased(id.to_owned(), 1))
                         .unwrap()
                         .into(),
                 )
@@ -564,71 +533,7 @@ mod tests {
     #[error("TestSnapshotStoreError")]
     struct TestSnapshotStoreError;
 
-    #[derive(Debug)]
-    struct Increase(u64);
-
-    impl Cmd<Uuid, Evt, Counter> for Increase {
-        type Error = Overflow;
-
-        type Reply = u64;
-
-        fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
-            if u64::MAX - state.0 < self.0 {
-                Err(Overflow)
-            } else {
-                Ok(Evt::Increased(*id))
-            }
-        }
-
-        fn reply(state: &Counter) -> Self::Reply {
-            state.0
-        }
-    }
-
-    #[derive(Debug)]
-    struct Overflow;
-
-    #[derive(Debug)]
-    struct Decrease(u64);
-
-    impl Cmd<Uuid, Evt, Counter> for Decrease {
-        type Error = Underflow;
-
-        type Reply = Counter;
-
-        fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
-            if state.0 < self.0 {
-                Err(Underflow)
-            } else {
-                Ok(Evt::Decreased(*id))
-            }
-        }
-
-        fn reply(state: &Counter) -> Self::Reply {
-            *state
-        }
-    }
-
-    #[derive(Debug, PartialEq, Eq)]
-    struct Underflow;
-
-    #[derive(Debug, Serialize, Deserialize)]
-    enum Evt {
-        Increased(Uuid),
-        Decreased(Uuid),
-    }
-
-    #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
-    struct Counter(u64);
-
-    impl Counter {
-        fn handle_evt(self, evt: Evt) -> Self {
-            match evt {
-                Evt::Increased(_) => Self(self.0 + 1),
-                Evt::Decreased(_) => Self(self.0 - 1),
-            }
-        }
-    }
+    include!("../../examples/counter/src/counter.in");
 
     #[tokio::test]
     #[traced_test]
@@ -636,7 +541,8 @@ mod tests {
         let evt_log = TestEvtLog;
         let snapshot_store = TestSnapshotStore;
 
-        let entity = Entity::new::<Increase>("counter", Uuid::from_u128(1), Counter::handle_evt)
+        let entity = Entity::new("counter", Uuid::from_u128(1), Counter::handle_evt)
+            .add_cmd::<Increase>()
             .add_cmd::<Decrease>()
             .spawn(
                 None,
@@ -652,7 +558,7 @@ mod tests {
         let reply = entity.handle_cmd(Decrease(100)).await?;
         assert_matches!(reply, Err(error) if error == Underflow);
         let reply = entity.handle_cmd(Decrease(1)).await?;
-        assert_matches!(reply, Ok(Counter(42)));
+        assert_matches!(reply, Ok(42));
 
         assert!(logs_contain("state=Counter(42)"));
 
