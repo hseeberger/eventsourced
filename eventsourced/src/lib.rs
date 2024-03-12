@@ -66,10 +66,10 @@ use tracing::{debug, error, instrument};
 
 type BoxedAny = Box<dyn Any + Send>;
 type BoxedHandleCmd<E> = Box<
-    dyn Fn(BoxedAny, &<E as EventSourced>::Id, &E) -> Result<<E as EventSourced>::Evt, BoxedAny>
+    dyn Fn(&BoxedAny, &<E as EventSourced>::Id, &E) -> Result<<E as EventSourced>::Evt, BoxedAny>
         + Send,
 >;
-type BoxedReply<E> = Box<dyn Fn(&E) -> BoxedAny + Send + Sync>;
+type BoxedReply<E> = Box<dyn Fn(BoxedAny, &E) -> BoxedAny + Send + Sync>;
 type BoxedCmdFns<E> = HashMap<TypeId, (BoxedHandleCmd<E>, BoxedReply<E>)>;
 
 /// The state of an event sourced entity as well as its event handling (which transforms the state).
@@ -99,11 +99,11 @@ where
     /// The command handler, taking this command, and references to the ID and the state of
     /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
     /// event.
-    fn handle_cmd(self, id: &E::Id, state: &E) -> Result<E::Evt, Self::Error>;
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, Self::Error>;
 
     /// The reply function, which is applied if the command handler has returned an event (as
     /// opposed to a rejection) and after that has been persisted successfully.
-    fn reply(state: &E) -> Self::Reply;
+    fn reply(self, state: &E) -> Self::Reply;
 }
 
 /// A handle representing a spawned [EventSourced] entity, which can be used to pass it commands
@@ -303,7 +303,7 @@ where
                     let type_id = cmd.as_ref().type_id();
                     let (handle_cmd_fn, reply_fn) =
                         self.cmd_fns.get(&type_id).expect("get cmd handler");
-                    let result = handle_cmd_fn(cmd, &self.id, &state);
+                    let result = handle_cmd_fn(&cmd, &self.id, &state);
                     match result {
                         Ok(evt) => {
                             debug!(id = ?self.id, ?evt, "persisting event");
@@ -345,7 +345,7 @@ where
                                         };
                                     }
 
-                                    let reply = reply_fn(&state);
+                                    let reply = reply_fn(cmd, &state);
                                     if result_sender.send(Ok(reply)).is_err() {
                                         error!(id = ?self.id, "cannot send cmd reply");
                                     };
@@ -411,7 +411,7 @@ where
     E: EventSourced,
 {
     Box::new(move |cmd, id, e| {
-        let cmd = *cmd.downcast::<C>().expect("downcast cmd");
+        let cmd = cmd.downcast_ref::<C>().expect("downcast cmd");
         cmd.handle_cmd(id, e).map_err(|error| {
             let error: BoxedAny = Box::new(error);
             error
@@ -424,7 +424,10 @@ where
     C: Cmd<E>,
     E: EventSourced,
 {
-    Box::new(move |e| Box::new(C::reply(e)))
+    Box::new(move |cmd, e| {
+        let cmd = *cmd.downcast::<C>().expect("downcast cmd");
+        Box::new(cmd.reply(e))
+    })
 }
 
 #[cfg(all(test, feature = "serde_json"))]
@@ -588,7 +591,7 @@ mod tests {
         type Error = Overflow;
         type Reply = u64;
 
-        fn handle_cmd(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
             if u64::MAX - state.0 < self.0 {
                 Err(Overflow)
             } else {
@@ -596,7 +599,7 @@ mod tests {
             }
         }
 
-        fn reply(state: &Counter) -> Self::Reply {
+        fn reply(self, state: &Counter) -> Self::Reply {
             state.0
         }
     }
@@ -611,7 +614,7 @@ mod tests {
         type Error = Underflow;
         type Reply = u64;
 
-        fn handle_cmd(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
             if state.0 < self.0 {
                 Err(Underflow)
             } else {
@@ -619,7 +622,7 @@ mod tests {
             }
         }
 
-        fn reply(state: &Counter) -> Self::Reply {
+        fn reply(self, state: &Counter) -> Self::Reply {
             state.0
         }
     }

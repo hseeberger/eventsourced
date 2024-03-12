@@ -30,7 +30,7 @@ impl Cmd<Counter> for Increase {
     type Error = Overflow;
     type Reply = u64;
 
-    fn handle_cmd(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
         if u64::MAX - state.0 < self.0 {
             Err(Overflow)
         } else {
@@ -38,7 +38,7 @@ impl Cmd<Counter> for Increase {
         }
     }
 
-    fn reply(state: &Counter) -> Self::Reply {
+    fn reply(self, state: &Counter) -> Self::Reply {
         state.0
     }
 }
@@ -53,7 +53,7 @@ impl Cmd<Counter> for Decrease {
     type Error = Underflow;
     type Reply = u64;
 
-    fn handle_cmd(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
         if state.0 < self.0 {
             Err(Underflow)
         } else {
@@ -61,7 +61,7 @@ impl Cmd<Counter> for Decrease {
         }
     }
 
-    fn reply(state: &Counter) -> Self::Reply {
+    fn reply(self, state: &Counter) -> Self::Reply {
         state.0
     }
 }
