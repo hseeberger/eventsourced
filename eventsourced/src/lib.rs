@@ -65,9 +65,94 @@ use tokio::{
 use tracing::{debug, error, instrument};
 
 type BoxedAny = Box<dyn Any + Send>;
-type BoxedCmdHandler<E, I, S> = Box<dyn Fn(BoxedAny, &I, &S) -> Result<E, BoxedAny> + Send>;
-type BoxedMakeReply<S> = Box<dyn Fn(&S) -> BoxedAny + Send + Sync>;
-type CmdHandlerMakeReply<E, I, S> = HashMap<TypeId, (BoxedCmdHandler<E, I, S>, BoxedMakeReply<S>)>;
+type BoxedHandleCmd<Evt, I, E> = Box<dyn Fn(BoxedAny, &I, &E) -> Result<Evt, BoxedAny> + Send>;
+type BoxedReply<E> = Box<dyn Fn(&E) -> BoxedAny + Send + Sync>;
+type CmdFns<Evt, I, E> = HashMap<TypeId, (BoxedHandleCmd<Evt, I, E>, BoxedReply<E>)>;
+
+/// State and event handling for an event sourced entity.
+pub trait EventSourced {
+    /// The Id type.
+    type Id;
+
+    /// The event type.
+    type Evt;
+
+    /// The event handler.
+    fn handle_evt(self, evt: Self::Evt) -> Self;
+}
+
+/// A command and its handling for an event sourced entity.
+pub trait Cmd
+where
+    Self: 'static,
+{
+    type EventSourced: EventSourced;
+
+    /// The type for rejecting this command.
+    type Error: Send + 'static;
+
+    /// The type returned by the [reply](Cmd::reply) function.
+    type Reply: Send + 'static;
+
+    /// The command handler, taking this command, and references to the ID and the state of
+    /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
+    /// event.
+    fn handle_cmd(
+        self,
+        id: &<Self::EventSourced as EventSourced>::Id,
+        state: &Self::EventSourced,
+    ) -> Result<<Self::EventSourced as EventSourced>::Evt, Self::Error>;
+
+    /// The reply function.
+    fn reply(state: &Self::EventSourced) -> Self::Reply;
+}
+
+/// A handle representing a spawned event sourced entity, which can be used to pass it commands
+/// implementing [Cmd].
+#[derive(Debug, Clone)]
+pub struct EntityRef<E, T>
+where
+    E: EventSourced,
+{
+    cmd_in: mpsc::Sender<(BoxedAny, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>,
+    id: E::Id,
+    _e: PhantomData<E>,
+    _t: PhantomData<T>,
+}
+
+impl<E, T> EntityRef<E, T>
+where
+    E: EventSourced + 'static,
+{
+    /// The ID of the represented event sourced entity.
+    pub fn id(&self) -> &E::Id {
+        &self.id
+    }
+
+    /// Pass the given command to the represented event sourced entity.
+    #[instrument(skip(self))]
+    pub async fn handle_cmd<C, X>(
+        &self,
+        cmd: C,
+    ) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
+    where
+        C: Cmd<EventSourced = E> + Debug + Send,
+        T: CoproductSelector<C, X>,
+    {
+        let (result_in, result_out) = oneshot::channel();
+        self.cmd_in
+            .send((Box::new(cmd), result_in))
+            .await
+            .map_err(|_| HandleCmdError("cannot send cmd".to_string()))?;
+        let result = result_out
+            .await
+            .map_err(|_| HandleCmdError("cannot receive cmd handler result".to_string()))?;
+        let result = result
+            .map_err(|error| *error.downcast::<C::Error>().expect("downcast error"))
+            .map(|reply| *reply.downcast::<C::Reply>().expect("downcast reply"));
+        Ok(result)
+    }
+}
 
 pub trait EventSourcedExt
 where
@@ -79,7 +164,7 @@ where
             e: self,
             type_name,
             id,
-            cmd_handler_make_reply: HashMap::new(),
+            cmd_fns: HashMap::new(),
             _t: PhantomData,
         }
     }
@@ -95,7 +180,7 @@ where
     e: E,
     type_name: &'static str,
     id: E::Id,
-    cmd_handler_make_reply: CmdHandlerMakeReply<E::Evt, E::Id, E>,
+    cmd_fns: CmdFns<E::Evt, E::Id, E>,
     _t: PhantomData<T>,
 }
 
@@ -112,16 +197,15 @@ where
         C: Cmd<EventSourced = E>,
     {
         let type_id = TypeId::of::<C>();
-        let cmd_handler = boxed_cmd_handler::<E, C>();
-        let reply_handler = boxed_reply_handler::<E, C>();
-        self.cmd_handler_make_reply
-            .insert(type_id, (cmd_handler, reply_handler));
+        let cmd_handler = boxed_handle_cmd::<E, C>();
+        let reply_handler = boxed_reply::<E, C>();
+        self.cmd_fns.insert(type_id, (cmd_handler, reply_handler));
 
         EventSourcedEntity {
             e: self.e,
             type_name: self.type_name,
             id: self.id,
-            cmd_handler_make_reply: self.cmd_handler_make_reply,
+            cmd_fns: self.cmd_fns,
             _t: PhantomData,
         }
     }
@@ -213,11 +297,9 @@ where
                     debug!(id = ?self.id, "handling cmd");
 
                     let type_id = cmd.as_ref().type_id();
-                    let (cmd_handler, reply_handler) = self
-                        .cmd_handler_make_reply
-                        .get(&type_id)
-                        .expect("get cmd handler");
-                    let result = cmd_handler(cmd, &self.id, &state);
+                    let (handle_cmd_fn, reply_fn) =
+                        self.cmd_fns.get(&type_id).expect("get cmd handler");
+                    let result = handle_cmd_fn(cmd, &self.id, &state);
                     match result {
                         Ok(evt) => {
                             debug!(id = ?self.id, ?evt, "persisting event");
@@ -259,7 +341,7 @@ where
                                         };
                                     }
 
-                                    let reply = reply_handler(&state);
+                                    let reply = reply_fn(&state);
                                     if result_sender.send(Ok(reply)).is_err() {
                                         error!(id = ?self.id, "cannot send cmd reply");
                                     };
@@ -313,117 +395,32 @@ pub enum SpawnError {
     NextEvt(#[source] BoxError),
 }
 
-/// State and event handling for an event sourced entity.
-pub trait EventSourced {
-    /// The Id type.
-    type Id;
-
-    /// The event type.
-    type Evt;
-
-    /// The event handler.
-    fn handle_evt(self, evt: Self::Evt) -> Self;
-}
-
-/// A command and its handling for an event sourced entity.
-pub trait Cmd
-where
-    Self: 'static,
-{
-    type EventSourced: EventSourced;
-
-    /// The type for rejecting this command.
-    type Error: Send + 'static;
-
-    /// The type returned by the [reply](Cmd::reply) function.
-    type Reply: Send + 'static;
-
-    /// The command handler, taking this command, and references to the ID and the state of
-    /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
-    /// event.
-    fn handle_cmd(
-        self,
-        id: &<Self::EventSourced as EventSourced>::Id,
-        state: &Self::EventSourced,
-    ) -> Result<<Self::EventSourced as EventSourced>::Evt, Self::Error>;
-
-    /// The reply function.
-    fn reply(state: &Self::EventSourced) -> Self::Reply;
-}
-
-/// A handle representing a spawned event sourced entity, which can be used to pass it commands
-/// implementing [Cmd].
-#[derive(Debug, Clone)]
-pub struct EntityRef<E, T>
-where
-    E: EventSourced,
-{
-    cmd_in: mpsc::Sender<(BoxedAny, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>,
-    id: E::Id,
-    _e: PhantomData<E>,
-    _t: PhantomData<T>,
-}
-
-impl<E, T> EntityRef<E, T>
-where
-    E: EventSourced + 'static,
-{
-    /// The ID of the represented event sourced entity.
-    pub fn id(&self) -> &E::Id {
-        &self.id
-    }
-
-    /// Pass the given command to the represented event sourced entity.
-    #[instrument(skip(self))]
-    pub async fn handle_cmd<C, X>(
-        &self,
-        cmd: C,
-    ) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
-    where
-        C: Cmd<EventSourced = E> + Debug + Send,
-        T: CoproductSelector<C, X>,
-    {
-        let (result_in, result_out) = oneshot::channel();
-        self.cmd_in
-            .send((Box::new(cmd), result_in))
-            .await
-            .map_err(|_| HandleCmdError("cannot send cmd".to_string()))?;
-        let result = result_out
-            .await
-            .map_err(|_| HandleCmdError("cannot receive cmd handler result".to_string()))?;
-        let result = result
-            .map_err(|error| *error.downcast::<C::Error>().expect("downcast error"))
-            .map(|reply| *reply.downcast::<C::Reply>().expect("downcast reply"));
-        Ok(result)
-    }
-}
-
 /// A command cannot be sent from an [EntityRef] to its event sourced entity or the result cannot be
 /// received from its event sourced entity.
 #[derive(Debug, Error, Serialize, Deserialize)]
 #[error("{0}")]
 pub struct HandleCmdError(String);
 
-fn boxed_cmd_handler<E, C>() -> BoxedCmdHandler<E::Evt, E::Id, E>
+fn boxed_handle_cmd<E, C>() -> BoxedHandleCmd<E::Evt, E::Id, E>
 where
     C: Cmd<EventSourced = E>,
     E: EventSourced,
 {
-    Box::new(move |cmd, id, state| {
+    Box::new(move |cmd, id, e| {
         let cmd = *cmd.downcast::<C>().expect("downcast cmd");
-        C::handle_cmd(cmd, id, state).map_err(|error| {
+        cmd.handle_cmd(id, e).map_err(|error| {
             let error: BoxedAny = Box::new(error);
             error
         })
     })
 }
 
-fn boxed_reply_handler<E, C>() -> Box<dyn Fn(&E) -> BoxedAny + Send + Sync>
+fn boxed_reply<E, C>() -> BoxedReply<E>
 where
     C: Cmd<EventSourced = E>,
     E: EventSourced,
 {
-    Box::new(move |state| Box::new(C::reply(state)))
+    Box::new(move |e| Box::new(C::reply(e)))
 }
 
 #[cfg(all(test, feature = "serde_json"))]
