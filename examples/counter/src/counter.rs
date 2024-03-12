@@ -26,8 +26,7 @@ pub enum Evt {
 #[derive(Debug)]
 pub struct Increase(pub u64);
 
-impl Cmd for Increase {
-    type EventSourced = Counter;
+impl Cmd<Counter> for Increase {
     type Error = Overflow;
     type Reply = u64;
 
@@ -50,8 +49,7 @@ pub struct Overflow;
 #[derive(Debug)]
 pub struct Decrease(pub u64);
 
-impl Cmd for Decrease {
-    type EventSourced = Counter;
+impl Cmd<Counter> for Decrease {
     type Error = Underflow;
     type Reply = u64;
 

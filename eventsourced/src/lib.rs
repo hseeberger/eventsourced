@@ -65,11 +65,14 @@ use tokio::{
 use tracing::{debug, error, instrument};
 
 type BoxedAny = Box<dyn Any + Send>;
-type BoxedHandleCmd<Evt, I, E> = Box<dyn Fn(BoxedAny, &I, &E) -> Result<Evt, BoxedAny> + Send>;
+type BoxedHandleCmd<E> = Box<
+    dyn Fn(BoxedAny, &<E as EventSourced>::Id, &E) -> Result<<E as EventSourced>::Evt, BoxedAny>
+        + Send,
+>;
 type BoxedReply<E> = Box<dyn Fn(&E) -> BoxedAny + Send + Sync>;
-type CmdFns<Evt, I, E> = HashMap<TypeId, (BoxedHandleCmd<Evt, I, E>, BoxedReply<E>)>;
+type BoxedCmdFns<E> = HashMap<TypeId, (BoxedHandleCmd<E>, BoxedReply<E>)>;
 
-/// State and event handling for an event sourced entity.
+/// The state of an event sourced entity as well as its event handling (which transforms the state).
 pub trait EventSourced {
     /// The Id type.
     type Id;
@@ -81,34 +84,30 @@ pub trait EventSourced {
     fn handle_evt(self, evt: Self::Evt) -> Self;
 }
 
-/// A command and its handling for an event sourced entity.
-pub trait Cmd
+/// A command for the given [EventSourced] implementation, defining its handling and replying.
+pub trait Cmd<E>
 where
     Self: 'static,
+    E: EventSourced,
 {
-    type EventSourced: EventSourced;
-
     /// The type for rejecting this command.
     type Error: Send + 'static;
 
-    /// The type returned by the [reply](Cmd::reply) function.
+    /// The type for replies.
     type Reply: Send + 'static;
 
     /// The command handler, taking this command, and references to the ID and the state of
     /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
     /// event.
-    fn handle_cmd(
-        self,
-        id: &<Self::EventSourced as EventSourced>::Id,
-        state: &Self::EventSourced,
-    ) -> Result<<Self::EventSourced as EventSourced>::Evt, Self::Error>;
+    fn handle_cmd(self, id: &E::Id, state: &E) -> Result<E::Evt, Self::Error>;
 
-    /// The reply function.
-    fn reply(state: &Self::EventSourced) -> Self::Reply;
+    /// The reply function, which is applied if the command handler has returned an event (as
+    /// opposed to a rejection) and after that has been persisted successfully.
+    fn reply(state: &E) -> Self::Reply;
 }
 
-/// A handle representing a spawned event sourced entity, which can be used to pass it commands
-/// implementing [Cmd].
+/// A handle representing a spawned [EventSourced] entity, which can be used to pass it commands
+/// which have been registerd before via [EventSourcedEntity::cmd].
 #[derive(Debug, Clone)]
 pub struct EntityRef<E, T>
 where
@@ -124,19 +123,22 @@ impl<E, T> EntityRef<E, T>
 where
     E: EventSourced + 'static,
 {
-    /// The ID of the represented event sourced entity.
+    /// The ID of the represented [EventSourced] entity.
     pub fn id(&self) -> &E::Id {
         &self.id
     }
 
-    /// Pass the given command to the represented event sourced entity.
+    /// Pass the given command to the represented [EventSourced] entity. The returned value is a
+    /// nested result where the outer one represents technical errors, e.g. problems connecting to
+    /// the event log, and the inner one comes from the command handler, i.e. signals potential
+    /// command rejection.
     #[instrument(skip(self))]
     pub async fn handle_cmd<C, X>(
         &self,
         cmd: C,
     ) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
     where
-        C: Cmd<EventSourced = E> + Debug + Send,
+        C: Cmd<E> + Debug + Send,
         T: CoproductSelector<C, X>,
     {
         let (result_in, result_out) = oneshot::channel();
@@ -154,11 +156,13 @@ where
     }
 }
 
+/// Extension methods for [EventSourced] entities.
 pub trait EventSourcedExt
 where
     Self: EventSourced + Sized,
 {
-    /// Create a new event sourced entity with the given type name, ID and this [EventSourced].
+    /// Create a new [EventSourced] entity with the given type name, ID and this [EventSourced]
+    /// implementation.
     fn entity(self, type_name: &'static str, id: Self::Id) -> EventSourcedEntity<Self, CNil> {
         EventSourcedEntity {
             e: self,
@@ -172,7 +176,7 @@ where
 
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
-/// An event sourced entity which allows for registering `Cmd`s and `spawn`ing.
+/// An [EventSourced] entity which allows for registering `Cmd`s and `spawn`ing.
 pub struct EventSourcedEntity<E, T>
 where
     E: EventSourced,
@@ -180,7 +184,7 @@ where
     e: E,
     type_name: &'static str,
     id: E::Id,
-    cmd_fns: CmdFns<E::Evt, E::Id, E>,
+    cmd_fns: BoxedCmdFns<E>,
     _t: PhantomData<T>,
 }
 
@@ -191,14 +195,14 @@ where
     E::Id: Debug + Clone + Send,
     T: Send + 'static,
 {
-    /// Add another command `C` to the event sourced entity.
+    /// Add the given command to the [EventSourced] entity.
     pub fn cmd<C>(mut self) -> EventSourcedEntity<E, Coprod!(C, ...T)>
     where
-        C: Cmd<EventSourced = E>,
+        C: Cmd<E>,
     {
         let type_id = TypeId::of::<C>();
-        let cmd_handler = boxed_handle_cmd::<E, C>();
-        let reply_handler = boxed_reply::<E, C>();
+        let cmd_handler = boxed_handle_cmd::<C, E>();
+        let reply_handler = boxed_reply::<C, E>();
         self.cmd_fns.insert(type_id, (cmd_handler, reply_handler));
 
         EventSourcedEntity {
@@ -210,14 +214,14 @@ where
         }
     }
 
-    /// Spawn this event sourced entity with the given settings, event log, snapshot store and
+    /// Spawn this [EventSourced] entity with the given settings, event log, snapshot store and
     /// `Binarize` functions.
     ///
-    /// The resulting type will look like the following example, where `Uuid` is used as ID type,
-    /// `Increase` and `Decrease` are registered as `Cmd`s in that order, `Evt` is the event type
-    /// and `Counter` is the state type:
+    /// The resulting type will look like the following example, where `Counter` is the
+    /// `EventSourced` implementation and `Increase` and `Decrease` have been added as `Cmd`s in
+    /// that order:
     ///
-    /// `EntityRef<Uuid, Coprod!(Decrease, Increase), Evt, Counter>`
+    /// `EntityRef<Counter, Coprod!(Decrease, Increase)>`
     #[instrument(skip(self, evt_log, snapshot_store, binarize))]
     pub async fn spawn<L, M, B>(
         self,
@@ -376,7 +380,13 @@ where
     }
 }
 
-/// Error for spawning an event sourced entity.
+/// A technical error, signaling that a command cannot be sent from an [EntityRef] to its event
+/// sourced entity or the result cannot be received from its event sourced entity.
+#[derive(Debug, Error, Serialize, Deserialize)]
+#[error("{0}")]
+pub struct HandleCmdError(String);
+
+/// A technical error when spawning an [EventSourced] entity.
 #[derive(Debug, Error)]
 pub enum SpawnError {
     #[error("cannot load snapshot from snapshot store")]
@@ -388,22 +398,16 @@ pub enum SpawnError {
     #[error("cannot get last seqence number from event log")]
     LastNonZeroU64(#[source] BoxError),
 
-    #[error("cannot get events by ID from event log")]
+    #[error("cannot get events by ID stream from event log")]
     EvtsById(#[source] BoxError),
 
-    #[error("cannot get next event from event log")]
+    #[error("cannot get next event from events by ID stream")]
     NextEvt(#[source] BoxError),
 }
 
-/// A command cannot be sent from an [EntityRef] to its event sourced entity or the result cannot be
-/// received from its event sourced entity.
-#[derive(Debug, Error, Serialize, Deserialize)]
-#[error("{0}")]
-pub struct HandleCmdError(String);
-
-fn boxed_handle_cmd<E, C>() -> BoxedHandleCmd<E::Evt, E::Id, E>
+fn boxed_handle_cmd<C, E>() -> BoxedHandleCmd<E>
 where
-    C: Cmd<EventSourced = E>,
+    C: Cmd<E>,
     E: EventSourced,
 {
     Box::new(move |cmd, id, e| {
@@ -415,9 +419,9 @@ where
     })
 }
 
-fn boxed_reply<E, C>() -> BoxedReply<E>
+fn boxed_reply<C, E>() -> BoxedReply<E>
 where
-    C: Cmd<EventSourced = E>,
+    C: Cmd<E>,
     E: EventSourced,
 {
     Box::new(move |e| Box::new(C::reply(e)))
@@ -580,8 +584,7 @@ mod tests {
     #[derive(Debug)]
     pub struct Increase(pub u64);
 
-    impl Cmd for Increase {
-        type EventSourced = Counter;
+    impl Cmd<Counter> for Increase {
         type Error = Overflow;
         type Reply = u64;
 
@@ -604,8 +607,7 @@ mod tests {
     #[derive(Debug)]
     pub struct Decrease(pub u64);
 
-    impl Cmd for Decrease {
-        type EventSourced = Counter;
+    impl Cmd<Counter> for Decrease {
         type Error = Underflow;
         type Reply = u64;
 
