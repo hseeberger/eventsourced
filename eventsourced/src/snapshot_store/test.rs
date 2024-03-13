@@ -3,13 +3,15 @@ use bytes::Bytes;
 use error_ext::BoxError;
 use std::{
     collections::HashMap, error::Error as StdError, fmt::Debug, hash::Hash, num::NonZeroU64,
+    sync::Arc,
 };
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 /// An in-memory implementation of [SnapshotStore] for testing purposes.
 #[derive(Debug, Default, Clone)]
 pub struct TestSnapshotStore<I> {
-    snapshots: HashMap<I, (NonZeroU64, Bytes)>,
+    snapshots: Arc<RwLock<HashMap<I, (NonZeroU64, Bytes)>>>,
 }
 
 impl<I> SnapshotStore for TestSnapshotStore<I>
@@ -33,7 +35,10 @@ where
         ToBytesError: StdError + Send + Sync + 'static,
     {
         let bytes = to_bytes(state).map_err(|error| Error(error.into()))?;
-        self.snapshots.insert(id.to_owned(), (seq_no, bytes));
+        self.snapshots
+            .write()
+            .await
+            .insert(id.to_owned(), (seq_no, bytes));
         Ok(())
     }
 
@@ -47,6 +52,8 @@ where
         FromBytesError: StdError + Send + Sync + 'static,
     {
         self.snapshots
+            .read()
+            .await
             .get(id)
             .map(|(seq_no, bytes)| {
                 from_bytes(bytes.to_owned())

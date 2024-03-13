@@ -4,22 +4,24 @@ use error_ext::BoxError;
 use futures::{stream, Stream};
 use std::{
     collections::HashMap, error::Error as StdError, fmt::Debug, hash::Hash, iter, num::NonZeroU64,
+    sync::Arc,
 };
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 type Evts<I> = HashMap<&'static str, HashMap<I, Vec<(NonZeroU64, Bytes)>>>;
 
 /// An in-memory implementation of [EvtLog] for testing purposes.
 #[derive(Debug, Clone)]
 pub struct TestEvtLog<I> {
-    seq_no: NonZeroU64,
-    evts: Evts<I>,
+    seq_no: Arc<RwLock<NonZeroU64>>,
+    evts: Arc<RwLock<Evts<I>>>,
 }
 
 impl<I> Default for TestEvtLog<I> {
     fn default() -> Self {
         Self {
-            seq_no: NonZeroU64::MIN,
+            seq_no: Arc::new(RwLock::new(NonZeroU64::MIN)),
             evts: Default::default(),
         }
     }
@@ -47,24 +49,27 @@ where
     {
         let bytes = to_bytes(evt).map_err(|error| Error(error.into()))?;
 
+        let mut seq_no = self.seq_no.write().await;
         self.evts
+            .write()
+            .await
             .entry(type_name)
             .and_modify(|evts| {
                 evts.entry(id.to_owned())
                     .and_modify(|evts| {
-                        evts.push((self.seq_no, bytes.clone()));
+                        evts.push((*seq_no, bytes.clone()));
                     })
-                    .or_insert(vec![(self.seq_no, bytes.clone())]);
+                    .or_insert(vec![(*seq_no, bytes.clone())]);
             })
             .or_insert(HashMap::from_iter(iter::once((
                 id.to_owned(),
-                vec![(self.seq_no, bytes)],
+                vec![(*seq_no, bytes)],
             ))));
 
-        let seq_no = self.seq_no;
-        self.seq_no = self.seq_no.saturating_add(1);
+        let this_seq_no = *seq_no;
+        *seq_no = seq_no.saturating_add(1);
 
-        Ok(seq_no)
+        Ok(this_seq_no)
     }
 
     async fn last_seq_no(
@@ -74,6 +79,8 @@ where
     ) -> Result<Option<NonZeroU64>, Self::Error> {
         let seq_no = self
             .evts
+            .read()
+            .await
             .get(type_name)
             .and_then(|evts| evts.get(id))
             .and_then(|evts| evts.last())
@@ -97,6 +104,8 @@ where
     {
         let evts = self
             .evts
+            .read()
+            .await
             .get(type_name)
             .and_then(|evts| evts.get(id).cloned())
             .unwrap_or_default()
@@ -124,6 +133,8 @@ where
     {
         let evts = self
             .evts
+            .read()
+            .await
             .get(type_name)
             .cloned()
             .unwrap_or_default()
