@@ -433,89 +433,89 @@ where
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
+    use crate::test::TestEvtLog;
     use assert_matches::assert_matches;
     use bytes::Bytes;
-    use futures::{stream, Stream, StreamExt};
-    use std::{error::Error as StdError, iter};
+    use std::error::Error as StdError;
     use tracing_test::traced_test;
     use uuid::Uuid;
 
-    #[derive(Debug, Clone)]
-    struct TestEvtLog;
+    // #[derive(Debug, Clone)]
+    // struct TestEvtLog;
 
-    impl EvtLog for TestEvtLog {
-        type Id = Uuid;
-        type Error = TestEvtLogError;
+    // impl EvtLog for TestEvtLog {
+    //     type Id = Uuid;
+    //     type Error = TestEvtLogError;
 
-        async fn persist<E, ToBytes, ToBytesError>(
-            &mut self,
-            _type_name: &'static str,
-            _id: &Self::Id,
-            last_seq_no: Option<NonZeroU64>,
-            _evt: &E,
-            _to_bytes: &ToBytes,
-        ) -> Result<NonZeroU64, Self::Error>
-        where
-            E: Sync,
-            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
-            ToBytesError: StdError + Send + Sync + 'static,
-        {
-            let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
-            Ok(seq_no)
-        }
+    //     async fn persist<E, ToBytes, ToBytesError>(
+    //         &mut self,
+    //         _type_name: &'static str,
+    //         _id: &Self::Id,
+    //         last_seq_no: Option<NonZeroU64>,
+    //         _evt: &E,
+    //         _to_bytes: &ToBytes,
+    //     ) -> Result<NonZeroU64, Self::Error>
+    //     where
+    //         E: Sync,
+    //         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
+    //         ToBytesError: StdError + Send + Sync + 'static,
+    //     {
+    //         let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
+    //         Ok(seq_no)
+    //     }
 
-        async fn last_seq_no(
-            &self,
-            _type_name: &'static str,
-            _id: &Self::Id,
-        ) -> Result<Option<NonZeroU64>, Self::Error> {
-            Ok(Some(42.try_into().unwrap()))
-        }
+    //     async fn last_seq_no(
+    //         &self,
+    //         _type_name: &'static str,
+    //         _id: &Self::Id,
+    //     ) -> Result<Option<NonZeroU64>, Self::Error> {
+    //         Ok(Some(42.try_into().unwrap()))
+    //     }
 
-        async fn evts_by_id<E, FromBytes, FromBytesError>(
-            &self,
-            _type_name: &'static str,
-            id: &Self::Id,
-            from_seq_no: NonZeroU64,
-            from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-        where
-            E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
-            FromBytesError: StdError + Send + Sync + 'static,
-        {
-            let successors = iter::successors(Some(from_seq_no), |n| n.checked_add(1));
-            let evts = stream::iter(successors).map(move |n| {
-                let evt = from_bytes(
-                    serde_json::to_vec(&Evt::Increased(id.to_owned(), 1))
-                        .unwrap()
-                        .into(),
-                )
-                .unwrap();
-                Ok((n, evt))
-            });
+    //     async fn evts_by_id<E, FromBytes, FromBytesError>(
+    //         &self,
+    //         _type_name: &'static str,
+    //         id: &Self::Id,
+    //         from_seq_no: NonZeroU64,
+    //         from_bytes: FromBytes,
+    //     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+    //     where
+    //         E: Send,
+    //         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
+    //         FromBytesError: StdError + Send + Sync + 'static,
+    //     {
+    //         let successors = iter::successors(Some(from_seq_no), |n| n.checked_add(1));
+    //         let evts = stream::iter(successors).map(move |n| {
+    //             let evt = from_bytes(
+    //                 serde_json::to_vec(&Evt::Increased(id.to_owned(), 1))
+    //                     .unwrap()
+    //                     .into(),
+    //             )
+    //             .unwrap();
+    //             Ok((n, evt))
+    //         });
 
-            Ok(evts)
-        }
+    //         Ok(evts)
+    //     }
 
-        async fn evts_by_type<E, FromBytes, FromBytesError>(
-            &self,
-            _type_name: &'static str,
-            _seq_no: NonZeroU64,
-            _from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-        where
-            E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
-            FromBytesError: StdError + Send + Sync + 'static,
-        {
-            Ok(stream::empty())
-        }
-    }
+    //     async fn evts_by_type<E, FromBytes, FromBytesError>(
+    //         &self,
+    //         _type_name: &'static str,
+    //         _seq_no: NonZeroU64,
+    //         _from_bytes: FromBytes,
+    //     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
+    //     where
+    //         E: Send,
+    //         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
+    //         FromBytesError: StdError + Send + Sync + 'static,
+    //     {
+    //         Ok(stream::empty())
+    //     }
+    // }
 
-    #[derive(Debug, Error)]
-    #[error("TestEvtLogError")]
-    struct TestEvtLogError(#[source] BoxError);
+    // #[derive(Debug, Error)]
+    // #[error("TestEvtLogError")]
+    // struct TestEvtLogError(#[source] BoxError);
 
     #[derive(Debug, Clone)]
     struct TestSnapshotStore;
@@ -633,7 +633,7 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test() -> Result<(), BoxError> {
-        let evt_log = TestEvtLog;
+        let evt_log = TestEvtLog::new();
         let snapshot_store = TestSnapshotStore;
 
         let entity: EntityRef<Counter, Coprod!(Decrease, Increase)> = Counter::default()

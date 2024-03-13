@@ -19,7 +19,7 @@ pub enum Error {
 
     /// Event cannot be converted into bytes.
     #[error("cannot convert event to bytes")]
-    IntoBytes(#[source] BoxError),
+    ToBytes(#[source] BoxError),
 
     /// Bytes cannot be converted to event.
     #[error("cannot convert bytes to event")]

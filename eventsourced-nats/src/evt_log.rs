@@ -143,7 +143,7 @@ where
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        let bytes = to_bytes(evt).map_err(|error| Error::IntoBytes(error.into()))?;
+        let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(error.into()))?;
         let publish = Publish::build().payload(bytes);
         let publish = last_seq_no.into_iter().fold(publish, |p, last_seq_no| {
             p.expected_last_subject_sequence(last_seq_no.get())
