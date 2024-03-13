@@ -187,9 +187,9 @@ pub enum ErrorStrategy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
-    seq_no: Option<NonZeroU64>,
-    running: bool,
-    error: Option<String>,
+    pub seq_no: Option<NonZeroU64>,
+    pub running: bool,
+    pub error: Option<String>,
 }
 
 impl State {
