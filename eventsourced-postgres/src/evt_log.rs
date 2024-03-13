@@ -4,7 +4,7 @@ use crate::{Cnn, CnnPool, Error};
 use async_stream::stream;
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::EvtLog;
+use eventsourced::evt_log::EvtLog;
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{

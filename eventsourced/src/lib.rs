@@ -34,15 +34,17 @@
 //! `eventsourced-projection` crate.
 
 pub mod binarize;
+pub mod evt_log;
+pub mod snapshot_store;
 
-mod evt_log;
-mod snapshot_store;
 mod util;
 
-pub use evt_log::*;
-pub use snapshot_store::*;
-
-use crate::{binarize::Binarize, util::StreamExt as ThisStreamExt};
+use crate::{
+    binarize::Binarize,
+    evt_log::EvtLog,
+    snapshot_store::{Snapshot, SnapshotStore},
+    util::StreamExt as ThisStreamExt,
+};
 use error_ext::{BoxError, StdErrorExt};
 use frunk::{
     coproduct::{CNil, CoproductSelector},
@@ -433,133 +435,12 @@ where
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use super::*;
-    use crate::test::TestEvtLog;
+    use crate::{
+        binarize::serde_json::*, evt_log::test::TestEvtLog, snapshot_store::test::TestSnapshotStore,
+    };
     use assert_matches::assert_matches;
-    use bytes::Bytes;
-    use std::error::Error as StdError;
     use tracing_test::traced_test;
     use uuid::Uuid;
-
-    // #[derive(Debug, Clone)]
-    // struct TestEvtLog;
-
-    // impl EvtLog for TestEvtLog {
-    //     type Id = Uuid;
-    //     type Error = TestEvtLogError;
-
-    //     async fn persist<E, ToBytes, ToBytesError>(
-    //         &mut self,
-    //         _type_name: &'static str,
-    //         _id: &Self::Id,
-    //         last_seq_no: Option<NonZeroU64>,
-    //         _evt: &E,
-    //         _to_bytes: &ToBytes,
-    //     ) -> Result<NonZeroU64, Self::Error>
-    //     where
-    //         E: Sync,
-    //         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
-    //         ToBytesError: StdError + Send + Sync + 'static,
-    //     {
-    //         let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
-    //         Ok(seq_no)
-    //     }
-
-    //     async fn last_seq_no(
-    //         &self,
-    //         _type_name: &'static str,
-    //         _id: &Self::Id,
-    //     ) -> Result<Option<NonZeroU64>, Self::Error> {
-    //         Ok(Some(42.try_into().unwrap()))
-    //     }
-
-    //     async fn evts_by_id<E, FromBytes, FromBytesError>(
-    //         &self,
-    //         _type_name: &'static str,
-    //         id: &Self::Id,
-    //         from_seq_no: NonZeroU64,
-    //         from_bytes: FromBytes,
-    //     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-    //     where
-    //         E: Send,
-    //         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
-    //         FromBytesError: StdError + Send + Sync + 'static,
-    //     {
-    //         let successors = iter::successors(Some(from_seq_no), |n| n.checked_add(1));
-    //         let evts = stream::iter(successors).map(move |n| {
-    //             let evt = from_bytes(
-    //                 serde_json::to_vec(&Evt::Increased(id.to_owned(), 1))
-    //                     .unwrap()
-    //                     .into(),
-    //             )
-    //             .unwrap();
-    //             Ok((n, evt))
-    //         });
-
-    //         Ok(evts)
-    //     }
-
-    //     async fn evts_by_type<E, FromBytes, FromBytesError>(
-    //         &self,
-    //         _type_name: &'static str,
-    //         _seq_no: NonZeroU64,
-    //         _from_bytes: FromBytes,
-    //     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-    //     where
-    //         E: Send,
-    //         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
-    //         FromBytesError: StdError + Send + Sync + 'static,
-    //     {
-    //         Ok(stream::empty())
-    //     }
-    // }
-
-    // #[derive(Debug, Error)]
-    // #[error("TestEvtLogError")]
-    // struct TestEvtLogError(#[source] BoxError);
-
-    #[derive(Debug, Clone)]
-    struct TestSnapshotStore;
-
-    impl SnapshotStore for TestSnapshotStore {
-        type Id = Uuid;
-        type Error = TestSnapshotStoreError;
-
-        async fn save<S, ToBytes, ToBytesError>(
-            &mut self,
-            _id: &Self::Id,
-            _seq_no: NonZeroU64,
-            _state: &S,
-            _state_to_bytes: &ToBytes,
-        ) -> Result<(), Self::Error>
-        where
-            S: Send,
-            ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
-            ToBytesError: StdError,
-        {
-            Ok(())
-        }
-
-        async fn load<S, FromBytes, FromBytesError>(
-            &self,
-            _id: &Self::Id,
-            state_from_bytes: FromBytes,
-        ) -> Result<Option<Snapshot<S>>, Self::Error>
-        where
-            FromBytes: Fn(Bytes) -> Result<S, FromBytesError>,
-            FromBytesError: StdError,
-        {
-            let bytes = serde_json::to_vec(&21).unwrap();
-            let state = state_from_bytes(bytes.into()).unwrap();
-            Ok(Some(Snapshot {
-                seq_no: 21.try_into().unwrap(),
-                state,
-            }))
-        }
-    }
-
-    #[derive(Debug, Error)]
-    #[error("TestSnapshotStoreError")]
-    struct TestSnapshotStoreError;
 
     // EventSourced ===============================================================================
 
@@ -633,11 +514,22 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test() -> Result<(), BoxError> {
-        let evt_log = TestEvtLog::new();
-        let snapshot_store = TestSnapshotStore;
+        let id = Uuid::from_u128(1);
+
+        let mut evt_log = TestEvtLog::default();
+        for _ in 0..42 {
+            evt_log
+                .persist("counter", &id, None, &Evt::Increased(id, 1), &to_bytes)
+                .await?;
+        }
+
+        let mut snapshot_store = TestSnapshotStore::default();
+        snapshot_store
+            .save(&id, 21.try_into()?, &Counter(21), &to_bytes)
+            .await?;
 
         let entity: EntityRef<Counter, Coprod!(Decrease, Increase)> = Counter::default()
-            .entity("counter", Uuid::from_u128(1))
+            .entity("counter", id)
             .cmd::<Increase>()
             .cmd::<Decrease>()
             .spawn(
@@ -645,7 +537,7 @@ mod tests {
                 unsafe { NonZeroUsize::new_unchecked(1) },
                 evt_log,
                 snapshot_store,
-                binarize::serde_json::SerdeJsonBinarize,
+                SerdeJsonBinarize,
             )
             .await?;
 

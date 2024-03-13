@@ -12,7 +12,7 @@ use async_nats::{
     ConnectOptions,
 };
 use bytes::Bytes;
-use eventsourced::EvtLog;
+use eventsourced::evt_log::EvtLog;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{

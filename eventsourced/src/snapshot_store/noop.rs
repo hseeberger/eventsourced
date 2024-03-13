@@ -1,8 +1,10 @@
 //! A [SnapshotStore] implementation that does nothing.
 
-use crate::{NonZeroU64, Snapshot, SnapshotStore};
+use crate::snapshot_store::{Snapshot, SnapshotStore};
 use bytes::Bytes;
-use std::{convert::Infallible, error::Error as StdError, fmt::Debug, marker::PhantomData};
+use std::{
+    convert::Infallible, error::Error as StdError, fmt::Debug, marker::PhantomData, num::NonZeroU64,
+};
 
 /// A [SnapshotStore] implementation that does nothing.
 #[derive(Debug, Clone, Copy)]

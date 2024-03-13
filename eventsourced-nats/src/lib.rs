@@ -1,5 +1,5 @@
-//! [EvtLog](eventsourced::EvtLog) and [SnapshotStore](eventsourced::SnapshotStore) implementations
-//! based upon [NATS](https://nats.io/).
+//! [EvtLog](eventsourced::evt_log::EvtLog) and
+//! [SnapshotStore](eventsourced::snapshot_store::SnapshotStore) implementations based upon [NATS](https://nats.io/).
 
 pub mod evt_log;
 mod snapshot_store;

@@ -6,7 +6,7 @@ use async_nats::{
     ConnectOptions,
 };
 use bytes::{Bytes, BytesMut};
-use eventsourced::{Snapshot, SnapshotStore};
+use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::{

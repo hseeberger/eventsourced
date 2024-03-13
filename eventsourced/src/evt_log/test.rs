@@ -16,11 +16,11 @@ pub struct TestEvtLog<I> {
     evts: Evts<I>,
 }
 
-impl<I> TestEvtLog<I> {
-    pub fn new() -> Self {
+impl<I> Default for TestEvtLog<I> {
+    fn default() -> Self {
         Self {
             seq_no: NonZeroU64::MIN,
-            evts: HashMap::new(),
+            evts: Default::default(),
         }
     }
 }
@@ -149,71 +149,60 @@ pub struct Error(BoxError);
 mod tests {
     use super::*;
     use crate::binarize::serde_json::*;
+    use assert_matches::assert_matches;
     use futures::TryStreamExt;
 
     #[tokio::test]
     async fn test() {
-        let mut evt_log = TestEvtLog::<u64>::new();
+        let mut evt_log = TestEvtLog::<u64>::default();
 
         let evts = evt_log
             .evts_by_id::<String, _, _>("type-1", &0, NonZeroU64::MIN, from_bytes)
             .await;
         assert!(evts.is_ok());
         let evts = evts.unwrap().try_collect::<Vec<_>>().await;
-        assert!(evts.is_ok());
-        assert!(evts.unwrap().is_empty());
+        assert_matches!(evts, Ok(evts) if evts.is_empty());
 
         let result = evt_log
             .persist("type-0", &0, None, &"type-0-0-A".to_string(), &to_bytes)
             .await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().get(), 1);
+        assert_matches!(result, Ok(seq_no) if seq_no.get() == 1);
         let result = evt_log
             .persist("type-0", &0, None, &"type-0-0-B".to_string(), &to_bytes)
             .await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().get(), 2);
+        assert_matches!(result, Ok(seq_no) if seq_no.get() == 2);
         let result = evt_log
             .persist("type-0", &1, None, &"type-0-1-A".to_string(), &to_bytes)
             .await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().get(), 3);
+        assert_matches!(result, Ok(seq_no) if seq_no.get() == 3);
         let result = evt_log
             .persist("type-1", &0, None, &"type-1-0-A".to_string(), &to_bytes)
             .await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().get(), 4);
+        assert_matches!(result, Ok(seq_no) if seq_no.get() == 4);
         let result = evt_log
             .persist("type-0", &0, None, &"type-0-0-C".to_string(), &to_bytes)
             .await;
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().get(), 5);
+        assert_matches!(result, Ok(seq_no) if seq_no.get() == 5);
 
         let evts = evt_log
             .evts_by_id::<String, _, _>("type-0", &0, NonZeroU64::MIN, from_bytes)
             .await;
         assert!(evts.is_ok());
         let evts = evts.unwrap().try_collect::<Vec<_>>().await;
-        assert!(evts.is_ok());
-        assert_eq!(
-            evts.unwrap(),
-            vec![
-                (1.try_into().unwrap(), "type-0-0-A".to_string()),
-                (2.try_into().unwrap(), "type-0-0-B".to_string()),
-                (5.try_into().unwrap(), "type-0-0-C".to_string()),
-            ]
-        );
+        assert_matches!(evts, Ok(evts) if evts == vec![
+            (1.try_into().unwrap(), "type-0-0-A".to_string()),
+            (2.try_into().unwrap(), "type-0-0-B".to_string()),
+            (5.try_into().unwrap(), "type-0-0-C".to_string()),
+        ]);
 
         let evts = evt_log
             .evts_by_id::<String, _, _>("type-0", &0, 3.try_into().unwrap(), from_bytes)
             .await;
         assert!(evts.is_ok());
         let evts = evts.unwrap().try_collect::<Vec<_>>().await;
-        assert!(evts.is_ok());
-        assert_eq!(
-            evts.unwrap(),
-            vec![(5.try_into().unwrap(), "type-0-0-C".to_string())]
-        );
+        assert_matches!(evts, Ok(evts) if evts == vec![
+            (5.try_into().unwrap(), "type-0-0-C".to_string())
+        ]);
 
         let evts = evt_log
             .evts_by_type::<String, _, _>("type-0", 2.try_into().unwrap(), from_bytes)

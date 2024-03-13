@@ -2,7 +2,7 @@ pub mod counter;
 
 use crate::counter::{Counter, Decrease, Increase};
 use anyhow::{Context, Result};
-use eventsourced::{binarize, EventSourcedExt, EvtLog, SnapshotStore};
+use eventsourced::{binarize, evt_log::EvtLog, snapshot_store::SnapshotStore, EventSourcedExt};
 use serde::Deserialize;
 use std::{iter, num::NonZeroUsize, time::Instant};
 use tokio::task::JoinSet;

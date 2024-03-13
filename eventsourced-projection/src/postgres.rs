@@ -1,5 +1,5 @@
 use error_ext::StdErrorExt;
-use eventsourced::{binarize, EvtLog};
+use eventsourced::{binarize, evt_log::EvtLog};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Row, Transaction};
