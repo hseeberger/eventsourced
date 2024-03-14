@@ -1,7 +1,7 @@
 //! [EvtLog](eventsourced::evt_log::EvtLog) and
 //! [SnapshotStore](eventsourced::snapshot_store::SnapshotStore) implementations based upon [NATS](https://nats.io/).
 
-pub mod evt_log;
+mod evt_log;
 mod snapshot_store;
 
 pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
