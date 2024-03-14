@@ -246,6 +246,10 @@ async fn run_projection_loop<E, L, H>(
                 {
                     Ok(_) => {
                         info!(type_name, name, "projection stopped");
+                        {
+                            let mut state = state.write().await;
+                            state.running = false;
+                        }
                         break;
                     }
 
@@ -258,11 +262,20 @@ async fn run_projection_loop<E, L, H>(
                         match error_strategy {
                             ErrorStrategy::Retry(delay) => {
                                 info!(type_name, name, ?delay, "projection retrying after error");
+                                {
+                                    let mut state = state.write().await;
+                                    state.error = Some(error.to_string());
+                                }
                                 sleep(delay).await
                             }
 
                             ErrorStrategy::Stop => {
                                 info!(type_name, name, "projection stopped after error");
+                                {
+                                    let mut state = state.write().await;
+                                    state.running = false;
+                                    state.error = Some(error.to_string());
+                                }
                                 break;
                             }
                         }
