@@ -442,8 +442,6 @@ mod tests {
     use tracing_test::traced_test;
     use uuid::Uuid;
 
-    // EventSourced ===============================================================================
-
     #[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
     pub struct Counter(u64);
 
