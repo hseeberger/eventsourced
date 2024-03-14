@@ -192,20 +192,6 @@ pub struct State {
     pub error: Option<String>,
 }
 
-impl State {
-    pub fn seq_no(&self) -> Option<NonZeroU64> {
-        self.seq_no
-    }
-
-    pub fn running(&self) -> bool {
-        self.running
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Cmd {
     Run,
