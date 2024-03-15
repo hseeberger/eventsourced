@@ -9,6 +9,8 @@ impl EventSourced for Counter {
     type Id = Uuid;
     type Evt = Evt;
 
+    const TYPE_NAME: &'static str = "counter";
+
     fn handle_evt(self, evt: Evt) -> Self {
         match evt {
             Evt::Increased(_, n) => Self(self.0 + n),
