@@ -614,7 +614,7 @@ checksum = "0206175f82b8d6bf6652ff7d71a1e27fd2e4efde587fd368662814d6ec1d9ce0"
 
 [[package]]
 name = "eventsourced"
-version = "0.20.1"
+version = "0.21.0"
 dependencies = [
  "assert_matches",
  "async-stream",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced-nats"
-version = "0.13.11"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -658,7 +658,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced-postgres"
-version = "0.13.11"
+version = "0.13.12"
 dependencies = [
  "async-stream",
  "bb8-postgres",
@@ -679,7 +679,7 @@ dependencies = [
 
 [[package]]
 name = "eventsourced-projection"
-version = "0.3.6"
+version = "0.4.0"
 dependencies = [
  "bytes",
  "error-ext",
