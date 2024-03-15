@@ -1,16 +1,18 @@
 //! Persistence for snapshots.
 
-mod noop;
+pub mod noop;
+#[cfg(feature = "test")]
+pub mod test;
 
-pub use noop::*;
-
-use crate::NonZeroU64;
 use bytes::Bytes;
-use std::{error::Error as StdError, fmt::Debug};
+use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64};
 
 /// Persistence for snapshots.
 #[trait_variant::make(SnapshotStore: Send)]
-pub trait LocalSnapshotStore: Clone + 'static {
+pub trait LocalSnapshotStore
+where
+    Self: Clone + 'static,
+{
     type Id: Debug;
 
     type Error: StdError + Send + Sync + 'static;
@@ -40,6 +42,7 @@ pub trait LocalSnapshotStore: Clone + 'static {
 }
 
 /// Snapshot state along with its sequence number.
+#[derive(Debug)]
 pub struct Snapshot<S> {
     pub seq_no: NonZeroU64,
     pub state: S,

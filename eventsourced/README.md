@@ -12,17 +12,35 @@ Event sourced entities in [Rust](https://www.rust-lang.org/).
 
 ## Concepts
 
-EventSourced is inspired to a large degree by the amazing [Akka Persistence](https://doc.akka.io/docs/akka/current/typed/index-persistence.html) library. It provides a framework for implementing [Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html) and [CQRS](https://www.martinfowler.com/bliki/CQRS.html).
+EventSourced is inspired to a large degree by the amazing
+[Akka Persistence](https://doc.akka.io/docs/akka/current/typed/index-persistence.html) library.
+It provides a framework for implementing
+[Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html) and
+[CQRS](https://www.martinfowler.com/bliki/CQRS.html).
 
-The `EventSourced` trait defines types for commands, events, snapshot state and errors as well as methods for command handling, event handling and setting a snapshot state.
+The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a pluggable snapshot
+store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/)
+these are implemented in the respective crates.
 
-The `EvtLog` and `SnapshotStore` traits define a pluggable event log and a pluggable snapshot store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/) these are implemented in the respective crates.
+The `Entity` struct represents event sourced entities, identifiable by a type name and ID. To
+create one, an event handler function and one or more commands – implementations of the `Cmd`
+trait – have to be given. `Cmd` defines a command handler function to either reject a command or
+return an event. An event gets persisted to the event log and then applied to the event handler
+to return the new state of the entity.
 
-The `spawn` extension method provides for creating entities – "running" instances of an `EventSourced` implementation, identifiable by a `Uuid` – for some event log and some snapshot store. Conversion of events and snapshot state to and from bytes happens via given `binarizer` functions; for [prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json) these are already provided.
+`Entity::spawn` puts the entity on the given event log and snapshot store, returning an
+`EntityRef` which can be cheaply cloned and used to pass commands to the entity. Conversion of
+events and snapshot state to and from bytes happens via the given `Binarize` implementation; for
+[prost](https://github.com/tokio-rs/prost) and [serde_json](https://github.com/serde-rs/json)
+these are already provided. Snapshots are taken after the configured number of processed events
+to speed up future spawning.
 
-Calling `spawn` results in a cloneable `EntityRef` which can be used to pass commands to the spawned entity by invoking `handle_cmd`. Commands are handled by the command handler of the spawned entity. They can be rejected by returning an error. Valid commands produce an event with an optional tag which gets persisted to the `EvtLog` and then applied to the event handler of the respective entity. The event handler may decide to save a snapshot which is used to speed up future spawning.
+`EntityRef::handle_cmd` either returns `Cmd::Error` for a rejected command or `Cmd::Reply` for
+an accepted one.
 
-Events can be queried from the event log by ID or by tag. These queries can be used to build read side projections.
+Events can be queried from the event log by ID or by entity type. These queries can be used to
+build read side projections. There is early support for projections in the
+`eventsourced-projection` crate.
 
 ## Requirements for building the project and examples
 
@@ -40,65 +58,69 @@ The `counter` package in the `example` directory contains a simple example: a co
 
 ```rust
 #[derive(Debug)]
-pub struct Counter;
+struct Increase(u64);
 
-impl EventSourced for Counter {
-    type Cmd = Cmd;
-    type Evt = Evt;
-    type State = State;
-    type Error = Error;
+impl Cmd<Uuid, Evt, Counter> for Increase {
+    type Error = Overflow;
 
-    const TYPE_NAME: &'static str = "counter";
+    type Reply = u64;
 
-    fn handle_cmd(
-        _id: Uuid,
-        state: &Self::State,
-        cmd: Self::Cmd,
-    ) -> Result<impl IntoTaggedEvt<Self::Evt>, Self::Error> {
-        let value = state.value;
-
-        match cmd {
-            Cmd::Inc(inc) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
-            Cmd::Inc(inc) => Ok(Evt::Increased(inc)),
-
-            Cmd::Dec(dec) if dec > value => Err(Error::Underflow { value, dec }),
-            Cmd::Dec(dec) => Ok(Evt::Decreased(dec)),
+    fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        if u64::MAX - state.0 < self.0 {
+            Err(Overflow)
+        } else {
+            Ok(Evt::Increased(*id))
         }
     }
 
-    fn handle_evt(mut state: Self::State, evt: Self::Evt) -> Self::State {
-        match evt {
-            Evt::Increased(inc) => state.value += inc,
-            Evt::Decreased(dec) => state.value -= dec,
-        };
-        state
+    fn reply(state: &Counter) -> Self::Reply {
+        state.0
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cmd {
-    Inc(u64),
-    Dec(u64),
+#[derive(Debug)]
+struct Overflow;
+
+#[derive(Debug)]
+struct Decrease(u64);
+
+impl Cmd<Uuid, Evt, Counter> for Decrease {
+    type Error = Underflow;
+
+    type Reply = Counter;
+
+    fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        if state.0 < self.0 {
+            Err(Underflow)
+        } else {
+            Ok(Evt::Decreased(*id))
+        }
+    }
+
+    fn reply(state: &Counter) -> Self::Reply {
+        *state
+    }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Evt {
-    Increased(u64),
-    Decreased(u64),
+#[derive(Debug, PartialEq, Eq)]
+struct Underflow;
+
+#[derive(Debug, Serialize, Deserialize)]
+enum Evt {
+    Increased(Uuid),
+    Decreased(Uuid),
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct State {
-    value: u64,
-}
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize)]
+struct Counter(u64);
 
-#[derive(Debug, Clone, Copy, Error)]
-pub enum Error {
-    #[error("Overflow: value={value}, increment={inc}")]
-    Overflow { value: u64, inc: u64 },
-
-    #[error("Underflow: value={value}, decrement={dec}")]
-    Underflow { value: u64, dec: u64 },
+impl Counter {
+    fn handle_evt(self, evt: Evt) -> Self {
+        match evt {
+            Evt::Increased(_) => Self(self.0 + 1),
+            Evt::Decreased(_) => Self(self.0 - 1),
+        }
+    }
 }
 ```
 

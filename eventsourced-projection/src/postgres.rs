@@ -1,5 +1,5 @@
 use error_ext::StdErrorExt;
-use eventsourced::{binarize, EventSourced, EvtLog};
+use eventsourced::{binarize, evt_log::EvtLog};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use sqlx::{Pool, Postgres, Row, Transaction};
@@ -19,7 +19,7 @@ use tokio::{
 };
 use tracing::{debug, error, info};
 
-/// A projection of events of an [EventSourced] entity to a Postgres database.
+/// A projection of events of an event sourced entity to a Postgres database.
 #[derive(Debug, Clone)]
 pub struct Projection {
     name: String,
@@ -28,6 +28,7 @@ pub struct Projection {
 
 impl Projection {
     pub async fn new<E, L, H>(
+        type_name: &'static str,
         name: String,
         evt_log: L,
         evt_handler: H,
@@ -35,10 +36,9 @@ impl Projection {
         pool: Pool<Postgres>,
     ) -> Result<Self, Error>
     where
-        E: EventSourced,
-        E::Evt: for<'de> Deserialize<'de> + 'static,
+        E: for<'de> Deserialize<'de> + Send + 'static,
         L: EvtLog + Sync,
-        H: EvtHandler<EventSourced = E> + Clone + Send + Sync + 'static,
+        H: EvtHandler<E> + Clone + Send + Sync + 'static,
     {
         sqlx::query(include_str!("create_projection.sql"))
             .execute(&pool)
@@ -66,9 +66,9 @@ impl Projection {
                             // Do not remove braces, dead-lock is waiting for you!
                             let running = { state.read().await.running };
                             if running {
-                                info!(type_name = E::TYPE_NAME, name, "projection already running");
+                                info!(type_name, name, "projection already running");
                             } else {
-                                info!(type_name = E::TYPE_NAME, name, "running projection");
+                                info!(type_name, name, "running projection");
 
                                 // Do not remove braces, dead-lock is waiting for you!
                                 {
@@ -78,6 +78,7 @@ impl Projection {
                                 }
 
                                 run_projection_loop(
+                                    type_name,
                                     name.clone(),
                                     state.clone(),
                                     evt_log.clone(),
@@ -89,7 +90,7 @@ impl Projection {
                             }
 
                             if reply_in.send(state.read().await.clone()).is_err() {
-                                error!(type_name = E::TYPE_NAME, name, "cannot send state");
+                                error!(type_name, name, "cannot send state");
                             }
                         }
 
@@ -97,21 +98,21 @@ impl Projection {
                             // Do not remove braces, dead-lock is waiting for you!
                             let running = { state.read().await.running };
                             if running {
-                                info!(type_name = E::TYPE_NAME, name, "stopping projection");
+                                info!(type_name, name, "stopping projection");
                                 let mut state = state.write().await;
                                 state.running = false;
                             } else {
-                                info!(type_name = E::TYPE_NAME, name, "projection already stopped");
+                                info!(type_name, name, "projection already stopped");
                             }
 
                             if reply_in.send(state.read().await.clone()).is_err() {
-                                error!(type_name = E::TYPE_NAME, name, "cannot send state");
+                                error!(type_name, name, "cannot send state");
                             }
                         }
 
                         Cmd::GetState => {
                             if reply_in.send(state.read().await.clone()).is_err() {
-                                error!(type_name = E::TYPE_NAME, name, "cannot send state");
+                                error!(type_name, name, "cannot send state");
                             }
                         }
                     }
@@ -148,14 +149,12 @@ impl Projection {
 }
 
 #[trait_variant::make(EvtHandler: Send)]
-pub trait LocalEvtHandler {
-    type EventSourced: EventSourced;
-
+pub trait LocalEvtHandler<E> {
     type Error: StdError + Send + Sync + 'static;
 
     async fn handle_evt(
         &self,
-        evt: <Self::EventSourced as EventSourced>::Evt,
+        evt: E,
         tx: &mut Transaction<'static, Postgres>,
     ) -> Result<(), Self::Error>;
 }
@@ -188,23 +187,9 @@ pub enum ErrorStrategy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
-    seq_no: Option<NonZeroU64>,
-    running: bool,
-    error: Option<String>,
-}
-
-impl State {
-    pub fn seq_no(&self) -> Option<NonZeroU64> {
-        self.seq_no
-    }
-
-    pub fn running(&self) -> bool {
-        self.running
-    }
-
-    pub fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
+    pub seq_no: Option<NonZeroU64>,
+    pub running: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -242,6 +227,7 @@ async fn load_seq_no(name: &str, pool: &Pool<Postgres>) -> Result<Option<NonZero
 }
 
 async fn run_projection_loop<E, L, H>(
+    type_name: &'static str,
     name: String,
     state: Arc<RwLock<State>>,
     evt_log: L,
@@ -249,12 +235,10 @@ async fn run_projection_loop<E, L, H>(
     pool: Pool<Postgres>,
     error_strategy: ErrorStrategy,
 ) where
-    E: EventSourced,
-    E::Evt: for<'de> Deserialize<'de> + 'static,
+    E: for<'de> Deserialize<'de> + Send + 'static,
     L: EvtLog + Sync,
-    H: EvtHandler<EventSourced = E> + Sync + 'static,
+    H: EvtHandler<E> + Sync + 'static,
 {
-    let type_name = E::TYPE_NAME;
     task::spawn({
         async move {
             loop {
@@ -262,6 +246,10 @@ async fn run_projection_loop<E, L, H>(
                 {
                     Ok(_) => {
                         info!(type_name, name, "projection stopped");
+                        {
+                            let mut state = state.write().await;
+                            state.running = false;
+                        }
                         break;
                     }
 
@@ -274,11 +262,20 @@ async fn run_projection_loop<E, L, H>(
                         match error_strategy {
                             ErrorStrategy::Retry(delay) => {
                                 info!(type_name, name, ?delay, "projection retrying after error");
+                                {
+                                    let mut state = state.write().await;
+                                    state.error = Some(error.to_string());
+                                }
                                 sleep(delay).await
                             }
 
                             ErrorStrategy::Stop => {
                                 info!(type_name, name, "projection stopped after error");
+                                {
+                                    let mut state = state.write().await;
+                                    state.running = false;
+                                    state.error = Some(error.to_string());
+                                }
                                 break;
                             }
                         }
@@ -290,7 +287,7 @@ async fn run_projection_loop<E, L, H>(
 }
 
 async fn run_projection<E, L, H>(
-    type_name: &str,
+    type_name: &'static str,
     name: &str,
     evt_log: &L,
     handler: &H,
@@ -298,17 +295,16 @@ async fn run_projection<E, L, H>(
     state: &Arc<RwLock<State>>,
 ) -> Result<(), IntenalRunError<L::Error, H::Error>>
 where
-    E: EventSourced,
-    E::Evt: for<'de> Deserialize<'de> + 'static,
+    E: for<'de> Deserialize<'de> + Send + 'static,
     L: EvtLog,
-    H: EvtHandler<EventSourced = E>,
+    H: EvtHandler<E>,
 {
     let seq_no = load_seq_no(name, pool)
         .await?
         .map(|n| n.saturating_add(1))
         .unwrap_or(NonZeroU64::MIN);
     let evts = evt_log
-        .evts_by_type::<E, _, _>(seq_no, binarize::serde_json::from_bytes)
+        .evts_by_type::<E, _, _>(type_name, seq_no, binarize::serde_json::from_bytes)
         .await
         .map_err(IntenalRunError::Evts)?;
     let mut evts = pin!(evts);
@@ -354,42 +350,15 @@ async fn save_seq_no(
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use error_ext::BoxError;
     use futures::{stream, Stream};
     use sqlx::{
         postgres::{PgConnectOptions, PgPoolOptions},
         Row,
     };
-    use std::convert::Infallible;
     use testcontainers::{clients::Cli, RunnableImage};
     use testcontainers_modules::postgres::Postgres as TCPostgres;
-    // use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-    use error_ext::BoxError;
     use uuid::Uuid;
-
-    #[derive(Debug)]
-    struct Dummy;
-
-    impl EventSourced for Dummy {
-        type Id = Uuid;
-        type Cmd = ();
-        type Evt = i32;
-        type State = u64;
-        type Error = Infallible;
-
-        const TYPE_NAME: &'static str = "simple";
-
-        fn handle_cmd(
-            _id: &Self::Id,
-            _state: &Self::State,
-            _cmd: Self::Cmd,
-        ) -> Result<Self::Evt, Self::Error> {
-            todo!()
-        }
-
-        fn handle_evt(_state: Self::State, _evt: Self::Evt) -> Self::State {
-            todo!()
-        }
-    }
 
     #[derive(Debug, Clone)]
     struct TestEvtLog;
@@ -400,39 +369,39 @@ mod tests {
 
         async fn persist<E, ToBytes, ToBytesError>(
             &mut self,
-            _evt: &E::Evt,
+            _type_name: &'static str,
             _id: &Self::Id,
             last_seq_no: Option<NonZeroU64>,
+            _evt: &E,
             _to_bytes: &ToBytes,
         ) -> Result<NonZeroU64, Self::Error>
         where
-            E: EventSourced,
-            ToBytes: Fn(&E::Evt) -> Result<Bytes, ToBytesError> + Sync,
+            E: Sync,
+            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
             ToBytesError: StdError + Send + Sync + 'static,
         {
             let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
             Ok(seq_no)
         }
 
-        async fn last_seq_no<E>(
+        async fn last_seq_no(
             &self,
-            _entity_id: &Self::Id,
-        ) -> Result<Option<NonZeroU64>, Self::Error>
-        where
-            E: EventSourced,
-        {
+            _type_name: &'static str,
+            _id: &Self::Id,
+        ) -> Result<Option<NonZeroU64>, Self::Error> {
             Ok(Some(42.try_into().unwrap()))
         }
 
         async fn evts_by_id<E, FromBytes, FromBytesError>(
             &self,
+            _type_name: &'static str,
             _id: &Self::Id,
-            _seq_no: NonZeroU64,
-            _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
+            _from_seq_no: NonZeroU64,
+            _from_bytes: FromBytes,
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
-            E: EventSourced,
-            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send + Sync,
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             Ok(stream::empty())
@@ -440,18 +409,19 @@ mod tests {
 
         async fn evts_by_type<E, FromBytes, FromBytesError>(
             &self,
+            _type_name: &'static str,
             seq_no: NonZeroU64,
-            evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
+            from_bytes: FromBytes,
+        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
         where
-            E: EventSourced,
-            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send + Sync,
+            E: Send,
+            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
             FromBytesError: StdError + Send + Sync + 'static,
         {
             let evts = stream::iter(seq_no.get()..=100).map(move |n| {
                 let evt = n as i64;
                 let n = NonZeroU64::new(n).unwrap();
-                let evt = evt_from_bytes(serde_json::to_vec(&evt).unwrap().into()).unwrap();
+                let evt = from_bytes(serde_json::to_vec(&evt).unwrap().into()).unwrap();
                 Ok((n, evt))
             });
 
@@ -466,14 +436,12 @@ mod tests {
     #[derive(Clone)]
     struct TestHandler;
 
-    impl EvtHandler for TestHandler {
-        type EventSourced = Dummy;
-
+    impl EvtHandler<i32> for TestHandler {
         type Error = sqlx::Error;
 
         async fn handle_evt(
             &self,
-            evt: <Self::EventSourced as EventSourced>::Evt,
+            evt: i32,
             tx: &mut Transaction<'static, Postgres>,
         ) -> Result<(), Self::Error> {
             let query = "INSERT INTO test (n) VALUES ($1)";
@@ -503,6 +471,7 @@ mod tests {
             .await?;
 
         let projection = Projection::new(
+            "dummy",
             "test-projection".to_string(),
             TestEvtLog,
             TestHandler,
