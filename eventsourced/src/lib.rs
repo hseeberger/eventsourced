@@ -47,8 +47,8 @@ use crate::{
 };
 use error_ext::{BoxError, StdErrorExt};
 use frunk::{
-    coproduct::{CNil, CoproductSelector},
-    Coprod,
+    coproduct::{CNil, CoprodInjector, CoproductFoldable},
+    hlist, Coprod, HList, HNil,
 };
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -92,7 +92,7 @@ pub trait EventSourced {
 /// A command for the given [EventSourced] implementation, defining its handling and replying.
 pub trait Cmd<E>
 where
-    Self: 'static,
+    Self: Debug + Send + 'static,
     E: EventSourced,
 {
     /// The type for rejecting this command.
@@ -118,7 +118,7 @@ pub struct EntityRef<E, T>
 where
     E: EventSourced,
 {
-    cmd_in: mpsc::Sender<(BoxedAny, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>,
+    cmd_in: mpsc::Sender<(T, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>,
     id: E::Id,
     _e: PhantomData<E>,
     _t: PhantomData<T>,
@@ -143,12 +143,12 @@ where
         cmd: C,
     ) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
     where
-        C: Cmd<E> + Debug + Send,
-        T: CoproductSelector<C, X>,
+        C: Cmd<E>,
+        T: CoprodInjector<C, X>,
     {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
-            .send((Box::new(cmd), result_in))
+            .send((T::inject(cmd), result_in))
             .await
             .map_err(|_| HandleCmdError("cannot send cmd".to_string()))?;
         let result = result_out
@@ -159,6 +159,25 @@ where
             .map(|reply| *reply.downcast::<C::Reply>().expect("downcast reply"));
         Ok(result)
     }
+
+    #[instrument(skip(self))]
+    pub async fn handle_cmd_coprod(
+        &self,
+        cmd: T,
+    ) -> Result<Result<BoxedAny, BoxedAny>, HandleCmdError>
+    where
+        T: Debug,
+    {
+        let (result_in, result_out) = oneshot::channel();
+        self.cmd_in
+            .send((cmd, result_in))
+            .await
+            .map_err(|_| HandleCmdError("cannot send cmd".to_string()))?;
+        let result = result_out
+            .await
+            .map_err(|_| HandleCmdError("cannot receive cmd handler result".to_string()))?;
+        Ok(result)
+    }
 }
 
 /// Extension methods for [EventSourced] entities.
@@ -167,10 +186,11 @@ where
     Self: EventSourced + Sized,
 {
     /// Create a new [EventSourced] entity for this [EventSourced] implementation.
-    fn entity(self) -> EventSourcedEntity<Self, CNil> {
+    fn entity(self) -> EventSourcedEntity<Self, CNil, HNil> {
         EventSourcedEntity {
             e: self,
             cmd_fns: HashMap::new(),
+            folder: HNil,
             _t: PhantomData,
         }
     }
@@ -179,22 +199,27 @@ where
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
 /// An [EventSourced] entity which allows for registering `Cmd`s and `spawn`ing.
-pub struct EventSourcedEntity<E, T>
+pub struct EventSourcedEntity<E, T, F>
 where
     E: EventSourced,
 {
     e: E,
     cmd_fns: BoxedCmdFns<E>,
+    folder: F,
     _t: PhantomData<T>,
 }
 
-impl<E, T> EventSourcedEntity<E, T>
+impl<E, T, F> EventSourcedEntity<E, T, F>
 where
     E: EventSourced + Debug + Send + Sync + 'static,
-    T: Send,
+    F: Copy + Send + 'static,
+    T: CoproductFoldable<F, BoxedAny> + Debug + Send + 'static,
 {
     /// Add the given command to the [EventSourced] entity.
-    pub fn cmd<C>(mut self) -> EventSourcedEntity<E, Coprod!(C, ...T)>
+    #[allow(clippy::type_complexity)]
+    pub fn cmd<C>(
+        mut self,
+    ) -> EventSourcedEntity<E, Coprod!(C, ...T), HList!(fn(C) -> BoxedAny, ...F)>
     where
         C: Cmd<E>,
     {
@@ -206,6 +231,7 @@ where
         EventSourcedEntity {
             e: self.e,
             cmd_fns: self.cmd_fns,
+            folder: hlist![|c| Box::new(c), ...self.folder],
             _t: PhantomData,
         }
     }
@@ -285,17 +311,17 @@ where
         }
 
         // Spawn handler loop.
-        let (cmd_in, mut cmd_out) = mpsc::channel::<(
-            BoxedAny,
-            oneshot::Sender<Result<BoxedAny, BoxedAny>>,
-        )>(cmd_buffer.get());
+        let (cmd_in, mut cmd_out) =
+            mpsc::channel::<(T, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>(cmd_buffer.get());
         task::spawn({
             let id = id.clone();
             let mut evt_count = 0u64;
 
             async move {
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                    debug!(?id, "handling cmd");
+                    debug!(?id, ?cmd, "handling cmd");
+
+                    let cmd = cmd.fold(self.folder);
 
                     let type_id = cmd.as_ref().type_id();
                     let (handle_cmd_fn, reply_fn) =
@@ -550,6 +576,12 @@ mod tests {
         assert_matches!(reply, Ok(42));
 
         assert!(logs_contain("state=Counter(42)"));
+
+        type Cmd = Coprod!(Decrease, Increase);
+        let reply = entity.handle_cmd_coprod(Cmd::inject(Decrease(100))).await?;
+        assert!(reply.is_err());
+        let reply = *reply.unwrap_err().downcast::<Underflow>().unwrap();
+        assert_eq!(reply, Underflow);
 
         Ok(())
     }
