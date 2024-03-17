@@ -31,10 +31,11 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default()
-            .entity("counter", id)
+            .entity()
             .cmd::<Increase>()
             .cmd::<Decrease>()
             .spawn(
+                id,
                 None,
                 NonZeroUsize::new(2).expect("2 is not zero"),
                 evt_log,
@@ -80,10 +81,11 @@ where
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
             let _ = Counter::default()
-                .entity("counter", id)
+                .entity()
                 .cmd::<Increase>()
                 .cmd::<Decrease>()
                 .spawn(
+                    id,
                     None,
                     NonZeroUsize::new(2).expect("2 is not zero"),
                     evt_log,

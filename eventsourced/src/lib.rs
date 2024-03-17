@@ -77,10 +77,13 @@ type BoxedCmdFns<E> = HashMap<TypeId, (BoxedHandleCmd<E>, BoxedReply<E>)>;
 /// The state of an event sourced entity as well as its event handling (which transforms the state).
 pub trait EventSourced {
     /// The Id type.
-    type Id;
+    type Id: Debug + Clone + Send;
 
     /// The event type.
-    type Evt;
+    type Evt: Debug + Send + Sync + 'static;
+
+    /// The type name.
+    const TYPE_NAME: &'static str;
 
     /// The event handler.
     fn handle_evt(self, evt: Self::Evt) -> Self;
@@ -163,13 +166,10 @@ pub trait EventSourcedExt
 where
     Self: EventSourced + Sized,
 {
-    /// Create a new [EventSourced] entity with the given type name, ID and this [EventSourced]
-    /// implementation.
-    fn entity(self, type_name: &'static str, id: Self::Id) -> EventSourcedEntity<Self, CNil> {
+    /// Create a new [EventSourced] entity for this [EventSourced] implementation.
+    fn entity(self) -> EventSourcedEntity<Self, CNil> {
         EventSourcedEntity {
             e: self,
-            type_name,
-            id,
             cmd_fns: HashMap::new(),
             _t: PhantomData,
         }
@@ -184,8 +184,6 @@ where
     E: EventSourced,
 {
     e: E,
-    type_name: &'static str,
-    id: E::Id,
     cmd_fns: BoxedCmdFns<E>,
     _t: PhantomData<T>,
 }
@@ -193,9 +191,7 @@ where
 impl<E, T> EventSourcedEntity<E, T>
 where
     E: EventSourced + Debug + Send + Sync + 'static,
-    E::Evt: Debug + Send + Sync + 'static,
-    E::Id: Debug + Clone + Send,
-    T: Send + 'static,
+    T: Send,
 {
     /// Add the given command to the [EventSourced] entity.
     pub fn cmd<C>(mut self) -> EventSourcedEntity<E, Coprod!(C, ...T)>
@@ -209,8 +205,6 @@ where
 
         EventSourcedEntity {
             e: self.e,
-            type_name: self.type_name,
-            id: self.id,
             cmd_fns: self.cmd_fns,
             _t: PhantomData,
         }
@@ -225,26 +219,27 @@ where
     ///
     /// `EntityRef<Counter, Coprod!(Decrease, Increase)>`
     #[instrument(skip(self, evt_log, snapshot_store, binarize))]
-    pub async fn spawn<L, M, B>(
+    pub async fn spawn<L, S, B>(
         self,
+        id: E::Id,
         snapshot_after: Option<NonZeroU64>,
         cmd_buffer: NonZeroUsize,
         mut evt_log: L,
-        mut snapshot_store: M,
+        mut snapshot_store: S,
         binarize: B,
     ) -> Result<EntityRef<E, T>, SpawnError>
     where
         L: EvtLog<Id = E::Id>,
-        M: SnapshotStore<Id = E::Id>,
+        S: SnapshotStore<Id = E::Id>,
         B: Binarize<E::Evt, E>,
     {
         // Restore snapshot.
         let (snapshot_seq_no, state) = snapshot_store
-            .load::<E, _, _>(&self.id, |bytes| binarize.state_from_bytes(bytes))
+            .load::<E, _, _>(&id, |bytes| binarize.state_from_bytes(bytes))
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(id = ?self.id, seq_no, ?state, "restored snapshot");
+                debug!(?id, seq_no, ?state, "restored snapshot");
                 (seq_no, state)
             })
             .unzip();
@@ -252,7 +247,7 @@ where
 
         // Get and validate last sequence number.
         let mut last_seq_no = evt_log
-            .last_seq_no(self.type_name, &self.id)
+            .last_seq_no(E::TYPE_NAME, &id)
             .await
             .map_err(|error| SpawnError::LastNonZeroU64(error.into()))?;
         if last_seq_no < snapshot_seq_no {
@@ -265,10 +260,10 @@ where
                 .map(|n| n.saturating_add(1))
                 .unwrap_or(NonZeroU64::MIN);
             let to_seq_no = last_seq_no.unwrap(); // This is safe because of the above relation!
-            debug!(id = ?self.id, seq_no, to_seq_no, "replaying evts");
+            debug!(?id, seq_no, to_seq_no, "replaying evts");
 
             let evts = evt_log
-                .evts_by_id::<E::Evt, _, _>(self.type_name, &self.id, seq_no, move |bytes| {
+                .evts_by_id::<E::Evt, _, _>(E::TYPE_NAME, &id, seq_no, move |bytes| {
                     binarize.evt_from_bytes(bytes)
                 })
                 .await
@@ -286,7 +281,7 @@ where
                 .try_fold(state, |state, (_, evt)| ok(state.handle_evt(evt)))
                 .await?;
 
-            debug!(id = ?self.id, state = ?state, "replayed evts");
+            debug!(?id, state = ?state, "replayed evts");
         }
 
         // Spawn handler loop.
@@ -294,26 +289,26 @@ where
             BoxedAny,
             oneshot::Sender<Result<BoxedAny, BoxedAny>>,
         )>(cmd_buffer.get());
-        let id = self.id.clone();
         task::spawn({
+            let id = id.clone();
             let mut evt_count = 0u64;
 
             async move {
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                    debug!(id = ?self.id, "handling cmd");
+                    debug!(?id, "handling cmd");
 
                     let type_id = cmd.as_ref().type_id();
                     let (handle_cmd_fn, reply_fn) =
                         self.cmd_fns.get(&type_id).expect("get cmd handler");
-                    let result = handle_cmd_fn(&cmd, &self.id, &state);
+                    let result = handle_cmd_fn(&cmd, &id, &state);
                     match result {
                         Ok(evt) => {
-                            debug!(id = ?self.id, ?evt, "persisting event");
+                            debug!(?id, ?evt, "persisting event");
 
                             match evt_log
                                 .persist::<E::Evt, _, _>(
-                                    self.type_name,
-                                    &self.id,
+                                    E::TYPE_NAME,
+                                    &id,
                                     last_seq_no,
                                     &evt,
                                     &|evt| binarize.evt_to_bytes(evt),
@@ -321,7 +316,7 @@ where
                                 .await
                             {
                                 Ok(seq_no) => {
-                                    debug!(id = ?self.id, ?evt, seq_no, "persited event");
+                                    debug!(?id, ?evt, seq_no, "persited event");
 
                                     last_seq_no = Some(seq_no);
                                     state = state.handle_evt(evt);
@@ -331,17 +326,17 @@ where
                                         .map(|a| evt_count % a == 0)
                                         .unwrap_or_default()
                                     {
-                                        debug!(id = ?self.id, seq_no, evt_count, "saving snapshot");
+                                        debug!(?id, seq_no, evt_count, "saving snapshot");
 
                                         if let Err(error) = snapshot_store
-                                            .save(&self.id, seq_no, &state, &|state| {
+                                            .save(&id, seq_no, &state, &|state| {
                                                 binarize.state_to_bytes(state)
                                             })
                                             .await
                                         {
                                             error!(
                                                 error = error.as_chain(),
-                                                id = ?self.id,
+                                                ?id,
                                                 "cannot save snapshot"
                                             );
                                         };
@@ -349,12 +344,12 @@ where
 
                                     let reply = reply_fn(cmd, &state);
                                     if result_sender.send(Ok(reply)).is_err() {
-                                        error!(id = ?self.id, "cannot send cmd reply");
+                                        error!(?id, "cannot send cmd reply");
                                     };
                                 }
 
                                 Err(error) => {
-                                    error!(error = error.as_chain(), id = ?self.id, "cannot persist event");
+                                    error!(error = error.as_chain(), ?id, "cannot persist event");
                                     // This is fatal, we must terminate the entity!
                                     break;
                                 }
@@ -363,13 +358,13 @@ where
 
                         Err(error) => {
                             if result_sender.send(Err(error)).is_err() {
-                                error!(id = ?self.id, "cannot send cmd error");
+                                error!(?id, "cannot send cmd error");
                             }
                         }
                     };
                 }
 
-                debug!(id = ?self.id, "entity terminated");
+                debug!(?id, "entity terminated");
             }
         });
 
@@ -434,11 +429,16 @@ where
 
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
-    use super::*;
     use crate::{
-        binarize::serde_json::*, evt_log::test::TestEvtLog, snapshot_store::test::TestSnapshotStore,
+        binarize::serde_json::*,
+        evt_log::{test::TestEvtLog, EvtLog},
+        snapshot_store::{test::TestSnapshotStore, SnapshotStore},
+        Cmd, EntityRef, EventSourced, EventSourcedExt,
     };
     use assert_matches::assert_matches;
+    use error_ext::BoxError;
+    use frunk::Coprod;
+    use serde::{Deserialize, Serialize};
     use tracing_test::traced_test;
     use uuid::Uuid;
 
@@ -448,6 +448,8 @@ mod tests {
     impl EventSourced for Counter {
         type Id = Uuid;
         type Evt = Evt;
+
+        const TYPE_NAME: &'static str = "counter";
 
         fn handle_evt(self, evt: Evt) -> Self {
             match evt {
@@ -527,12 +529,13 @@ mod tests {
             .await?;
 
         let entity: EntityRef<Counter, Coprod!(Decrease, Increase)> = Counter::default()
-            .entity("counter", id)
+            .entity()
             .cmd::<Increase>()
             .cmd::<Decrease>()
             .spawn(
+                id,
                 None,
-                unsafe { NonZeroUsize::new_unchecked(1) },
+                1.try_into()?,
                 evt_log,
                 snapshot_store,
                 SerdeJsonBinarize,
