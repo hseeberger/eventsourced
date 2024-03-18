@@ -2,10 +2,11 @@ pub mod counter;
 
 use crate::counter::{Cmd, Counter};
 use anyhow::{Context, Result};
-use eventsourced::{binarize, EventSourcedExt, EvtLog, SnapshotStore};
+use eventsourced::{binarize, evt_log::EvtLog, snapshot_store::SnapshotStore, EventSourcedExt};
 use serde::Deserialize;
-use std::{num::NonZeroUsize, time::Instant};
+use std::{iter, num::NonZeroUsize, time::Instant};
 use tokio::task::JoinSet;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -16,11 +17,11 @@ pub struct Config {
 
 pub async fn run<L, S>(config: Config, evt_log: L, snapshot_store: S) -> Result<()>
 where
-    L: EvtLog<Id = String>,
-    S: SnapshotStore<Id = String>,
+    L: EvtLog<Id = Uuid>,
+    S: SnapshotStore<Id = Uuid>,
 {
-    let ids = (0..config.entity_count)
-        .map(|n| n.to_string())
+    let ids = iter::repeat_with(Uuid::now_v7)
+        .take(config.entity_count)
         .collect::<Vec<_>>();
 
     println!("Spawning and sending a lot of commands ...");
@@ -30,7 +31,7 @@ where
         let evt_log = evt_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::spawn(
-            id.clone(),
+            id,
             None,
             NonZeroUsize::new(42).expect("42 is not zero"),
             evt_log,
@@ -46,14 +47,14 @@ where
                     println!("{id}: {} events persisted", n * 2);
                 }
                 counter
-                    .handle_cmd(Cmd::Inc(n as u64))
+                    .handle_cmd(Cmd::Increase(n as u64))
                     .await
                     .context("send/receive Inc command")
                     .unwrap()
                     .context("handle Inc command")
                     .unwrap();
                 counter
-                    .handle_cmd(Cmd::Dec(n as u64))
+                    .handle_cmd(Cmd::Decrease(n as u64))
                     .await
                     .context("send/receive Dec command")
                     .unwrap()

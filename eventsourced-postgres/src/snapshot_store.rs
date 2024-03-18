@@ -3,7 +3,7 @@
 use crate::{Cnn, CnnPool, Error};
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::{Snapshot, SnapshotStore};
+use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error as StdError,

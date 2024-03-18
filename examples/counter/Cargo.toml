@@ -13,3 +13,4 @@ serde        = { workspace = true }
 tokio        = { workspace = true, features = [ "rt-multi-thread" ] }
 thiserror    = { workspace = true }
 tracing      = { workspace = true }
+uuid         = { workspace = true }

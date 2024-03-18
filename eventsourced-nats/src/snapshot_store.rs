@@ -6,7 +6,7 @@ use async_nats::{
     ConnectOptions,
 };
 use bytes::{Bytes, BytesMut};
-use eventsourced::{Snapshot, SnapshotStore};
+use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -115,7 +115,7 @@ where
         ToBytesError: StdError + Send + Sync + 'static,
     {
         let mut bytes = BytesMut::new();
-        let state = to_bytes(state).map_err(|error| Error::IntoBytes(Box::new(error)))?;
+        let state = to_bytes(state).map_err(|error| Error::ToBytes(Box::new(error)))?;
         let snapshot = proto::Snapshot {
             seq_no: seq_no.get(),
             state,

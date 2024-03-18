@@ -29,15 +29,17 @@
 //! `eventsourced-projection` crate.
 
 pub mod binarize;
+pub mod evt_log;
+pub mod snapshot_store;
 
-mod evt_log;
-mod snapshot_store;
 mod util;
 
-pub use evt_log::*;
-pub use snapshot_store::*;
-
-use crate::{binarize::Binarize, util::StreamExt as EventSourcedStreamExt};
+use crate::{
+    binarize::Binarize,
+    evt_log::EvtLog,
+    snapshot_store::{Snapshot, SnapshotStore},
+    util::StreamExt as EventSourcedStreamExt,
+};
 use error_ext::{BoxError, StdErrorExt};
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
@@ -127,7 +129,7 @@ pub trait EventSourcedExt: Sized {
 
         // Get and validate last sequence number.
         let mut last_seq_no = evt_log
-            .last_seq_no::<Self>(&id)
+            .last_seq_no(Self::TYPE_NAME, &id)
             .await
             .map_err(|error| SpawnError::LastNonZeroU64(error.into()))?;
         if last_seq_no < snapshot_seq_no {
@@ -144,7 +146,7 @@ pub trait EventSourcedExt: Sized {
             debug!(?id, from_seq_no, to_seq_no, "replaying evts");
 
             let evts = evt_log
-                .evts_by_id::<Self, _, _>(&id, from_seq_no, move |bytes| {
+                .evts_by_id::<Self::Evt, _, _>(Self::TYPE_NAME, &id, from_seq_no, move |bytes| {
                     binarize.evt_from_bytes(bytes)
                 })
                 .await
@@ -182,9 +184,13 @@ pub trait EventSourcedExt: Sized {
                             debug!(?id, ?evt, "persisting event");
 
                             match evt_log
-                                .persist::<Self, _, _>(&evt, &id, last_seq_no, &|evt| {
-                                    binarize.evt_to_bytes(evt)
-                                })
+                                .persist::<Self::Evt, _, _>(
+                                    Self::TYPE_NAME,
+                                    &id,
+                                    last_seq_no,
+                                    &evt,
+                                    &|evt| binarize.evt_to_bytes(evt),
+                                )
                                 .await
                             {
                                 Ok(seq_no) => {
@@ -305,173 +311,123 @@ pub struct HandleCmdError(String);
 
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
-    use super::*;
-    use bytes::Bytes;
-    use futures::{stream, Stream, StreamExt};
-    use std::{convert::Infallible, iter};
+    use crate::{
+        binarize::serde_json::{to_bytes, SerdeJsonBinarize},
+        evt_log::{test::TestEvtLog, EvtLog},
+        snapshot_store::{test::TestSnapshotStore, SnapshotStore},
+        EventSourced, EventSourcedExt,
+    };
+    use assert_matches::assert_matches;
+    use error_ext::BoxError;
+    use serde::{Deserialize, Serialize};
+    use std::num::NonZeroUsize;
+    use thiserror::Error;
     use tracing_test::traced_test;
     use uuid::Uuid;
 
     #[derive(Debug)]
-    struct Simple;
+    pub struct Counter;
 
-    impl EventSourced for Simple {
+    impl EventSourced for Counter {
         type Id = Uuid;
-        type Cmd = ();
-        type Evt = ();
-        type State = u64;
-        type Error = Infallible;
+        type Cmd = Cmd;
+        type Evt = Evt;
+        type State = State;
+        type Error = Error;
 
-        const TYPE_NAME: &'static str = "simple";
+        const TYPE_NAME: &'static str = "counter";
 
         fn handle_cmd(
-            _id: &Self::Id,
-            _state: &Self::State,
-            _cmd: Self::Cmd,
+            id: &Self::Id,
+            state: &Self::State,
+            cmd: Self::Cmd,
         ) -> Result<Self::Evt, Self::Error> {
-            Ok(())
+            let id = *id;
+            let value = state.value;
+
+            match cmd {
+                Cmd::Increase(inc) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
+                Cmd::Increase(inc) => Ok(Evt::Increased { id, inc }),
+
+                Cmd::Decrease(dec) if dec > value => Err(Error::Underflow { value, dec }),
+                Cmd::Decrease(dec) => Ok(Evt::Decreased { id, dec }),
+            }
         }
 
-        fn handle_evt(mut state: Self::State, _evt: Self::Evt) -> Self::State {
-            state += 1;
+        fn handle_evt(mut state: Self::State, evt: Self::Evt) -> Self::State {
+            match evt {
+                Evt::Increased { inc, .. } => state.value += inc,
+                Evt::Decreased { dec, .. } => state.value -= dec,
+            };
             state
         }
     }
 
-    #[derive(Debug, Clone)]
-    struct TestEvtLog;
-
-    impl EvtLog for TestEvtLog {
-        type Id = Uuid;
-        type Error = TestEvtLogError;
-
-        async fn persist<E, ToBytes, ToBytesError>(
-            &mut self,
-            _evt: &E::Evt,
-            _id: &Self::Id,
-            last_seq_no: Option<NonZeroU64>,
-            _to_bytes: &ToBytes,
-        ) -> Result<NonZeroU64, Self::Error>
-        where
-            E: EventSourced,
-            ToBytes: Fn(&E::Evt) -> Result<Bytes, ToBytesError> + Sync,
-            ToBytesError: StdError + Send + Sync + 'static,
-        {
-            let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
-            Ok(seq_no)
-        }
-
-        async fn last_seq_no<E>(
-            &self,
-            _entity_id: &Self::Id,
-        ) -> Result<Option<NonZeroU64>, Self::Error>
-        where
-            E: EventSourced,
-        {
-            Ok(Some(42.try_into().unwrap()))
-        }
-
-        async fn evts_by_id<E, FromBytes, FromBytesError>(
-            &self,
-            _id: &Self::Id,
-            seq_no: NonZeroU64,
-            evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
-        where
-            E: EventSourced,
-            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send + Sync,
-            FromBytesError: StdError + Send + Sync + 'static,
-        {
-            let successors = iter::successors(Some(seq_no), |n| n.checked_add(1));
-            let evts = stream::iter(successors).map(move |n| {
-                let evt = evt_from_bytes(serde_json::to_vec(&()).unwrap().into()).unwrap();
-                Ok((n, evt))
-            });
-
-            Ok(evts)
-        }
-
-        async fn evts_by_type<E, FromBytes, FromBytesError>(
-            &self,
-            _seq_no: NonZeroU64,
-            _evt_from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E::Evt), Self::Error>> + Send, Self::Error>
-        where
-            E: EventSourced,
-            FromBytes: Fn(Bytes) -> Result<E::Evt, FromBytesError> + Copy + Send,
-            FromBytesError: StdError + Send + Sync + 'static,
-        {
-            Ok(stream::empty())
-        }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Cmd {
+        Increase(u64),
+        Decrease(u64),
     }
 
-    #[derive(Debug, Error)]
-    #[error("TestEvtLogError")]
-    struct TestEvtLogError(#[source] BoxError);
-
-    #[derive(Debug, Clone)]
-    struct TestSnapshotStore;
-
-    impl SnapshotStore for TestSnapshotStore {
-        type Id = Uuid;
-        type Error = TestSnapshotStoreError;
-
-        async fn save<S, ToBytes, ToBytesError>(
-            &mut self,
-            _id: &Self::Id,
-            _seq_no: NonZeroU64,
-            _state: &S,
-            _state_to_bytes: &ToBytes,
-        ) -> Result<(), Self::Error>
-        where
-            S: Send,
-            ToBytes: Fn(&S) -> Result<Bytes, ToBytesError> + Sync,
-            ToBytesError: StdError,
-        {
-            Ok(())
-        }
-
-        async fn load<S, FromBytes, FromBytesError>(
-            &self,
-            _id: &Self::Id,
-            state_from_bytes: FromBytes,
-        ) -> Result<Option<Snapshot<S>>, Self::Error>
-        where
-            FromBytes: Fn(Bytes) -> Result<S, FromBytesError>,
-            FromBytesError: StdError,
-        {
-            let bytes = serde_json::to_vec(&21).unwrap();
-            let state = state_from_bytes(bytes.into()).unwrap();
-            Ok(Some(Snapshot {
-                seq_no: 21.try_into().unwrap(),
-                state,
-            }))
-        }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    pub enum Evt {
+        Increased { id: Uuid, inc: u64 },
+        Decreased { id: Uuid, dec: u64 },
     }
 
-    #[derive(Debug, Error)]
-    #[error("TestSnapshotStoreError")]
-    struct TestSnapshotStoreError;
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    pub struct State {
+        value: u64,
+    }
+
+    #[derive(Debug, Clone, Copy, Error)]
+    pub enum Error {
+        #[error("Overflow: value={value}, increment={inc}")]
+        Overflow { value: u64, inc: u64 },
+
+        #[error("Underflow: value={value}, decrement={dec}")]
+        Underflow { value: u64, dec: u64 },
+    }
 
     #[tokio::test]
     #[traced_test]
     async fn test_spawn_handle_cmd() -> Result<(), BoxError> {
-        let evt_log = TestEvtLog;
-        let snapshot_store = TestSnapshotStore;
+        let id = Uuid::from_u128(1);
 
-        let entity = Simple::spawn(
-            Uuid::from_u128(1),
+        let mut evt_log = TestEvtLog::default();
+        for _ in 0..42 {
+            evt_log
+                .persist(
+                    Counter::TYPE_NAME,
+                    &id,
+                    None,
+                    &Evt::Increased { id, inc: 1 },
+                    &to_bytes,
+                )
+                .await?;
+        }
+
+        let mut snapshot_store = TestSnapshotStore::default();
+        snapshot_store
+            .save(&id, 21.try_into()?, &State { value: 21 }, &to_bytes)
+            .await?;
+
+        let entity = Counter::spawn(
+            id,
             None,
             unsafe { NonZeroUsize::new_unchecked(1) },
             evt_log,
             snapshot_store,
-            binarize::serde_json::SerdeJsonBinarize,
+            SerdeJsonBinarize,
         )
         .await?;
 
-        entity.handle_cmd(()).await??;
+        assert!(logs_contain("state=State { value: 42 }"));
 
-        assert!(logs_contain("state=42"));
+        let result = entity.handle_cmd(Cmd::Increase(1)).await?;
+        assert!(result.is_ok());
+        let result = entity.handle_cmd(Cmd::Decrease(100)).await?;
+        assert_matches!(result, Err(Error::Underflow { .. }));
 
         Ok(())
     }
