@@ -185,7 +185,7 @@ where
     Self: EventSourced + Sized,
 {
     /// Create a new [EventSourced] entity for this [EventSourced] implementation.
-    fn entity(self) -> EventSourcedEntity<Self, CNil, CNil, CNil, CNil, CNil, HNil, HNil> {
+    fn entity(self) -> EventSourcedEntity<Self, CNil, CNil, CNil, CNil, CNil, HNil, HNil, HNil> {
         EventSourcedEntity {
             e: self,
             _cmds: PhantomData,
@@ -193,6 +193,7 @@ where
             _errors: PhantomData,
             _args: PhantomData,
             _rets: PhantomData,
+            _cmd_to_args: PhantomData,
             cmd_handler: HNil,
             make_reply: HNil,
         }
@@ -202,8 +203,17 @@ where
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
 /// An [EventSourced] entity which allows for registering `Cmd`s and `spawn`ing.
-pub struct EventSourcedEntity<E, Cmds, Replies, Errors, Args, Rets, CmdHandler, MakeReply>
-where
+pub struct EventSourcedEntity<
+    E,
+    Cmds,
+    Replies,
+    Errors,
+    Args,
+    Rets,
+    CmdsToArgs,
+    CmdHandler,
+    MakeReply,
+> where
     E: EventSourced,
 {
     e: E,
@@ -212,12 +222,13 @@ where
     _errors: PhantomData<Errors>,
     _args: PhantomData<Args>,
     _rets: PhantomData<Rets>,
+    _cmd_to_args: PhantomData<CmdsToArgs>,
     cmd_handler: CmdHandler,
     make_reply: MakeReply,
 }
 
-impl<E, Cmds, Replies, Errors, Args, Rets, CmdHandler, MakeReply>
-    EventSourcedEntity<E, Cmds, Replies, Errors, Args, Rets, CmdHandler, MakeReply>
+impl<E, Cmds, Replies, Errors, Args, Rets, CmdsToArgs, CmdHandler, MakeReply>
+    EventSourcedEntity<E, Cmds, Replies, Errors, Args, Rets, CmdsToArgs, CmdHandler, MakeReply>
 where
     E: EventSourced,
 {
@@ -232,6 +243,7 @@ where
         Coprod!(C::Error, ...Errors),
         Coprod!((&'c C, &'i E::Id, &'e E), ...Args),
         Coprod!(Result<E::Evt, C::Error>, ...Rets),
+        HList!(Box<dyn Fn(C) -> (&'c C, &'i E::Id, &'e E)>, ...CmdsToArgs),
         HList!(fn((&C, &E::Id, &E)) -> Result<E::Evt, C::Error>, ...CmdHandler),
         HList!(fn(C, &E) -> C::Reply, ...MakeReply),
     >
@@ -245,6 +257,7 @@ where
             _errors: PhantomData,
             _args: PhantomData,
             _rets: PhantomData,
+            _cmd_to_args: PhantomData,
             cmd_handler: hlist![handle_cmd::<C, E>, ...self.cmd_handler],
             make_reply: hlist![C::make_reply, ...self.make_reply],
         }
@@ -269,10 +282,11 @@ where
         binarize: B,
     ) -> Result<EntityRef<E, Cmds, Replies, Errors>, SpawnError>
     where
-        Cmds: Debug + Send + 'static,
+        Cmds: CoproductMappable<CmdsToArgs, Output = Args> + Debug + Send + 'static,
         Replies: Send + 'static,
         Errors: Send + 'static,
         Args: CoproductMappable<CmdHandler, Output = Rets>,
+        CmdHandler: Send + 'static,
         L: EvtLog<Id = E::Id>,
         S: SnapshotStore<Id = E::Id>,
         B: Binarize<E::Evt, E>,
@@ -337,7 +351,16 @@ where
 
             async move {
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                    // debug!(?id, ?cmd, "handling cmd");
+                    debug!(?id, ?cmd, "handling cmd");
+
+                    let mapper: CmdsToArgs = hlist![
+                        Box::new(|c| (&c, &id, &state)),
+                        Box::new(|c| (&c, &id, &state)),
+                    ];
+                    let args = cmd.map(mapper);
+                    let rets = args.map(self.cmd_handler);
+
+                    //let ret = cmd.map(f)
 
                     // let cmd = cmd.fold(self.folder);
 
