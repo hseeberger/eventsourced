@@ -26,7 +26,7 @@ bb8-postgres           = { version = "0.8" }
 bytes                  = { version = "1.5" }
 configured             = { version = "0.7" }
 error-ext              = { version = "0.1" }
-frunk                  = { version = "0.4" }
+frunk_core             = { version = "0.4", features = [ "serde" ] }
 futures                = { version = "0.3" }
 humantime-serde        = { version = "1.1" }
 pin-project            = { version = "1.1" }
