@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.21.0...eventsourced-v0.22.0) - 2024-03-17
+
+### Added
+- *(eventsourced)* pass entity id late on spawn ([#199](https://github.com/hseeberger/eventsourced/pull/199))
+
 ## [0.21.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.20.1...eventsourced-v0.21.0) - 2024-03-15
 
 ### Other
