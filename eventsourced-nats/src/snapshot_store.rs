@@ -228,23 +228,23 @@ mod proto {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::tests::NATS_VERSION;
+    use crate::{tests::NATS_VERSION, NatsSnapshotStore, NatsSnapshotStoreConfig};
     use error_ext::BoxError;
-    use eventsourced::binarize;
+    use eventsourced::{binarize, snapshot_store::SnapshotStore};
     use testcontainers::{clients::Cli, core::WaitFor};
     use testcontainers_modules::testcontainers::GenericImage;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), BoxError> {
-        let client = Cli::default();
+        let tc_client = Cli::default();
+
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
-        let container = client.run((nats_image, vec!["-js".to_string()]));
+        let container = tc_client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config {
+        let config = NatsSnapshotStoreConfig {
             server_addr,
             setup: true,
             ..Default::default()

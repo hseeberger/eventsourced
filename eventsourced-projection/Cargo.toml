@@ -24,6 +24,7 @@ tracing       = { workspace = true }
 trait-variant = { workspace = true }
 
 [dev-dependencies]
+eventsourced           = { path = "../eventsourced", version = "0.22.0", features = [ "test" ] }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true, features = [ "postgres" ] }
 tokio                  = { workspace = true, features = [ "macros" ] }

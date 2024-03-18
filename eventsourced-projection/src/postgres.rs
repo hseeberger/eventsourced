@@ -346,92 +346,23 @@ async fn save_seq_no(
         .await?;
     Ok(())
 }
+
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use bytes::Bytes;
+    use crate::postgres::{ErrorStrategy, EvtHandler, Projection};
     use error_ext::BoxError;
-    use futures::{stream, Stream};
+    use eventsourced::{
+        binarize::serde_json::to_bytes,
+        evt_log::{test::TestEvtLog, EvtLog},
+    };
     use sqlx::{
         postgres::{PgConnectOptions, PgPoolOptions},
-        Row,
+        Postgres, QueryBuilder, Row, Transaction,
     };
+    use std::{iter::once, time::Duration};
     use testcontainers::{clients::Cli, RunnableImage};
     use testcontainers_modules::postgres::Postgres as TCPostgres;
-    use uuid::Uuid;
-
-    #[derive(Debug, Clone)]
-    struct TestEvtLog;
-
-    impl EvtLog for TestEvtLog {
-        type Id = Uuid;
-        type Error = TestEvtLogError;
-
-        async fn persist<E, ToBytes, ToBytesError>(
-            &mut self,
-            _type_name: &'static str,
-            _id: &Self::Id,
-            last_seq_no: Option<NonZeroU64>,
-            _evt: &E,
-            _to_bytes: &ToBytes,
-        ) -> Result<NonZeroU64, Self::Error>
-        where
-            E: Sync,
-            ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
-            ToBytesError: StdError + Send + Sync + 'static,
-        {
-            let seq_no = last_seq_no.unwrap_or(NonZeroU64::MIN);
-            Ok(seq_no)
-        }
-
-        async fn last_seq_no(
-            &self,
-            _type_name: &'static str,
-            _id: &Self::Id,
-        ) -> Result<Option<NonZeroU64>, Self::Error> {
-            Ok(Some(42.try_into().unwrap()))
-        }
-
-        async fn evts_by_id<E, FromBytes, FromBytesError>(
-            &self,
-            _type_name: &'static str,
-            _id: &Self::Id,
-            _from_seq_no: NonZeroU64,
-            _from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-        where
-            E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
-            FromBytesError: StdError + Send + Sync + 'static,
-        {
-            Ok(stream::empty())
-        }
-
-        async fn evts_by_type<E, FromBytes, FromBytesError>(
-            &self,
-            _type_name: &'static str,
-            seq_no: NonZeroU64,
-            from_bytes: FromBytes,
-        ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Self::Error>> + Send, Self::Error>
-        where
-            E: Send,
-            FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send,
-            FromBytesError: StdError + Send + Sync + 'static,
-        {
-            let evts = stream::iter(seq_no.get()..=100).map(move |n| {
-                let evt = n as i64;
-                let n = NonZeroU64::new(n).unwrap();
-                let evt = from_bytes(serde_json::to_vec(&evt).unwrap().into()).unwrap();
-                Ok((n, evt))
-            });
-
-            Ok(evts)
-        }
-    }
-
-    #[derive(Debug, Error)]
-    #[error("TestEvtLogError")]
-    struct TestEvtLogError(#[source] BoxError);
+    use tokio::time::sleep;
 
     #[derive(Clone)]
     struct TestHandler;
@@ -444,52 +375,60 @@ mod tests {
             evt: i32,
             tx: &mut Transaction<'static, Postgres>,
         ) -> Result<(), Self::Error> {
-            let query = "INSERT INTO test (n) VALUES ($1)";
-            sqlx::query(query).bind(evt).execute(&mut **tx).await?;
+            QueryBuilder::new("INSERT INTO test (n) ")
+                .push_values(once(evt), |mut q, evt| {
+                    q.push_bind(evt);
+                })
+                .build()
+                .execute(&mut **tx)
+                .await?;
             Ok(())
         }
     }
 
     #[tokio::test]
     async fn test() -> Result<(), BoxError> {
-        // let _ = tracing_subscriber::registry()
-        //     .with(EnvFilter::from_default_env())
-        //     .with(fmt::layer().pretty())
-        //     .try_init()?;
+        let tc_client = Cli::default();
 
-        let testcontainers_client = Cli::default();
-        let container = testcontainers_client
-            .run(RunnableImage::from(TCPostgres::default()).with_tag("16-alpine"));
+        let container =
+            tc_client.run(RunnableImage::from(TCPostgres::default()).with_tag("16-alpine"));
         let port = container.get_host_port_ipv4(5432);
 
         let cnn_url = format!("postgresql://postgres:postgres@localhost:{port}");
         let cnn_options = cnn_url.parse::<PgConnectOptions>()?;
         let pool = PgPoolOptions::new().connect_with(cnn_options).await?;
 
-        sqlx::query("CREATE TABLE test (n bigint PRIMARY KEY);")
+        let mut evt_log = TestEvtLog::<u64>::default();
+        for n in 1..=100 {
+            evt_log.persist("test", &0, None, &n, &to_bytes).await?;
+        }
+
+        sqlx::query("CREATE TABLE test (n bigint);")
             .execute(&pool)
             .await?;
 
         let projection = Projection::new(
-            "dummy",
+            "test",
             "test-projection".to_string(),
-            TestEvtLog,
+            evt_log.clone(),
             TestHandler,
             ErrorStrategy::Stop,
             pool.clone(),
         )
         .await?;
 
-        sqlx::query("INSERT INTO projection VALUES ($1, $2)")
-            .bind("test-projection")
-            .bind(10)
+        QueryBuilder::new("INSERT INTO projection ")
+            .push_values(once(("test-projection", 10)), |mut q, (name, seq_no)| {
+                q.push_bind(name).push_bind(seq_no);
+            })
+            .build()
             .execute(&pool)
             .await?;
 
         projection.run().await?;
 
         let mut state = projection.get_state().await?;
-        let max = Some(NonZeroU64::new(100).unwrap());
+        let max = Some(100.try_into()?);
         while state.seq_no < max {
             sleep(Duration::from_millis(100)).await;
             state = projection.get_state().await?;

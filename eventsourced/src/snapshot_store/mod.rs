@@ -9,10 +9,7 @@ use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64};
 
 /// Persistence for snapshots.
 #[trait_variant::make(SnapshotStore: Send)]
-pub trait LocalSnapshotStore
-where
-    Self: Clone + 'static,
-{
+pub trait LocalSnapshotStore: Clone + 'static {
     type Id: Debug;
 
     type Error: StdError + Send + Sync + 'static;

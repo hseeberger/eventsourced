@@ -417,20 +417,22 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use eventsourced::binarize;
-    use std::future;
+    use crate::{PostgresEvtLog, PostgresEvtLogConfig};
+    use eventsourced::{binarize, evt_log::EvtLog};
+    use futures::{StreamExt, TryStreamExt};
+    use std::{error::Error as StdError, future, num::NonZeroU64};
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_evt_log() -> Result<(), Box<dyn StdError + Send + Sync>> {
-        let client = Cli::default();
-        let container = client.run(Postgres::default().with_host_auth());
+        let tc_client = Cli::default();
+
+        let container = tc_client.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = Config {
+        let config = PostgresEvtLogConfig {
             port,
             setup: true,
             ..Default::default()
