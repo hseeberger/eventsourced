@@ -251,7 +251,7 @@ where
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
                     debug!(?id, "handling cmd");
 
-                    let result = cmd.handle_boxed_cmd(&id, &state);
+                    let result = cmd.handle_cmd(&id, &state);
                     match result {
                         Ok(evt) => {
                             debug!(?id, ?evt, "persisting event");
@@ -293,7 +293,7 @@ where
                                         };
                                     }
 
-                                    let reply = cmd.handle_boxed_reply(&state);
+                                    let reply = cmd.make_reply(&state);
                                     if result_sender.send(Ok(reply)).is_err() {
                                         error!(?id, "cannot send cmd reply");
                                     };
@@ -356,8 +356,9 @@ trait ErasedCmd<E>
 where
     E: EventSourced,
 {
-    fn handle_boxed_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
-    fn handle_boxed_reply(&self, state: &E) -> BoxedAny;
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
+
+    fn make_reply(&self, state: &E) -> BoxedAny;
 }
 
 impl<C, E, Reply, Error> ErasedCmd<E> for C
@@ -367,12 +368,12 @@ where
     Reply: Send + 'static,
     Error: Send + 'static,
 {
-    fn handle_boxed_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
         let result = self.handle_cmd(id, state);
         result.map_err(|error| Box::new(error) as BoxedAny)
     }
 
-    fn handle_boxed_reply(&self, state: &E) -> BoxedAny {
+    fn make_reply(&self, state: &E) -> BoxedAny {
         Box::new(self.reply(state))
     }
 }
