@@ -45,10 +45,6 @@ use crate::{
     util::StreamExt as ThisStreamExt,
 };
 use error_ext::{BoxError, StdErrorExt};
-/* use frunk::{
-    coproduct::{CNil, CoproductSelector},
-    Coprod,
-}; */
 use futures::{future::ok, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -65,6 +61,8 @@ use tokio::{
 use tracing::{debug, error, instrument};
 
 type BoxedAny = Box<dyn Any + Send>;
+type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
+type CmdReplyError<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
 /// The state of an event sourced entity as well as its event handling (which transforms the state).
 pub trait EventSourced {
@@ -84,7 +82,6 @@ pub trait EventSourced {
 /// A command for the given [EventSourced] implementation, defining its handling and replying.
 pub trait Cmd<E>
 where
-    Self: 'static,
     E: EventSourced,
 {
     /// The type for rejecting this command.
@@ -103,46 +100,20 @@ where
     fn reply(&self, state: &E) -> Self::Reply;
 }
 
-trait ErasedCommand<E: EventSourced> {
-    fn handle_boxed_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
-    fn handle_boxed_reply(&self, state: &E) -> BoxedAny;
-}
-
-impl<C, E, Reply, Error> ErasedCommand<E> for C
-where
-    C: Cmd<E, Reply = Reply, Error = Error>,
-    E: EventSourced,
-    Reply: Send + 'static,
-    Error: Send + 'static,
-{
-    fn handle_boxed_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
-        let result = self.handle_cmd(id, state);
-        result.map_err(|error| Box::new(error) as BoxedAny)
-    }
-
-    fn handle_boxed_reply(&self, state: &E) -> BoxedAny {
-        Box::new(self.reply(state))
-    }
-}
-
-type BoxedCommand<E> = Box<dyn ErasedCommand<E> + Send>;
-
 /// A handle representing a spawned [EventSourced] entity, which can be used to pass it commands.
 #[derive(Debug, Clone)]
 pub struct EntityRef<E>
 where
     E: EventSourced,
 {
-    #[allow(clippy::type_complexity)]
-    cmd_in: mpsc::Sender<(BoxedCommand<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>)>,
+    cmd_in: mpsc::Sender<CmdReplyError<E>>,
     id: E::Id,
     _e: PhantomData<E>,
-    //_t: PhantomData<T>,
 }
 
 impl<E> EntityRef<E>
 where
-    E: EventSourced + 'static,
+    E: EventSourced,
 {
     /// The ID of the represented [EventSourced] entity.
     pub fn id(&self) -> &E::Id {
@@ -156,8 +127,7 @@ where
     #[instrument(skip(self))]
     pub async fn handle_cmd<C>(&self, cmd: C) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
     where
-        C: Cmd<E> + Debug + Send,
-        //T: CoproductSelector<C, X>,
+        C: Cmd<E> + Debug + Send + 'static,
     {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
@@ -182,42 +152,21 @@ where
     /// Create a new [EventSourced] entity with the given type name, ID and this [EventSourced]
     /// implementation.
     fn entity(self) -> EventSourcedEntity<Self> {
-        EventSourcedEntity { e: self }
+        EventSourcedEntity(self)
     }
 }
 
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
 /// An [EventSourced] entity which allows for registering `Cmd`s and `spawn`ing.
-pub struct EventSourcedEntity<E>
+pub struct EventSourcedEntity<E>(E)
 where
-    E: EventSourced,
-{
-    e: E,
-}
+    E: EventSourced;
 
 impl<E> EventSourcedEntity<E>
 where
     E: EventSourced + Debug + Send + Sync + 'static,
-    E::Evt: Debug + Send + Sync + 'static,
-    E::Id: Debug + Clone + Send,
 {
-    /// Add the given command to the [EventSourced] entity.
-    /* pub fn cmd<C>(mut self) -> EventSourcedEntity<E>
-    where
-        C: Cmd<E>,
-    {
-        let type_id = TypeId::of::<C>();
-        let cmd_handler = boxed_handle_cmd::<C, E>();
-        let reply_handler = boxed_reply::<C, E>();
-        self.cmd_fns.insert(type_id, (cmd_handler, reply_handler));
-
-        EventSourcedEntity {
-            e: self.e,
-            cmd_fns: self.cmd_fns,
-        }
-    } */
-
     /// Spawn this [EventSourced] entity with the given settings, event log, snapshot store and
     /// `Binarize` functions.
     ///
@@ -251,7 +200,7 @@ where
                 (seq_no, state)
             })
             .unzip();
-        let mut state = state.unwrap_or(self.e);
+        let mut state = state.unwrap_or(self.0);
 
         // Get and validate last sequence number.
         let mut last_seq_no = evt_log
@@ -293,10 +242,7 @@ where
         }
 
         // Spawn handler loop.
-        let (cmd_in, mut cmd_out) = mpsc::channel::<(
-            BoxedCommand<E>,
-            oneshot::Sender<Result<BoxedAny, BoxedAny>>,
-        )>(cmd_buffer.get());
+        let (cmd_in, mut cmd_out) = mpsc::channel::<CmdReplyError<E>>(cmd_buffer.get());
         task::spawn({
             let id = id.clone();
             let mut evt_count = 0u64;
@@ -377,7 +323,6 @@ where
             cmd_in,
             id,
             _e: PhantomData,
-            //_t: PhantomData,
         })
     }
 }
@@ -405,6 +350,31 @@ pub enum SpawnError {
 
     #[error("cannot get next event from events by ID stream")]
     NextEvt(#[source] BoxError),
+}
+
+trait ErasedCmd<E>
+where
+    E: EventSourced,
+{
+    fn handle_boxed_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
+    fn handle_boxed_reply(&self, state: &E) -> BoxedAny;
+}
+
+impl<C, E, Reply, Error> ErasedCmd<E> for C
+where
+    C: Cmd<E, Reply = Reply, Error = Error>,
+    E: EventSourced,
+    Reply: Send + 'static,
+    Error: Send + 'static,
+{
+    fn handle_boxed_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
+        let result = self.handle_cmd(id, state);
+        result.map_err(|error| Box::new(error) as BoxedAny)
+    }
+
+    fn handle_boxed_reply(&self, state: &E) -> BoxedAny {
+        Box::new(self.reply(state))
+    }
 }
 
 #[cfg(all(test, feature = "serde_json"))]
