@@ -70,8 +70,10 @@ pub struct Error(BoxError);
 
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
-    use super::*;
-    use crate::binarize::serde_json::*;
+    use crate::{
+        binarize::serde_json::*,
+        snapshot_store::{test::TestSnapshotStore, Snapshot, SnapshotStore},
+    };
     use assert_matches::assert_matches;
 
     #[tokio::test]

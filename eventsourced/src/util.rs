@@ -63,8 +63,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::StreamExt as EventSourcedStreamExt;
-    use futures::{stream, StreamExt};
+    use crate::util::StreamExt;
+    use futures::{stream, StreamExt as FuturesStreamExt};
 
     #[tokio::test]
     async fn test_take_until_predicate() {

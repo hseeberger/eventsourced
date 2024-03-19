@@ -158,10 +158,13 @@ pub struct Error(BoxError);
 
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
-    use super::*;
-    use crate::binarize::serde_json::*;
+    use crate::{
+        binarize::serde_json::*,
+        evt_log::{test::TestEvtLog, EvtLog},
+    };
     use assert_matches::assert_matches;
     use futures::TryStreamExt;
+    use std::num::NonZeroU64;
 
     #[tokio::test]
     async fn test() {

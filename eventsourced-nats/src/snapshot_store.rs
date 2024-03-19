@@ -228,10 +228,9 @@ mod proto {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::tests::NATS_VERSION;
+    use crate::{tests::NATS_VERSION, NatsSnapshotStore, NatsSnapshotStoreConfig};
     use error_ext::BoxError;
-    use eventsourced::binarize;
+    use eventsourced::{binarize, snapshot_store::SnapshotStore};
     use testcontainers::{clients::Cli, core::WaitFor};
     use testcontainers_modules::testcontainers::GenericImage;
     use uuid::Uuid;
@@ -244,7 +243,7 @@ mod tests {
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config {
+        let config = NatsSnapshotStoreConfig {
             server_addr,
             setup: true,
             ..Default::default()

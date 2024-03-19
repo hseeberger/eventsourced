@@ -373,12 +373,11 @@ fn evt_stream_max_bytes_default() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::tests::NATS_VERSION;
+    use crate::{tests::NATS_VERSION, NatsEvtLog, NatsEvtLogConfig};
     use error_ext::BoxError;
-    use eventsourced::binarize;
-    use futures::TryStreamExt;
-    use std::future;
+    use eventsourced::{binarize, evt_log::EvtLog};
+    use futures::{StreamExt, TryStreamExt};
+    use std::{future, num::NonZeroU64};
     use testcontainers::{clients::Cli, core::WaitFor};
     use testcontainers_modules::testcontainers::GenericImage;
     use uuid::Uuid;
@@ -391,7 +390,7 @@ mod tests {
         let container = client.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = Config {
+        let config = NatsEvtLogConfig {
             server_addr,
             setup: true,
             ..Default::default()
