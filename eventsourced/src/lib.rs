@@ -183,6 +183,7 @@ where
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
 /// An [EventSourced] entity which allows for registering `Cmd`s and `spawn`ing.
+#[derive(Debug, Clone)]
 pub struct EventSourcedEntity<E>(E)
 where
     E: EventSourced;
