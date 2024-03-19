@@ -38,7 +38,7 @@ impl Cmd<Counter> for Increase {
         }
     }
 
-    fn reply(self, state: &Counter) -> Self::Reply {
+    fn reply(&self, state: &Counter) -> Self::Reply {
         state.0
     }
 }
@@ -61,7 +61,7 @@ impl Cmd<Counter> for Decrease {
         }
     }
 
-    fn reply(self, state: &Counter) -> Self::Reply {
+    fn reply(&self, state: &Counter) -> Self::Reply {
         state.0
     }
 }

@@ -32,8 +32,8 @@ where
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default()
             .entity("counter", id)
-            .cmd::<Increase>()
-            .cmd::<Decrease>()
+            //.cmd::<Increase>()
+            //.cmd::<Decrease>()
             .spawn(
                 None,
                 NonZeroUsize::new(2).expect("2 is not zero"),
@@ -81,8 +81,8 @@ where
         tasks.spawn(async move {
             let _ = Counter::default()
                 .entity("counter", id)
-                .cmd::<Increase>()
-                .cmd::<Decrease>()
+                //.cmd::<Increase>()
+                //.cmd::<Decrease>()
                 .spawn(
                     None,
                     NonZeroUsize::new(2).expect("2 is not zero"),
