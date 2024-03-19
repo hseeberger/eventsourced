@@ -60,8 +60,9 @@ use tokio::{
 };
 use tracing::{debug, error, instrument};
 
+pub type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
+
 type BoxedAny = Box<dyn Any + Send>;
-type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
 type CmdReplyError<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
 /// The state of an event sourced entity as well as its event handling (which transforms the state).
@@ -378,7 +379,7 @@ pub enum SpawnError {
 }
 
 // TODO: Put `pub` behind feature?
-trait ErasedCmd<E>
+pub trait ErasedCmd<E>
 where
     Self: Debug,
     E: EventSourced,
