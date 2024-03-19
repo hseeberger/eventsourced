@@ -74,9 +74,6 @@ pub trait EventSourced {
     /// State type.
     type State: Debug + Default + Send + Sync + 'static;
 
-    /// Type for partial reply data.
-    type ReplyInfo: Send;
-
     /// Reply type.
     type Reply: Debug + Send + 'static;
 
@@ -90,13 +87,13 @@ pub trait EventSourced {
         id: &Self::Id,
         state: &Self::State,
         cmd: Self::Cmd,
-    ) -> Result<(Self::Evt, Self::ReplyInfo), Self::Error>;
+    ) -> Result<Self::Evt, Self::Error>;
 
     /// Event handler.
-    fn handle_evt(state: Self::State, evt: Self::Evt) -> Self::State;
+    fn handle_evt(state: Self::State, evt: &Self::Evt) -> Self::State;
 
     /// Factory for replies.
-    fn make_reply(info: Self::ReplyInfo, state: &Self::State) -> Self::Reply;
+    fn make_reply(evt: Self::Evt, state: &Self::State) -> Self::Reply;
 }
 
 /// Extension methods for types implementing [EventSourced].
@@ -174,7 +171,7 @@ pub trait EventSourcedExt: Sized {
                         .map(|&(seq_no, _)| seq_no >= to_seq_no)
                         .unwrap_or(true)
                 })
-                .try_fold(state, |state, (_, evt)| ok(Self::handle_evt(state, evt)))
+                .try_fold(state, |state, (_, evt)| ok(Self::handle_evt(state, &evt)))
                 .await?;
 
             debug!(?id, ?state, "replayed evts");
@@ -193,7 +190,7 @@ pub trait EventSourcedExt: Sized {
                     debug!(?id, ?cmd, "handling command");
 
                     match Self::handle_cmd(&id, &state, cmd) {
-                        Ok((evt, reply_info)) => {
+                        Ok(evt) => {
                             debug!(?id, ?evt, "persisting event");
 
                             match evt_log
@@ -210,7 +207,7 @@ pub trait EventSourcedExt: Sized {
                                     debug!(?id, ?evt, seq_no, "persited event");
 
                                     last_seq_no = Some(seq_no);
-                                    state = Self::handle_evt(state, evt);
+                                    state = Self::handle_evt(state, &evt);
 
                                     evt_count += 1;
                                     if snapshot_after
@@ -233,7 +230,7 @@ pub trait EventSourcedExt: Sized {
                                         };
                                     }
 
-                                    let reply = Self::make_reply(reply_info, &state);
+                                    let reply = Self::make_reply(evt, &state);
                                     debug!(?reply, "sending reply");
                                     if result_sender.send(Ok(reply)).is_err() {
                                         error!(?id, "cannot send reply");
@@ -350,9 +347,8 @@ mod tests {
         type Cmd = Cmd;
         type Evt = Evt;
         type State = State;
-        type Error = Error;
-        type ReplyInfo = ();
         type Reply = u64;
+        type Error = Error;
 
         const TYPE_NAME: &'static str = "counter";
 
@@ -360,20 +356,20 @@ mod tests {
             id: &Self::Id,
             state: &Self::State,
             cmd: Self::Cmd,
-        ) -> Result<(Self::Evt, Self::ReplyInfo), Self::Error> {
+        ) -> Result<Self::Evt, Self::Error> {
             let id = *id;
             let value = state.value;
 
             match cmd {
                 Cmd::Increase(inc) if inc > u64::MAX - value => Err(Error::Overflow { value, inc }),
-                Cmd::Increase(inc) => Ok((Evt::Increased { id, inc }, ())),
+                Cmd::Increase(inc) => Ok(Evt::Increased { id, inc }),
 
                 Cmd::Decrease(dec) if dec > value => Err(Error::Underflow { value, dec }),
-                Cmd::Decrease(dec) => Ok((Evt::Decreased { id, dec }, ())),
+                Cmd::Decrease(dec) => Ok(Evt::Decreased { id, dec }),
             }
         }
 
-        fn handle_evt(mut state: Self::State, evt: Self::Evt) -> Self::State {
+        fn handle_evt(mut state: Self::State, evt: &Self::Evt) -> Self::State {
             match evt {
                 Evt::Increased { inc, .. } => state.value += inc,
                 Evt::Decreased { dec, .. } => state.value -= dec,
@@ -381,7 +377,7 @@ mod tests {
             state
         }
 
-        fn make_reply(_reply_info: Self::ReplyInfo, state: &Self::State) -> Self::Reply {
+        fn make_reply(_evt: Self::Evt, state: &Self::State) -> Self::Reply {
             state.value
         }
     }
