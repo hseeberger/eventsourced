@@ -147,13 +147,10 @@ where
 
     // TODO: Put behind feature?
     #[instrument(skip(self))]
-    pub async fn handle_boxed_cmd<C>(
+    pub async fn handle_boxed_cmd(
         &self,
         cmd: BoxedCmd<E>,
-    ) -> Result<Result<C::Reply, C::Error>, HandleCmdError>
-    where
-        C: Cmd<E>,
-    {
+    ) -> Result<Result<BoxedAny, BoxedAny>, HandleCmdError> {
         let (result_in, result_out) = oneshot::channel();
         self.cmd_in
             .send((cmd, result_in))
@@ -162,9 +159,6 @@ where
         let result = result_out
             .await
             .map_err(|_| HandleCmdError("cannot receive cmd handler result".to_string()))?;
-        let result = result
-            .map_err(|error| *error.downcast::<C::Error>().expect("downcast error"))
-            .map(|reply| *reply.downcast::<C::Reply>().expect("downcast reply"));
         Ok(result)
     }
 }
@@ -527,10 +521,8 @@ mod tests {
         let reply = entity.handle_cmd(Decrease(1)).await?;
         assert_matches!(reply, Ok(42));
 
-        let reply = entity
-            .handle_boxed_cmd::<Increase>(Box::new(Increase(1)))
-            .await?;
-        assert_matches!(reply, Ok(43));
+        let reply = entity.handle_boxed_cmd(Box::new(Increase(1))).await?;
+        assert_matches!(reply, Ok(b) if *b.downcast_ref::<u64>().unwrap() == 43);
 
         Ok(())
     }
