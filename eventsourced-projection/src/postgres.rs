@@ -148,8 +148,8 @@ impl Projection {
     }
 }
 
-#[trait_variant::make(EvtHandler: Send)]
-pub trait LocalEvtHandler<E> {
+#[trait_variant::make(Send)]
+pub trait EvtHandler<E> {
     type Error: StdError + Send + Sync + 'static;
 
     async fn handle_evt(

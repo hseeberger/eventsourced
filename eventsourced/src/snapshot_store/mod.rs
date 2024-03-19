@@ -8,8 +8,8 @@ use bytes::Bytes;
 use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64};
 
 /// Persistence for snapshots.
-#[trait_variant::make(SnapshotStore: Send)]
-pub trait LocalSnapshotStore
+#[trait_variant::make(Send)]
+pub trait SnapshotStore
 where
     Self: Clone + 'static,
 {

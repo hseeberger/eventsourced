@@ -8,8 +8,8 @@ use futures::Stream;
 use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64};
 
 /// Persistence for events.
-#[trait_variant::make(EvtLog: Send)]
-pub trait LocalEvtLog
+#[trait_variant::make(Send)]
+pub trait EvtLog
 where
     Self: Clone + 'static,
 {
