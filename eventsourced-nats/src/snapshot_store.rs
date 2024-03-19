@@ -237,11 +237,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), BoxError> {
-        let tc_client = Cli::default();
+        let containers = Cli::default();
 
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
-        let container = tc_client.run((nats_image, vec!["-js".to_string()]));
+        let container = containers.run((nats_image, vec!["-js".to_string()]));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
         let config = NatsSnapshotStoreConfig {

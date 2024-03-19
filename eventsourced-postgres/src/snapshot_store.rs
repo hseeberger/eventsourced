@@ -201,9 +201,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), BoxError> {
-        let tc_client = Cli::default();
+        let containers = Cli::default();
 
-        let container = tc_client.run(Postgres::default().with_host_auth());
+        let container = containers.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
         let config = PostgresSnapshotStoreConfig {

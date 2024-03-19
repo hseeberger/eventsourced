@@ -388,10 +388,10 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<(), BoxError> {
-        let tc_client = Cli::default();
+        let containers = Cli::default();
 
         let container =
-            tc_client.run(RunnableImage::from(TCPostgres::default()).with_tag("16-alpine"));
+            containers.run(RunnableImage::from(TCPostgres::default()).with_tag("16-alpine"));
         let port = container.get_host_port_ipv4(5432);
 
         let cnn_url = format!("postgresql://postgres:postgres@localhost:{port}");
