@@ -17,7 +17,6 @@ rustdoc-args = [ "--cfg", "docsrs" ]
 [dependencies]
 bytes         = { workspace = true }
 error-ext     = { workspace = true }
-frunk         = { workspace = true }
 futures       = { workspace = true }
 pin-project   = { workspace = true }
 prost         = { workspace = true, optional = true }
@@ -30,7 +29,6 @@ trait-variant = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
-async-stream   = { workspace = true }
 tokio          = { workspace = true, features = [ "macros", "rt-multi-thread", "time" ] }
 tracing-test   = { workspace = true }
 uuid           = { workspace = true }

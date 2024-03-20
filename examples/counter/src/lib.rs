@@ -32,8 +32,6 @@ where
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default()
             .entity()
-            .cmd::<Increase>()
-            .cmd::<Decrease>()
             .spawn(
                 id,
                 None,
@@ -82,8 +80,6 @@ where
         tasks.spawn(async move {
             let _ = Counter::default()
                 .entity()
-                .cmd::<Increase>()
-                .cmd::<Decrease>()
                 .spawn(
                     id,
                     None,

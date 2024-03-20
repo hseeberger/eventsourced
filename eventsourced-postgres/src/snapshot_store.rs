@@ -192,9 +192,9 @@ fn snapshots_table_default() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::{PostgresSnapshotStore, PostgresSnapshotStoreConfig};
     use error_ext::BoxError;
-    use eventsourced::binarize;
+    use eventsourced::{binarize, snapshot_store::SnapshotStore};
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
@@ -205,7 +205,7 @@ mod tests {
         let container = client.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = Config {
+        let config = PostgresSnapshotStoreConfig {
             port,
             setup: true,
             ..Default::default()
