@@ -60,11 +60,9 @@ use tokio::{
 };
 use tracing::{debug, error, instrument};
 
-// TODO Put behing flag?
-pub type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
-
+type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
 type BoxedAny = Box<dyn Any + Send>;
-type CmdReplyError<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
+type BoxedMsg<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
 /// The state of an event sourced entity as well as its event handling (which transforms the state).
 pub trait EventSourced {
@@ -87,11 +85,11 @@ where
     Self: Debug + Send + 'static,
     E: EventSourced,
 {
-    /// The type for rejecting this command.
-    type Error: Send + 'static;
-
     /// The type for replies.
     type Reply: Send + 'static;
+
+    /// The type for rejecting this command.
+    type Error: Send + 'static;
 
     /// The command handler, taking this command, and references to the ID and the state of
     /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
@@ -103,41 +101,13 @@ where
     fn reply(&self, state: &E) -> Self::Reply;
 }
 
-// TODO: Put `pub` behind feature?
-pub trait ErasedCmd<E>
-where
-    Self: Debug,
-    E: EventSourced,
-{
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
-
-    fn make_reply(&self, state: &E) -> BoxedAny;
-}
-
-impl<C, E, Reply, Error> ErasedCmd<E> for C
-where
-    C: Cmd<E, Reply = Reply, Error = Error>,
-    E: EventSourced,
-    Reply: Send + 'static,
-    Error: Send + 'static,
-{
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
-        let result = self.handle_cmd(id, state);
-        result.map_err(|error| Box::new(error) as BoxedAny)
-    }
-
-    fn make_reply(&self, state: &E) -> BoxedAny {
-        Box::new(self.reply(state))
-    }
-}
-
 /// A handle representing a spawned [EventSourced] entity, which can be used to pass it commands.
 #[derive(Debug, Clone)]
 pub struct EntityRef<E>
 where
     E: EventSourced,
 {
-    cmd_in: mpsc::Sender<CmdReplyError<E>>,
+    cmd_in: mpsc::Sender<BoxedMsg<E>>,
     id: E::Id,
     _e: PhantomData<E>,
 }
@@ -171,23 +141,6 @@ where
         let result = result
             .map_err(|error| *error.downcast::<C::Error>().expect("downcast error"))
             .map(|reply| *reply.downcast::<C::Reply>().expect("downcast reply"));
-        Ok(result)
-    }
-
-    // TODO: Put behind feature?
-    #[instrument(skip(self))]
-    pub async fn handle_boxed_cmd(
-        &self,
-        cmd: BoxedCmd<E>,
-    ) -> Result<Result<BoxedAny, BoxedAny>, HandleCmdError> {
-        let (result_in, result_out) = oneshot::channel();
-        self.cmd_in
-            .send((cmd, result_in))
-            .await
-            .map_err(|_| HandleCmdError("cannot send cmd".to_string()))?;
-        let result = result_out
-            .await
-            .map_err(|_| HandleCmdError("cannot receive cmd handler result".to_string()))?;
         Ok(result)
     }
 }
@@ -291,14 +244,14 @@ where
         }
 
         // Spawn handler loop.
-        let (cmd_in, mut cmd_out) = mpsc::channel::<CmdReplyError<E>>(cmd_buffer.get());
+        let (cmd_in, mut cmd_out) = mpsc::channel::<BoxedMsg<E>>(cmd_buffer.get());
         task::spawn({
             let id = id.clone();
             let mut evt_count = 0u64;
 
             async move {
                 while let Some((cmd, result_sender)) = cmd_out.recv().await {
-                    debug!(?id, "handling cmd");
+                    debug!(?id, ?cmd, "handling cmd");
 
                     let result = cmd.handle_cmd(&id, &state);
                     match result {
@@ -399,6 +352,33 @@ pub enum SpawnError {
 
     #[error("cannot get next event from events by ID stream")]
     NextEvt(#[source] BoxError),
+}
+
+trait ErasedCmd<E>
+where
+    Self: Debug,
+    E: EventSourced,
+{
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
+
+    fn make_reply(&self, state: &E) -> BoxedAny;
+}
+
+impl<C, E, Reply, Error> ErasedCmd<E> for C
+where
+    C: Cmd<E, Reply = Reply, Error = Error>,
+    E: EventSourced,
+    Reply: Send + 'static,
+    Error: Send + 'static,
+{
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
+        let result = self.handle_cmd(id, state);
+        result.map_err(|error| Box::new(error) as BoxedAny)
+    }
+
+    fn make_reply(&self, state: &E) -> BoxedAny {
+        Box::new(self.reply(state))
+    }
 }
 
 #[cfg(all(test, feature = "serde_json"))]
@@ -521,9 +501,6 @@ mod tests {
         assert_matches!(reply, Err(error) if error == Underflow);
         let reply = entity.handle_cmd(Decrease(1)).await?;
         assert_matches!(reply, Ok(42));
-
-        let reply = entity.handle_boxed_cmd(Box::new(Increase(1))).await?;
-        assert_matches!(reply, Ok(b) if *b.downcast_ref::<u64>().unwrap() == 43);
 
         Ok(())
     }
