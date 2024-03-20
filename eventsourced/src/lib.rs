@@ -60,6 +60,7 @@ use tokio::{
 };
 use tracing::{debug, error, instrument};
 
+// TODO Put behing flag?
 pub type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
 
 type BoxedAny = Box<dyn Any + Send>;
@@ -100,6 +101,34 @@ where
     /// The reply function, which is applied if the command handler has returned an event (as
     /// opposed to a rejection) and after that has been persisted successfully.
     fn reply(&self, state: &E) -> Self::Reply;
+}
+
+// TODO: Put `pub` behind feature?
+pub trait ErasedCmd<E>
+where
+    Self: Debug,
+    E: EventSourced,
+{
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
+
+    fn make_reply(&self, state: &E) -> BoxedAny;
+}
+
+impl<C, E, Reply, Error> ErasedCmd<E> for C
+where
+    C: Cmd<E, Reply = Reply, Error = Error>,
+    E: EventSourced,
+    Reply: Send + 'static,
+    Error: Send + 'static,
+{
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
+        let result = self.handle_cmd(id, state);
+        result.map_err(|error| Box::new(error) as BoxedAny)
+    }
+
+    fn make_reply(&self, state: &E) -> BoxedAny {
+        Box::new(self.reply(state))
+    }
 }
 
 /// A handle representing a spawned [EventSourced] entity, which can be used to pass it commands.
@@ -370,34 +399,6 @@ pub enum SpawnError {
 
     #[error("cannot get next event from events by ID stream")]
     NextEvt(#[source] BoxError),
-}
-
-// TODO: Put `pub` behind feature?
-pub trait ErasedCmd<E>
-where
-    Self: Debug,
-    E: EventSourced,
-{
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
-
-    fn make_reply(&self, state: &E) -> BoxedAny;
-}
-
-impl<C, E, Reply, Error> ErasedCmd<E> for C
-where
-    C: Cmd<E, Reply = Reply, Error = Error>,
-    E: EventSourced,
-    Reply: Send + 'static,
-    Error: Send + 'static,
-{
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
-        let result = self.handle_cmd(id, state);
-        result.map_err(|error| Box::new(error) as BoxedAny)
-    }
-
-    fn make_reply(&self, state: &E) -> BoxedAny {
-        Box::new(self.reply(state))
-    }
 }
 
 #[cfg(all(test, feature = "serde_json"))]
