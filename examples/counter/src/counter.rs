@@ -7,40 +7,40 @@ pub struct Counter(u64);
 
 impl EventSourced for Counter {
     type Id = Uuid;
-    type Evt = Evt;
+    type Evt = CounterEvt;
 
     const TYPE_NAME: &'static str = "counter";
 
-    fn handle_evt(self, evt: Evt) -> Self {
+    fn handle_evt(self, evt: &CounterEvt) -> Self {
         match evt {
-            Evt::Increased(_, n) => Self(self.0 + n),
-            Evt::Decreased(_, n) => Self(self.0 - n),
+            CounterEvt::Increased(_, n) => Self(self.0 + n),
+            CounterEvt::Decreased(_, n) => Self(self.0 - n),
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum Evt {
+pub enum CounterEvt {
     Increased(Uuid, u64),
     Decreased(Uuid, u64),
 }
 
 #[derive(Debug)]
-pub struct Increase(pub u64);
+pub struct IncreaseCounter(pub u64);
 
-impl Cmd<Counter> for Increase {
+impl Cmd<Counter> for IncreaseCounter {
     type Error = Overflow;
     type Reply = u64;
 
-    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
         if u64::MAX - state.0 < self.0 {
             Err(Overflow)
         } else {
-            Ok(Evt::Increased(*id, self.0))
+            Ok(CounterEvt::Increased(*id, self.0))
         }
     }
 
-    fn reply(&self, state: &Counter) -> Self::Reply {
+    fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
         state.0
     }
 }
@@ -49,21 +49,21 @@ impl Cmd<Counter> for Increase {
 pub struct Overflow;
 
 #[derive(Debug)]
-pub struct Decrease(pub u64);
+pub struct DecreaseCounter(pub u64);
 
-impl Cmd<Counter> for Decrease {
+impl Cmd<Counter> for DecreaseCounter {
     type Error = Underflow;
     type Reply = u64;
 
-    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
         if state.0 < self.0 {
             Err(Underflow)
         } else {
-            Ok(Evt::Decreased(*id, self.0))
+            Ok(CounterEvt::Decreased(*id, self.0))
         }
     }
 
-    fn reply(&self, state: &Counter) -> Self::Reply {
+    fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
         state.0
     }
 }

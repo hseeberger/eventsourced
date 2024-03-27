@@ -76,7 +76,7 @@ pub trait EventSourced {
     const TYPE_NAME: &'static str;
 
     /// The event handler.
-    fn handle_evt(self, evt: Self::Evt) -> Self;
+    fn handle_evt(self, evt: &Self::Evt) -> Self;
 }
 
 /// A command for the given [EventSourced] implementation, defining its handling and replying.
@@ -96,9 +96,9 @@ where
     /// event.
     fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, Self::Error>;
 
-    /// The reply function, which is applied if the command handler has returned an event (as
+    /// The reply factory, which is applied if the command handler has returned an event (as
     /// opposed to a rejection) and after that has been persisted successfully.
-    fn reply(&self, state: &E) -> Self::Reply;
+    fn make_reply(&self, id: &E::Id, state: &E, evt: E::Evt) -> Self::Reply;
 }
 
 /// A handle representing a spawned [EventSourced] entity, which can be used to pass it commands.
@@ -237,7 +237,7 @@ where
                         .map(|&(seq_no, _)| seq_no >= to_seq_no)
                         .unwrap_or(true)
                 })
-                .try_fold(state, |state, (_, evt)| ok(state.handle_evt(evt)))
+                .try_fold(state, |state, (_, evt)| ok(state.handle_evt(&evt)))
                 .await?;
 
             debug!(?id, state = ?state, "replayed evts");
@@ -272,7 +272,7 @@ where
                                     debug!(?id, ?evt, seq_no, "persited event");
 
                                     last_seq_no = Some(seq_no);
-                                    state = state.handle_evt(evt);
+                                    state = state.handle_evt(&evt);
 
                                     evt_count += 1;
                                     if snapshot_after
@@ -295,7 +295,7 @@ where
                                         };
                                     }
 
-                                    let reply = cmd.make_reply(&state);
+                                    let reply = cmd.make_reply(&id, &state, evt);
                                     if result_sender.send(Ok(reply)).is_err() {
                                         error!(?id, "cannot send cmd reply");
                                     };
@@ -361,7 +361,7 @@ where
 {
     fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
 
-    fn make_reply(&self, state: &E) -> BoxedAny;
+    fn make_reply(&self, id: &E::Id, state: &E, evt: E::Evt) -> BoxedAny;
 }
 
 impl<C, E, Reply, Error> ErasedCmd<E> for C
@@ -376,8 +376,8 @@ where
         result.map_err(|error| Box::new(error) as BoxedAny)
     }
 
-    fn make_reply(&self, state: &E) -> BoxedAny {
-        Box::new(self.reply(state))
+    fn make_reply(&self, id: &E::Id, state: &E, evt: E::Evt) -> BoxedAny {
+        Box::new(self.make_reply(id, state, evt))
     }
 }
 
@@ -400,40 +400,40 @@ mod tests {
 
     impl EventSourced for Counter {
         type Id = Uuid;
-        type Evt = Evt;
+        type Evt = CounterEvt;
 
         const TYPE_NAME: &'static str = "counter";
 
-        fn handle_evt(self, evt: Evt) -> Self {
+        fn handle_evt(self, evt: &CounterEvt) -> Self {
             match evt {
-                Evt::Increased(_, n) => Self(self.0 + n),
-                Evt::Decreased(_, n) => Self(self.0 - n),
+                CounterEvt::Increased(_, n) => Self(self.0 + n),
+                CounterEvt::Decreased(_, n) => Self(self.0 - n),
             }
         }
     }
 
     #[derive(Debug, Serialize, Deserialize)]
-    pub enum Evt {
+    pub enum CounterEvt {
         Increased(Uuid, u64),
         Decreased(Uuid, u64),
     }
 
     #[derive(Debug)]
-    pub struct Increase(pub u64);
+    pub struct IncreaseCounter(pub u64);
 
-    impl Cmd<Counter> for Increase {
+    impl Cmd<Counter> for IncreaseCounter {
         type Error = Overflow;
         type Reply = u64;
 
-        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
             if u64::MAX - state.0 < self.0 {
                 Err(Overflow)
             } else {
-                Ok(Evt::Increased(*id, self.0))
+                Ok(CounterEvt::Increased(*id, self.0))
             }
         }
 
-        fn reply(&self, state: &Counter) -> Self::Reply {
+        fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
             state.0
         }
     }
@@ -442,21 +442,21 @@ mod tests {
     pub struct Overflow;
 
     #[derive(Debug)]
-    pub struct Decrease(pub u64);
+    pub struct DecreaseCounter(pub u64);
 
-    impl Cmd<Counter> for Decrease {
+    impl Cmd<Counter> for DecreaseCounter {
         type Error = Underflow;
         type Reply = u64;
 
-        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
             if state.0 < self.0 {
                 Err(Underflow)
             } else {
-                Ok(Evt::Decreased(*id, self.0))
+                Ok(CounterEvt::Decreased(*id, self.0))
             }
         }
 
-        fn reply(&self, state: &Counter) -> Self::Reply {
+        fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
             state.0
         }
     }
@@ -472,7 +472,13 @@ mod tests {
         let mut evt_log = TestEvtLog::default();
         for _ in 0..42 {
             evt_log
-                .persist("counter", &id, None, &Evt::Increased(id, 1), &to_bytes)
+                .persist(
+                    "counter",
+                    &id,
+                    None,
+                    &CounterEvt::Increased(id, 1),
+                    &to_bytes,
+                )
                 .await?;
         }
 
@@ -495,11 +501,11 @@ mod tests {
 
         assert!(logs_contain("state=Counter(42)"));
 
-        let reply = entity.handle_cmd(Increase(1)).await?;
+        let reply = entity.handle_cmd(IncreaseCounter(1)).await?;
         assert_matches!(reply, Ok(43));
-        let reply = entity.handle_cmd(Decrease(100)).await?;
+        let reply = entity.handle_cmd(DecreaseCounter(100)).await?;
         assert_matches!(reply, Err(error) if error == Underflow);
-        let reply = entity.handle_cmd(Decrease(1)).await?;
+        let reply = entity.handle_cmd(DecreaseCounter(1)).await?;
         assert_matches!(reply, Ok(42));
 
         Ok(())

@@ -1,6 +1,6 @@
 pub mod counter;
 
-use crate::counter::{Counter, Decrease, Increase};
+use crate::counter::{Counter, DecreaseCounter, IncreaseCounter};
 use anyhow::{Context, Result};
 use eventsourced::{binarize, evt_log::EvtLog, snapshot_store::SnapshotStore, EventSourcedExt};
 use serde::Deserialize;
@@ -49,12 +49,12 @@ where
                     println!("{id}: {} events persisted", n * 2);
                 }
                 counter
-                    .handle_cmd(Increase(n as u64))
+                    .handle_cmd(IncreaseCounter(n as u64))
                     .await
                     .expect("send/receive Inc command")
                     .expect("handle Inc command");
                 counter
-                    .handle_cmd(Decrease(n as u64))
+                    .handle_cmd(DecreaseCounter(n as u64))
                     .await
                     .expect("send/receive Dec command")
                     .expect("handle Dec command");
