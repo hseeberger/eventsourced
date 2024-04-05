@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.5.1...eventsourced-projection-v0.5.2) - 2024-04-05
+
+### Other
+- updated the following local packages: eventsourced
+
 ## [0.5.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.5.0...eventsourced-projection-v0.5.1) - 2024-03-27
 
 ### Other
