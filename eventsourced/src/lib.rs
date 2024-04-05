@@ -64,7 +64,7 @@ type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
 type BoxedAny = Box<dyn Any + Send>;
 type BoxedMsg<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
-/// The state of an event sourced entity as well as its event handling (which transforms the state).
+/// State and event handling for an [EventSourcedEntity].
 pub trait EventSourced {
     /// The Id type.
     type Id: Debug + Clone + Send;
@@ -79,7 +79,7 @@ pub trait EventSourced {
     fn handle_evt(self, evt: &Self::Evt) -> Self;
 }
 
-/// A command for the given [EventSourced] implementation, defining its handling and replying.
+/// A command for a [EventSourced] implementation, defining command handling and replying.
 pub trait Cmd<E>
 where
     Self: Debug + Send + 'static,
@@ -101,7 +101,7 @@ where
     fn make_reply(&self, id: &E::Id, state: &E, evt: E::Evt) -> Self::Reply;
 }
 
-/// A handle representing a spawned [EventSourced] entity, which can be used to pass it commands.
+/// A handle representing a spawned [EventSourcedEntity], which can be used to pass it commands.
 #[derive(Debug, Clone)]
 pub struct EntityRef<E>
 where
@@ -116,12 +116,12 @@ impl<E> EntityRef<E>
 where
     E: EventSourced,
 {
-    /// The ID of the represented [EventSourced] entity.
+    /// The ID of the represented [EventSourcedEntity].
     pub fn id(&self) -> &E::Id {
         &self.id
     }
 
-    /// Pass the given command to the represented [EventSourced] entity. The returned value is a
+    /// Pass the given command to the represented [EventSourcedEntity]. The returned value is a
     /// nested result where the outer one represents technical errors, e.g. problems connecting to
     /// the event log, and the inner one comes from the command handler, i.e. signals potential
     /// command rejection.
@@ -150,8 +150,7 @@ pub trait EventSourcedExt
 where
     Self: EventSourced + Sized,
 {
-    /// Create a new [EventSourced] entity with the given type name, ID and this [EventSourced]
-    /// implementation.
+    /// Create a new [EventSourcedEntity] for this [EventSourced] implementation.
     fn entity(self) -> EventSourcedEntity<Self> {
         EventSourcedEntity(self)
     }
@@ -159,7 +158,7 @@ where
 
 impl<E> EventSourcedExt for E where E: EventSourced {}
 
-/// An [EventSourced] entity which allows for registering `Cmd`s and `spawn`ing.
+/// An [EventSourcedEntity] which can be `spawn`ed.
 #[derive(Debug, Clone)]
 pub struct EventSourcedEntity<E>(E)
 where
@@ -169,14 +168,8 @@ impl<E> EventSourcedEntity<E>
 where
     E: EventSourced + Debug + Send + Sync + 'static,
 {
-    /// Spawn this [EventSourced] entity with the given settings, event log, snapshot store and
+    /// Spawn this [EventSourcedEntity] with the given ID, settings, event log, snapshot store and
     /// `Binarize` functions.
-    ///
-    /// The resulting type will look like the following example, where `Counter` is the
-    /// `EventSourced` implementation and `Increase` and `Decrease` have been added as `Cmd`s in
-    /// that order:
-    ///
-    /// `EntityRef<Counter, Coprod!(Decrease, Increase)>`
     #[instrument(skip(self, evt_log, snapshot_store, binarize))]
     pub async fn spawn<L, S, B>(
         self,
@@ -335,7 +328,7 @@ where
 #[error("{0}")]
 pub struct HandleCmdError(String);
 
-/// A technical error when spawning an [EventSourced] entity.
+/// A technical error when spawning an [EventSourcedEntity].
 #[derive(Debug, Error)]
 pub enum SpawnError {
     #[error("cannot load snapshot from snapshot store")]
