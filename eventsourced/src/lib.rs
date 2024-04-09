@@ -97,7 +97,8 @@ where
     fn handle_cmd(&self, id: &E::Id, state: &E) -> CmdEffect<E, Self::Reply, Self::Error>;
 }
 
-/// The result of handling a command, either emitting an event and replying or rejecting the command.
+/// The result of handling a command, either emitting an event and replying or rejecting the
+/// command.
 pub enum CmdEffect<E, Reply, Error>
 where
     E: EventSourced,
