@@ -377,6 +377,7 @@ where
     Self: Debug,
     E: EventSourced,
 {
+    #[allow(clippy::type_complexity)] // internal type, who cares?
     fn handle_cmd(
         &self,
         id: &E::Id,
