@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.24.0...eventsourced-v0.25.0) - 2024-04-10
+
+### Added
+- create replies directly out of handle_cmd using closure ([#219](https://github.com/hseeberger/eventsourced/pull/219))
+
+### Other
+- minor cleanup ([#222](https://github.com/hseeberger/eventsourced/pull/222))
+- adapt to latest API changes ([#215](https://github.com/hseeberger/eventsourced/pull/215))
+- use new naming convention for modules ([#213](https://github.com/hseeberger/eventsourced/pull/213))
+
 ## [0.24.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.23.0...eventsourced-v0.24.0) - 2024-03-27
 
 ### Added
