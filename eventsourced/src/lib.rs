@@ -72,7 +72,10 @@ type BoxedAny = Box<dyn Any + Send>;
 type BoxedMsg<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
 /// State and event handling for an [EventSourcedEntity].
-pub trait EventSourced {
+pub trait EventSourced
+where
+    Self: Send + Sync + Sized + 'static,
+{
     /// The Id type.
     type Id: Debug + Clone + Send;
 
@@ -100,7 +103,7 @@ where
 
     /// The command handler, taking this command, and references to the ID and the state of
     /// the event sourced entity, either rejecting this command via [CmdEffect::reject] or returning
-    /// an event using [CmdEffect::emit_and_reply] (or [CmdEffect::emit] in case Reply = ())).
+    /// an event using [CmdEffect::emit_and_reply] (or [CmdEffect::emit] in case `Reply = ()`).
     fn handle_cmd(self, id: &E::Id, state: &E) -> CmdEffect<E, Self::Reply, Self::Error>;
 }
 
@@ -156,7 +159,7 @@ where
 
 impl<E> EntityRef<E>
 where
-    E: EventSourced + 'static,
+    E: EventSourced,
 {
     /// The ID of the represented [EventSourcedEntity].
     pub fn id(&self) -> &E::Id {
@@ -190,7 +193,7 @@ where
 /// Extension methods for [EventSourced] entities.
 pub trait EventSourcedExt
 where
-    Self: EventSourced + Sized,
+    Self: EventSourced,
 {
     /// Create a new [EventSourcedEntity] for this [EventSourced] implementation.
     fn entity(self) -> EventSourcedEntity<Self> {
@@ -208,7 +211,7 @@ where
 
 impl<E> EventSourcedEntity<E>
 where
-    E: EventSourced + Debug + Send + Sync + 'static,
+    E: EventSourced,
 {
     /// Spawn this [EventSourcedEntity] with the given ID, settings, event log, snapshot store and
     /// `Binarize` functions.
@@ -233,7 +236,7 @@ where
             .await
             .map_err(|error| SpawnError::LoadSnapshot(error.into()))?
             .map(|Snapshot { seq_no, state }| {
-                debug!(?id, seq_no, ?state, "restored snapshot");
+                debug!(?id, seq_no, "restored snapshot");
                 (seq_no, state)
             })
             .unzip();
@@ -275,7 +278,7 @@ where
                 .try_fold(state, |state, (_, evt)| ok(state.handle_evt(evt)))
                 .await?;
 
-            debug!(?id, state = ?state, "replayed evts");
+            debug!(?id, "replayed evts");
         }
 
         // Spawn handler loop.
@@ -400,7 +403,7 @@ where
 impl<C, E, Reply, Error> ErasedCmd<E> for C
 where
     C: Cmd<E, Reply = Reply, Error = Error>,
-    E: EventSourced + 'static,
+    E: EventSourced,
     Reply: Send + 'static,
     Error: Send + 'static,
 {
@@ -531,8 +534,6 @@ mod tests {
                 SerdeJsonBinarize,
             )
             .await?;
-
-        assert!(logs_contain("state=Counter(42)"));
 
         let reply = entity.handle_cmd(IncreaseCounter(1)).await?;
         assert_matches!(reply, Ok(43));
