@@ -83,7 +83,7 @@ pub trait EventSourced {
     const TYPE_NAME: &'static str;
 
     /// The event handler.
-    fn handle_evt(self, evt: &Self::Evt) -> Self;
+    fn handle_evt(self, evt: Self::Evt) -> Self;
 }
 
 /// A command for a [EventSourced] implementation, defining command handling and replying.
@@ -272,7 +272,7 @@ where
                         .map(|&(seq_no, _)| seq_no >= to_seq_no)
                         .unwrap_or(true)
                 })
-                .try_fold(state, |state, (_, evt)| ok(state.handle_evt(&evt)))
+                .try_fold(state, |state, (_, evt)| ok(state.handle_evt(evt)))
                 .await?;
 
             debug!(?id, state = ?state, "replayed evts");
@@ -307,7 +307,7 @@ where
                                     debug!(?id, ?evt, seq_no, "persited event");
 
                                     last_seq_no = Some(seq_no);
-                                    state = state.handle_evt(&evt);
+                                    state = state.handle_evt(evt);
 
                                     evt_count += 1;
                                     if snapshot_after
@@ -437,7 +437,7 @@ mod tests {
 
         const TYPE_NAME: &'static str = "counter";
 
-        fn handle_evt(self, evt: &CounterEvt) -> Self {
+        fn handle_evt(self, evt: CounterEvt) -> Self {
             match evt {
                 CounterEvt::Increased(_, n) => Self(self.0 + n),
                 CounterEvt::Decreased(_, n) => Self(self.0 - n),

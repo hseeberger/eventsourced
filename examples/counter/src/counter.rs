@@ -11,7 +11,7 @@ impl EventSourced for Counter {
 
     const TYPE_NAME: &'static str = "counter";
 
-    fn handle_evt(self, evt: &CounterEvt) -> Self {
+    fn handle_evt(self, evt: CounterEvt) -> Self {
         match evt {
             CounterEvt::Increased(_, n) => Self(self.0 + n),
             CounterEvt::Decreased(_, n) => Self(self.0 - n),
