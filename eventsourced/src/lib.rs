@@ -97,8 +97,8 @@ where
     type Error: Send + 'static;
 
     /// The command handler, taking this command, and references to the ID and the state of
-    /// the event sourced entity, either rejecting this command via [CmdEffect::reject] or returning an
-    /// event using [CmdEffect::emit_and_reply] (or [CmdEffect::emit] in case Reply = ())).
+    /// the event sourced entity, either rejecting this command via [CmdEffect::reject] or returning
+    /// an event using [CmdEffect::emit_and_reply] (or [CmdEffect::emit] in case Reply = ())).
     fn handle_cmd(self, id: &E::Id, state: &E) -> CmdEffect<E, Self::Reply, Self::Error>;
 }
 
@@ -483,7 +483,10 @@ mod tests {
             } else {
                 CmdEffect::emit_and_reply(
                     CounterEvt::Decreased(*id, self.0),
-                    move |state: &Counter| state.0 + self.0 - self.0, /* Simple no-op test to verify that closing over this cmd is possible */
+                    move |state: &Counter| state.0 + self.0 - self.0, /* Simple no-op test to
+                                                                       * verify that closing
+                                                                       * over this cmd is
+                                                                       * possible */
                 )
             }
         }
