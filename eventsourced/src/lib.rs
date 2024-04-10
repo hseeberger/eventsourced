@@ -61,6 +61,11 @@ use tokio::{
 use tracing::{debug, error, instrument};
 
 type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
+#[allow(type_alias_bounds)]
+type BoxedCmdEffect<E>
+where
+    E: EventSourced,
+= Result<(E::Evt, Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>), BoxedAny>;
 type BoxedAny = Box<dyn Any + Send>;
 type BoxedMsg<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
@@ -377,12 +382,7 @@ where
     Self: Debug,
     E: EventSourced,
 {
-    #[allow(clippy::type_complexity)] // internal type, who cares?
-    fn handle_cmd(
-        &self,
-        id: &E::Id,
-        state: &E,
-    ) -> Result<(E::Evt, Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>), BoxedAny>;
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> BoxedCmdEffect<E>;
 }
 
 impl<C, E, Reply, Error> ErasedCmd<E> for C
@@ -392,11 +392,7 @@ where
     Reply: Send + 'static,
     Error: Send + 'static,
 {
-    fn handle_cmd(
-        &self,
-        id: &E::Id,
-        state: &E,
-    ) -> Result<(E::Evt, Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>), BoxedAny> {
+    fn handle_cmd(&self, id: &E::Id, state: &E) -> BoxedCmdEffect<E> {
         match self.handle_cmd(id, state) {
             CmdEffect::EmitAndReply(evt, make_reply) => {
                 Ok((evt, Box::new(|s| Box::new(make_reply(s)))))
