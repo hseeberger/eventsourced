@@ -32,7 +32,7 @@ impl Cmd<Counter> for IncreaseCounter {
     type Error = Overflow;
     type Reply = u64;
 
-    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Overflow> {
+    fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Overflow> {
         if u64::MAX - state.0 < self.0 {
             CmdEffect::reject(Overflow)
         } else {
@@ -53,7 +53,7 @@ impl Cmd<Counter> for DecreaseCounter {
     type Error = Underflow;
     type Reply = u64;
 
-    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Underflow> {
+    fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Underflow> {
         if state.0 < self.0 {
             CmdEffect::reject(Underflow)
         } else {

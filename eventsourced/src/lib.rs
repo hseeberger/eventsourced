@@ -99,7 +99,7 @@ where
     /// The command handler, taking this command, and references to the ID and the state of
     /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
     /// event.
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> CmdEffect<E, Self::Reply, Self::Error>;
+    fn handle_cmd(self, id: &E::Id, state: &E) -> CmdEffect<E, Self::Reply, Self::Error>;
 }
 
 /// The result of handling a command, either emitting an event and replying or rejecting the
@@ -382,7 +382,7 @@ where
     Self: Debug,
     E: EventSourced,
 {
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> BoxedCmdEffect<E>;
+    fn handle_cmd(self: Box<Self>, id: &E::Id, state: &E) -> BoxedCmdEffect<E>;
 }
 
 impl<C, E, Reply, Error> ErasedCmd<E> for C
@@ -392,8 +392,8 @@ where
     Reply: Send + 'static,
     Error: Send + 'static,
 {
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> BoxedCmdEffect<E> {
-        match self.handle_cmd(id, state) {
+    fn handle_cmd(self: Box<Self>, id: &E::Id, state: &E) -> BoxedCmdEffect<E> {
+        match <C as Cmd<E>>::handle_cmd(*self, id, state) {
             CmdEffect::EmitAndReply(evt, make_reply) => {
                 Ok((evt, Box::new(|s| Box::new(make_reply(s)))))
             }
@@ -446,7 +446,7 @@ mod tests {
         type Error = Overflow;
         type Reply = u64;
 
-        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Overflow> {
+        fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Overflow> {
             if u64::MAX - state.0 < self.0 {
                 CmdEffect::reject(Overflow)
             } else {
@@ -467,13 +467,14 @@ mod tests {
         type Error = Underflow;
         type Reply = u64;
 
-        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Underflow> {
+        fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Underflow> {
             if state.0 < self.0 {
                 CmdEffect::reject(Underflow)
             } else {
-                CmdEffect::emit_and_reply(CounterEvt::Decreased(*id, self.0), |state: &Counter| {
-                    state.0
-                })
+                CmdEffect::emit_and_reply(
+                    CounterEvt::Decreased(*id, self.0),
+                    move |state: &Counter| state.0 + self.0 - self.0, /* Simple no-op test to verify that closing over this cmd is possible */
+                )
             }
         }
     }
