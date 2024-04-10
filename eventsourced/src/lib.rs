@@ -61,11 +61,13 @@ use tokio::{
 use tracing::{debug, error, instrument};
 
 type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
-#[allow(type_alias_bounds)]
-type BoxedCmdEffect<E>
-where
-    E: EventSourced,
-= Result<(E::Evt, Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>), BoxedAny>;
+type BoxedCmdEffect<E> = Result<
+    (
+        <E as EventSourced>::Evt,
+        Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>,
+    ),
+    BoxedAny,
+>;
 type BoxedAny = Box<dyn Any + Send>;
 type BoxedMsg<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
