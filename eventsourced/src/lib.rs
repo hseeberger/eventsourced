@@ -97,8 +97,8 @@ where
     type Error: Send + 'static;
 
     /// The command handler, taking this command, and references to the ID and the state of
-    /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
-    /// event.
+    /// the event sourced entity, either rejecting this command via [CmdEffect::reject] or returning an
+    /// event using [CmdEffect::emit_and_reply] (or [CmdEffect::emit] in case Reply = ())).
     fn handle_cmd(self, id: &E::Id, state: &E) -> CmdEffect<E, Self::Reply, Self::Error>;
 }
 
@@ -128,6 +128,16 @@ where
     /// Reject this command with the given error.
     pub fn reject(error: Error) -> Self {
         Self::Reject(error)
+    }
+}
+
+impl<E, Error> CmdEffect<E, (), Error>
+where
+    E: EventSourced,
+{
+    /// Persist the given event (and don't give a reply for Cmds with Reply = ()).
+    pub fn emit(evt: E::Evt) -> Self {
+        Self::emit_and_reply(evt, |_| ())
     }
 }
 
