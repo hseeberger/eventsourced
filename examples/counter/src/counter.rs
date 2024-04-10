@@ -1,4 +1,4 @@
-use eventsourced::{Cmd, EventSourced};
+use eventsourced::{Cmd, CmdEffect, EventSourced};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -11,7 +11,7 @@ impl EventSourced for Counter {
 
     const TYPE_NAME: &'static str = "counter";
 
-    fn handle_evt(self, evt: &CounterEvt) -> Self {
+    fn handle_evt(self, evt: CounterEvt) -> Self {
         match evt {
             CounterEvt::Increased(_, n) => Self(self.0 + n),
             CounterEvt::Decreased(_, n) => Self(self.0 - n),
@@ -32,16 +32,14 @@ impl Cmd<Counter> for IncreaseCounter {
     type Error = Overflow;
     type Reply = u64;
 
-    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
+    fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Overflow> {
         if u64::MAX - state.0 < self.0 {
-            Err(Overflow)
+            CmdEffect::reject(Overflow)
         } else {
-            Ok(CounterEvt::Increased(*id, self.0))
+            CmdEffect::emit_and_reply(CounterEvt::Increased(*id, self.0), |state: &Counter| {
+                state.0
+            })
         }
-    }
-
-    fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
-        state.0
     }
 }
 
@@ -55,16 +53,14 @@ impl Cmd<Counter> for DecreaseCounter {
     type Error = Underflow;
     type Reply = u64;
 
-    fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
+    fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Underflow> {
         if state.0 < self.0 {
-            Err(Underflow)
+            CmdEffect::reject(Underflow)
         } else {
-            Ok(CounterEvt::Decreased(*id, self.0))
+            CmdEffect::emit_and_reply(CounterEvt::Decreased(*id, self.0), |state: &Counter| {
+                state.0
+            })
         }
-    }
-
-    fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
-        state.0
     }
 }
 

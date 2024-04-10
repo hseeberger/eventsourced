@@ -61,6 +61,13 @@ use tokio::{
 use tracing::{debug, error, instrument};
 
 type BoxedCmd<E> = Box<dyn ErasedCmd<E> + Send>;
+type BoxedCmdEffect<E> = Result<
+    (
+        <E as EventSourced>::Evt,
+        Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>,
+    ),
+    BoxedAny,
+>;
 type BoxedAny = Box<dyn Any + Send>;
 type BoxedMsg<E> = (BoxedCmd<E>, oneshot::Sender<Result<BoxedAny, BoxedAny>>);
 
@@ -76,7 +83,7 @@ pub trait EventSourced {
     const TYPE_NAME: &'static str;
 
     /// The event handler.
-    fn handle_evt(self, evt: &Self::Evt) -> Self;
+    fn handle_evt(self, evt: Self::Evt) -> Self;
 }
 
 /// A command for a [EventSourced] implementation, defining command handling and replying.
@@ -92,13 +99,48 @@ where
     type Error: Send + 'static;
 
     /// The command handler, taking this command, and references to the ID and the state of
-    /// the event sourced entity, either rejecting this command via [Self::Error] or returning an
-    /// event.
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, Self::Error>;
+    /// the event sourced entity, either rejecting this command via [CmdEffect::reject] or returning
+    /// an event using [CmdEffect::emit_and_reply] (or [CmdEffect::emit] in case Reply = ())).
+    fn handle_cmd(self, id: &E::Id, state: &E) -> CmdEffect<E, Self::Reply, Self::Error>;
+}
 
-    /// The reply factory, which is applied if the command handler has returned an event (as
-    /// opposed to a rejection) and after that has been persisted successfully.
-    fn make_reply(&self, id: &E::Id, state: &E, evt: E::Evt) -> Self::Reply;
+/// The result of handling a command, either emitting an event and replying or rejecting the
+/// command.
+pub enum CmdEffect<E, Reply, Error>
+where
+    E: EventSourced,
+{
+    EmitAndReply(E::Evt, Box<dyn FnOnce(&E) -> Reply + Send + Sync>),
+    Reject(Error),
+}
+
+impl<E, Reply, Error> CmdEffect<E, Reply, Error>
+where
+    E: EventSourced,
+{
+    /// Emit the given event, persist it, and after applying it to the state, use the given function
+    /// to create a reply. The new state is passed to the function after applying the event.
+    pub fn emit_and_reply(
+        evt: E::Evt,
+        make_reply: impl FnOnce(&E) -> Reply + Send + Sync + 'static,
+    ) -> Self {
+        Self::EmitAndReply(evt, Box::new(make_reply))
+    }
+
+    /// Reject this command with the given error.
+    pub fn reject(error: Error) -> Self {
+        Self::Reject(error)
+    }
+}
+
+impl<E, Error> CmdEffect<E, (), Error>
+where
+    E: EventSourced,
+{
+    /// Persist the given event (and don't give a reply for Cmds with Reply = ()).
+    pub fn emit(evt: E::Evt) -> Self {
+        Self::emit_and_reply(evt, |_| ())
+    }
 }
 
 /// A handle representing a spawned [EventSourcedEntity], which can be used to pass it commands.
@@ -114,7 +156,7 @@ where
 
 impl<E> EntityRef<E>
 where
-    E: EventSourced,
+    E: EventSourced + 'static,
 {
     /// The ID of the represented [EventSourcedEntity].
     pub fn id(&self) -> &E::Id {
@@ -230,7 +272,7 @@ where
                         .map(|&(seq_no, _)| seq_no >= to_seq_no)
                         .unwrap_or(true)
                 })
-                .try_fold(state, |state, (_, evt)| ok(state.handle_evt(&evt)))
+                .try_fold(state, |state, (_, evt)| ok(state.handle_evt(evt)))
                 .await?;
 
             debug!(?id, state = ?state, "replayed evts");
@@ -248,7 +290,7 @@ where
 
                     let result = cmd.handle_cmd(&id, &state);
                     match result {
-                        Ok(evt) => {
+                        Ok((evt, make_reply)) => {
                             debug!(?id, ?evt, "persisting event");
 
                             match evt_log
@@ -265,7 +307,7 @@ where
                                     debug!(?id, ?evt, seq_no, "persited event");
 
                                     last_seq_no = Some(seq_no);
-                                    state = state.handle_evt(&evt);
+                                    state = state.handle_evt(evt);
 
                                     evt_count += 1;
                                     if snapshot_after
@@ -288,7 +330,7 @@ where
                                         };
                                     }
 
-                                    let reply = cmd.make_reply(&id, &state, evt);
+                                    let reply = make_reply(&state);
                                     if result_sender.send(Ok(reply)).is_err() {
                                         error!(?id, "cannot send cmd reply");
                                     };
@@ -352,25 +394,23 @@ where
     Self: Debug,
     E: EventSourced,
 {
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny>;
-
-    fn make_reply(&self, id: &E::Id, state: &E, evt: E::Evt) -> BoxedAny;
+    fn handle_cmd(self: Box<Self>, id: &E::Id, state: &E) -> BoxedCmdEffect<E>;
 }
 
 impl<C, E, Reply, Error> ErasedCmd<E> for C
 where
     C: Cmd<E, Reply = Reply, Error = Error>,
-    E: EventSourced,
+    E: EventSourced + 'static,
     Reply: Send + 'static,
     Error: Send + 'static,
 {
-    fn handle_cmd(&self, id: &E::Id, state: &E) -> Result<E::Evt, BoxedAny> {
-        let result = self.handle_cmd(id, state);
-        result.map_err(|error| Box::new(error) as BoxedAny)
-    }
-
-    fn make_reply(&self, id: &E::Id, state: &E, evt: E::Evt) -> BoxedAny {
-        Box::new(self.make_reply(id, state, evt))
+    fn handle_cmd(self: Box<Self>, id: &E::Id, state: &E) -> BoxedCmdEffect<E> {
+        match <C as Cmd<E>>::handle_cmd(*self, id, state) {
+            CmdEffect::EmitAndReply(evt, make_reply) => {
+                Ok((evt, Box::new(|s| Box::new(make_reply(s)))))
+            }
+            CmdEffect::Reject(error) => Err(Box::new(error) as BoxedAny),
+        }
     }
 }
 
@@ -380,7 +420,7 @@ mod tests {
         binarize::serde_json::*,
         evt_log::{test::TestEvtLog, EvtLog},
         snapshot_store::{test::TestSnapshotStore, SnapshotStore},
-        Cmd, EntityRef, EventSourced, EventSourcedExt,
+        Cmd, CmdEffect, EntityRef, EventSourced, EventSourcedExt,
     };
     use assert_matches::assert_matches;
     use error_ext::BoxError;
@@ -397,7 +437,7 @@ mod tests {
 
         const TYPE_NAME: &'static str = "counter";
 
-        fn handle_evt(self, evt: &CounterEvt) -> Self {
+        fn handle_evt(self, evt: CounterEvt) -> Self {
             match evt {
                 CounterEvt::Increased(_, n) => Self(self.0 + n),
                 CounterEvt::Decreased(_, n) => Self(self.0 - n),
@@ -418,16 +458,14 @@ mod tests {
         type Error = Overflow;
         type Reply = u64;
 
-        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
+        fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Overflow> {
             if u64::MAX - state.0 < self.0 {
-                Err(Overflow)
+                CmdEffect::reject(Overflow)
             } else {
-                Ok(CounterEvt::Increased(*id, self.0))
+                CmdEffect::emit_and_reply(CounterEvt::Increased(*id, self.0), |state: &Counter| {
+                    state.0
+                })
             }
-        }
-
-        fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
-            state.0
         }
     }
 
@@ -441,16 +479,18 @@ mod tests {
         type Error = Underflow;
         type Reply = u64;
 
-        fn handle_cmd(&self, id: &Uuid, state: &Counter) -> Result<CounterEvt, Self::Error> {
+        fn handle_cmd(self, id: &Uuid, state: &Counter) -> CmdEffect<Counter, u64, Underflow> {
             if state.0 < self.0 {
-                Err(Underflow)
+                CmdEffect::reject(Underflow)
             } else {
-                Ok(CounterEvt::Decreased(*id, self.0))
+                CmdEffect::emit_and_reply(
+                    CounterEvt::Decreased(*id, self.0),
+                    move |state: &Counter| state.0 + self.0 - self.0, /* Simple no-op test to
+                                                                       * verify that closing
+                                                                       * over this cmd is
+                                                                       * possible */
+                )
             }
-        }
-
-        fn make_reply(&self, _id: &Uuid, state: &Counter, _evt: CounterEvt) -> Self::Reply {
-            state.0
         }
     }
 
