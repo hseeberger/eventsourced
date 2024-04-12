@@ -8,15 +8,37 @@
 //! [Event Sourcing](https://martinfowler.com/eaaDev/EventSourcing.html) and
 //! [CQRS](https://www.martinfowler.com/bliki/CQRS.html).
 //!
-//! The [EvtLog] and [SnapshotStore] traits define a pluggable event log and a pluggable snapshot
-//! store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/)
-//! these are implemented in the respective crates.
-//!
 //! The [EventSourced] trait defines the event type and handling for event sourced entities. These
 //! are identifiable by a type name and ID and can be created with the [EventSourcedExt::entity]
 //! extension method. Commands can be defined via the [Cmd] trait which contains a command handler
 //! function to either reject a command or return an event. An event gets persisted to the event log
 //! and then applied to the event handler to return the new state of the entity.
+//!
+//! ```text
+//!                   ┌─────┐    ┌ ─ ─ ─ Entity─ ─ ─ ─
+//!                   │ Cmd │                         │
+//! ┌ ─ ─ ─ ─ ─ ─     └─────┘    │ ┌────────────────┐
+//!     Client   │────────────────▶│   handle_cmd   │─┼─────────┐
+//! └ ─ ─ ─ ─ ─ ─                │ └────────────────┘           │
+//!        ▲                           │    │         │         │ ┌─────┐
+//!         ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─     │read               │ │ Evt │
+//!                   ┌─────┐               ▼         │         ▼ └─────┘
+//!                   │Reply│    │     ┌─────────┐       ┌ ─ ─ ─ ─ ─ ─
+//!                   │  /  │          │  State  │    │      EvtLog   │
+//!                   │Error│    │     └─────────┘       └ ─ ─ ─ ─ ─ ─
+//!                   └─────┘               ▲         │         │ ┌─────┐
+//!                              │     write│                   │ │ Evt │
+//!                                         │         │         │ └─────┘
+//!                              │ ┌────────────────┐           │
+//!                                │   handle_evt   │◀┼─────────┘
+//!                              │ └────────────────┘
+//!                                                   │
+//!                              └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+//! ```
+//!
+//! The [EvtLog] and [SnapshotStore] traits define a pluggable event log and a pluggable snapshot
+//! store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/)
+//! these are implemented in the respective crates.
 //!
 //! [EventSourcedEntity::spawn] puts the event sourced entity on the given event log and snapshot
 //! store, returning an [EntityRef] which can be cheaply cloned and used to pass commands to the
@@ -26,7 +48,7 @@
 //! to speed up future spawning.
 //!
 //! [EntityRef::handle_cmd] either returns [Cmd::Error] for a rejected command or [Cmd::Reply] for
-//! an accepted one.
+//! an accepted one, wrapped in another `Result` dealing with technical errors.
 //!
 //! Events can be queried from the event log by ID or by entity type. These queries can be used to
 //! build read side projections. There is early support for projections in the
