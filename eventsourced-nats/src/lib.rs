@@ -26,7 +26,7 @@ pub enum AuthConfig {
     CredentialsFile(PathBuf),
 }
 
-/// Errors from the [NatsEvtLog] or [NatsSnapshotStore].
+/// Errors from the [NatsEventLog] or [NatsSnapshotStore].
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("NATS error: {0}")]
