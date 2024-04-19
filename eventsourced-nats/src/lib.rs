@@ -52,7 +52,8 @@ pub enum Error {
     InvalidNonZeroU64,
 }
 
-async fn make_client(auth: Option<&AuthConfig>, server_addr: &str) -> Result<Client, Error> {
+/// Create a NATS client.
+pub async fn make_client(auth: Option<&AuthConfig>, server_addr: &str) -> Result<Client, Error> {
     let mut options = ConnectOptions::new();
     if let Some(auth) = auth {
         match auth {
