@@ -1,10 +1,10 @@
-//! [EvtLog](eventsourced::evt_log::EvtLog) and
+//! [EventLog](eventsourced::event_log::EventLog) and
 //! [SnapshotStore](eventsourced::snapshot_store::SnapshotStore) implementations based upon [PostgreSQL](https://www.postgresql.org/).
 
-mod evt_log;
+mod event_log;
 mod snapshot_store;
 
-pub use evt_log::{Config as PostgresEvtLogConfig, PostgresEvtLog};
+pub use event_log::{Config as PostgresEventLogConfig, PostgresEventLog};
 pub use snapshot_store::{Config as PostgresSnapshotStoreConfig, PostgresSnapshotStore};
 
 use bb8_postgres::{
@@ -18,7 +18,7 @@ type CnnPool<T> = Pool<PostgresConnectionManager<T>>;
 
 type Cnn<'a, T> = PooledConnection<'a, PostgresConnectionManager<T>>;
 
-/// Errors from the [PostgresEvtLog] or [PostgresSnapshotStore].
+/// Errors from the [PostgresEventLog] or [PostgresSnapshotStore].
 #[derive(Debug, Error)]
 pub enum Error {
     /// Postgres error.

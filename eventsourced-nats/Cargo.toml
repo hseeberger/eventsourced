@@ -1,6 +1,6 @@
 [package]
 name          = "eventsourced-nats"
-description   = "NATS implementation for EventSourced EvtLog and SnapshotStore."
+description   = "NATS implementation for EventSourced EventLog and SnapshotStore."
 version       = "0.14.4"
 readme        = "README.md"
 edition       = { workspace = true }

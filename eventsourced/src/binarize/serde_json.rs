@@ -14,21 +14,21 @@ where
     for<'de> E: Serialize + Deserialize<'de>,
     for<'de> S: Serialize + Deserialize<'de>,
 {
-    type EvtToBytesError = serde_json::Error;
-    type EvtFromBytesError = serde_json::Error;
+    type EventToBytesError = serde_json::Error;
+    type EventFromBytesError = serde_json::Error;
 
     type StateToBytesError = serde_json::Error;
     type StateFromBytesError = serde_json::Error;
 
-    fn evt_to_bytes(&self, evt: &E) -> Result<Bytes, Self::EvtToBytesError> {
-        to_bytes(evt)
+    fn event_to_bytes(&self, event: &E) -> Result<Bytes, Self::EventToBytesError> {
+        to_bytes(event)
     }
 
     fn state_to_bytes(&self, state: &S) -> Result<Bytes, Self::StateToBytesError> {
         to_bytes(state)
     }
 
-    fn evt_from_bytes(&self, bytes: Bytes) -> Result<E, Self::EvtFromBytesError> {
+    fn event_from_bytes(&self, bytes: Bytes) -> Result<E, Self::EventFromBytesError> {
         from_bytes(bytes)
     }
 

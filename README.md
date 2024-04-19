@@ -12,9 +12,9 @@ Event sourced entities in [Rust](https://www.rust-lang.org/).
 
 ## Crates
 
-- [`eventsourced`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced/README.md): core library with `EventSourced`, `Entity`, `EvtLog`, `SnapshotStore`, etc.
-- [`eventsourced-nats`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced-nats/README.md): [NATS](https://nats.io/) implementation for `EvtLog` and `SnapshotStore`
-- [`eventsourced-postgres`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced-postgres/README.md): [Postgres](https://www.postgresql.org/) implementation for `EvtLog` and `SnapshotStore`
+- [`eventsourced`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced/README.md): core library with `EventSourced`, `Entity`, `EventLog`, `SnapshotStore`, etc.
+- [`eventsourced-nats`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced-nats/README.md): [NATS](https://nats.io/) implementation for `EventLog` and `SnapshotStore`
+- [`eventsourced-postgres`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced-postgres/README.md): [Postgres](https://www.postgresql.org/) implementation for `EventLog` and `SnapshotStore`
 - [`eventsourced-projection`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced-projection/README.md): early support for the CQRS read side
 
 ## License ##

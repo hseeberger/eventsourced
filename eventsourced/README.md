@@ -20,33 +20,33 @@ It provides a framework for implementing
 
 The [EventSourced] trait defines the event type and handling for event sourced entities. These
 are identifiable by a type name and ID and can be created with the [EventSourcedExt::entity]
-extension method. Commands can be defined via the [Cmd] trait which contains a command handler
+extension method. Commands can be defined via the [Command] trait which contains a command handler
 function to either reject a command or return an event. An event gets persisted to the event log
 and then applied to the event handler to return the new state of the entity.
 
 ```text
-                  ┌─────┐    ┌ ─ ─ ─ Entity─ ─ ─ ─
-                  │ Cmd │                         │
-┌ ─ ─ ─ ─ ─ ─     └─────┘    │ ┌────────────────┐
-    Client   │────────────────▶│   handle_cmd   │─┼─────────┐
+                 ┌───────┐   ┌ ─ ─ ─ Entity─ ─ ─ ─
+                 │Command│                        │
+┌ ─ ─ ─ ─ ─ ─    └───────┘   │ ┌────────────────┐
+    Client   │────────────────▶│ handle_command │─┼─────────┐
 └ ─ ─ ─ ─ ─ ─                │ └────────────────┘           │
        ▲                           │    │         │         │ ┌─────┐
-        ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─     │read               │ │ Evt │
+        ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─│─ ─ ─     │read               │ │Event│
                   ┌─────┐               ▼         │         ▼ └─────┘
                   │Reply│    │     ┌─────────┐       ┌ ─ ─ ─ ─ ─ ─
-                  │  /  │          │  State  │    │      EvtLog   │
+                  │  /  │          │  State  │    │     EventLog  │
                   │Error│    │     └─────────┘       └ ─ ─ ─ ─ ─ ─
                   └─────┘               ▲         │         │ ┌─────┐
-                             │     write│                   │ │ Evt │
+                             │     write│                   │ │Event│
                                         │         │         │ └─────┘
                              │ ┌────────────────┐           │
-                               │   handle_evt   │◀┼─────────┘
+                               │  handle_event  │◀┼─────────┘
                              │ └────────────────┘
                                                   │
                              └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
 ```
 
-The [EvtLog] and [SnapshotStore] traits define a pluggable event log and a pluggable snapshot
+The [EventLog] and [SnapshotStore] traits define a pluggable event log and a pluggable snapshot
 store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/)
 these are implemented in the respective crates.
 
@@ -57,7 +57,7 @@ entity. Conversion of events and snapshot state to and from bytes happens via th
 these are already provided. Snapshots are taken after the configured number of processed events
 to speed up future spawning.
 
-[EntityRef::handle_cmd] either returns [Cmd::Error] for a rejected command or [Cmd::Reply] for
+[EntityRef::handle_command] either returns [Command::Error] for a rejected command or [Command::Reply] for
 an accepted one, wrapped in another `Result` dealing with technical errors.
 
 Events can be queried from the event log by ID or by entity type. These queries can be used to
@@ -82,16 +82,16 @@ The `counter` package in the `example` directory contains a simple example: a co
 #[derive(Debug)]
 struct Increase(u64);
 
-impl Cmd<Uuid, Evt, Counter> for Increase {
+impl Command<Uuid, Event, Counter> for Increase {
     type Error = Overflow;
 
     type Reply = u64;
 
-    fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+    fn handle(self, id: &Uuid, state: &Counter) -> Result<Event, Self::Error> {
         if u64::MAX - state.0 < self.0 {
             Err(Overflow)
         } else {
-            Ok(Evt::Increased(*id))
+            Ok(Event::Increased(*id))
         }
     }
 
@@ -106,16 +106,16 @@ struct Overflow;
 #[derive(Debug)]
 struct Decrease(u64);
 
-impl Cmd<Uuid, Evt, Counter> for Decrease {
+impl Command<Uuid, Event, Counter> for Decrease {
     type Error = Underflow;
 
     type Reply = Counter;
 
-    fn handle(self, id: &Uuid, state: &Counter) -> Result<Evt, Self::Error> {
+    fn handle(self, id: &Uuid, state: &Counter) -> Result<Event, Self::Error> {
         if state.0 < self.0 {
             Err(Underflow)
         } else {
-            Ok(Evt::Decreased(*id))
+            Ok(Event::Decreased(*id))
         }
     }
 
@@ -128,7 +128,7 @@ impl Cmd<Uuid, Evt, Counter> for Decrease {
 struct Underflow;
 
 #[derive(Debug, Serialize, Deserialize)]
-enum Evt {
+enum Event {
     Increased(Uuid),
     Decreased(Uuid),
 }
@@ -137,10 +137,10 @@ enum Evt {
 struct Counter(u64);
 
 impl Counter {
-    fn handle_evt(self, evt: Evt) -> Self {
+    fn handle_event(self, evt: Event) -> Self {
         match evt {
-            Evt::Increased(_) => Self(self.0 + 1),
-            Evt::Decreased(_) => Self(self.0 - 1),
+            Event::Increased(_) => Self(self.0 + 1),
+            Event::Decreased(_) => Self(self.0 - 1),
         }
     }
 }
@@ -170,7 +170,7 @@ tasks.spawn(async move {
             println!("{id}: {} events persisted", n * 2);
         }
         counter
-            .handle_cmd(Cmd::Inc(n as u64))
+            .handle_command(Command::Inc(n as u64))
             .await
             .context("cannot handle Inc command")
             .unwrap();

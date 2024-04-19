@@ -8,7 +8,7 @@
 [license-badge]: https://img.shields.io/github/license/hseeberger/eventsourced
 [license-url]: https://github.com/hseeberger/eventsourced/blob/main/LICENSE
 
-Postgres implementation for [`eventsourced`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced/README.md) `EvtLog` and `SnapshotStore`.
+Postgres implementation for [`eventsourced`](https://github.com/hseeberger/eventsourced/blob/main/eventsourced/README.md) `EventLog` and `SnapshotStore`.
 
 ## License ##
 

@@ -13,21 +13,21 @@ where
     E: Message + Default,
     S: Message + Default,
 {
-    type EvtToBytesError = EncodeError;
-    type EvtFromBytesError = DecodeError;
+    type EventToBytesError = EncodeError;
+    type EventFromBytesError = DecodeError;
 
     type StateToBytesError = EncodeError;
     type StateFromBytesError = DecodeError;
 
-    fn evt_to_bytes(&self, evt: &E) -> Result<Bytes, Self::EvtToBytesError> {
-        to_bytes(evt)
+    fn event_to_bytes(&self, event: &E) -> Result<Bytes, Self::EventToBytesError> {
+        to_bytes(event)
     }
 
     fn state_to_bytes(&self, state: &S) -> Result<Bytes, Self::StateToBytesError> {
         to_bytes(state)
     }
 
-    fn evt_from_bytes(&self, bytes: Bytes) -> Result<E, Self::EvtFromBytesError> {
+    fn event_from_bytes(&self, bytes: Bytes) -> Result<E, Self::EventFromBytesError> {
         from_bytes(bytes)
     }
 

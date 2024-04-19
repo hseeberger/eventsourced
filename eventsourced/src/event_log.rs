@@ -9,7 +9,7 @@ use std::{error::Error as StdError, fmt::Debug, num::NonZeroU64};
 
 /// Persistence for events.
 #[trait_variant::make(Send)]
-pub trait EvtLog
+pub trait EventLog
 where
     Self: Clone + 'static,
 {
@@ -29,7 +29,7 @@ where
         type_name: &'static str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
-        evt: &E,
+        event: &E,
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
@@ -46,7 +46,7 @@ where
 
     /// Get the events for the given type name and entity ID starting at the given sequence
     /// number.
-    async fn evts_by_id<E, FromBytes, FromBytesError>(
+    async fn events_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         id: &Self::Id,
@@ -59,7 +59,7 @@ where
         FromBytesError: StdError + Send + Sync + 'static;
 
     /// Get the events for the given entity type starting at the given sequence number.
-    async fn evts_by_type<E, FromBytes, FromBytesError>(
+    async fn events_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         seq_no: NonZeroU64,

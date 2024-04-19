@@ -1,10 +1,10 @@
-//! An [EvtLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
+//! An [EventLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 
 use crate::{Cnn, CnnPool, Error};
 use async_stream::stream;
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::evt_log::EvtLog;
+use eventsourced::event_log::EventLog;
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -18,21 +18,21 @@ use tokio::time::sleep;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{debug, instrument};
 
-/// An [EvtLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
+/// An [EventLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
-pub struct PostgresEvtLog<I> {
+pub struct PostgresEventLog<I> {
     poll_interval: Duration,
     cnn_pool: CnnPool<NoTls>,
     _id: PhantomData<I>,
 }
 
-impl<I> PostgresEvtLog<I>
+impl<I> PostgresEventLog<I>
 where
     I: ToSql + Sync,
 {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "creating PostgresEvtLog");
+        debug!(?config, "creating PostgresEventLog");
 
         // Create connection pool.
         let tls = NoTls;
@@ -52,7 +52,7 @@ where
                 .await
                 .map_err(Error::GetConnection)?
                 .batch_execute(
-                    &include_str!("create_evt_log.sql").replace("evts", &config.evts_table),
+                    &include_str!("create_event_log.sql").replace("events", &config.events_table),
                 )
                 .await
                 .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?;
@@ -69,7 +69,7 @@ where
         self.cnn_pool.get().await.map_err(Error::GetConnection)
     }
 
-    async fn next_evts_by_id<E, FromBytes, FromBytesError>(
+    async fn next_events_by_id<E, FromBytes, FromBytesError>(
         &self,
         id: &I,
         seq_no: i64,
@@ -82,11 +82,11 @@ where
     {
         debug!(?id, ?seq_no, "querying events");
         let params: [&(dyn ToSql + Sync); 2] = [&id, &seq_no];
-        let evts = self
+        let events = self
             .cnn()
             .await?
             .query_raw(
-                "SELECT seq_no, evt FROM evts WHERE id = $1 AND seq_no >= $2",
+                "SELECT seq_no, event FROM events WHERE id = $1 AND seq_no >= $2",
                 params,
             )
             .await
@@ -101,14 +101,14 @@ where
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
                         .map_err(|source| Error::FromBytes(Box::new(source)))
-                        .map(|evt| (seq_no, evt))
+                        .map(|event| (seq_no, event))
                 })
             });
 
-        Ok(evts)
+        Ok(events)
     }
 
-    async fn next_evts_by_type<E, FromBytes, FromBytesError>(
+    async fn next_events_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &str,
         seq_no: i64,
@@ -122,11 +122,11 @@ where
         debug!(%type_name, seq_no, "querying events");
 
         let params: [&(dyn ToSql + Sync); 2] = [&type_name, &seq_no];
-        let evts = self
+        let events = self
             .cnn()
             .await?
             .query_raw(
-                "SELECT seq_no, evt FROM evts WHERE type = $1 AND seq_no >= $2",
+                "SELECT seq_no, event FROM events WHERE type = $1 AND seq_no >= $2",
                 params,
             )
             .await
@@ -141,18 +141,18 @@ where
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
                         .map_err(|source| Error::FromBytes(Box::new(source)))
-                        .map(|evt| (seq_no, evt))
+                        .map(|event| (seq_no, event))
                 })
             });
 
-        Ok(evts)
+        Ok(events)
     }
 
     async fn last_seq_no_by_type(&self, type_name: &str) -> Result<Option<NonZeroU64>, Error> {
         self.cnn()
             .await?
             .query_one(
-                "SELECT MAX(seq_no) FROM evts WHERE type = $1",
+                "SELECT MAX(seq_no) FROM events WHERE type = $1",
                 &[&type_name],
             )
             .await
@@ -171,13 +171,13 @@ where
     }
 }
 
-impl<I> Debug for PostgresEvtLog<I> {
+impl<I> Debug for PostgresEventLog<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PostgresEvtLog").finish()
+        f.debug_struct("PostgresEventLog").finish()
     }
 }
 
-impl<I> EvtLog for PostgresEvtLog<I>
+impl<I> EventLog for PostgresEventLog<I>
 where
     I: Clone + ToSql + Send + Sync + 'static,
 {
@@ -189,13 +189,13 @@ where
     /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
     const MAX_SEQ_NO: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) };
 
-    #[instrument(skip(self, evt, to_bytes))]
+    #[instrument(skip(self, event, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         type_name: &'static str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
-        evt: &E,
+        event: &E,
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
@@ -204,12 +204,12 @@ where
     {
         let seq_no = last_seq_no.map(|n| n.get() as i64).unwrap_or_default() + 1;
 
-        let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(Box::new(error)))?;
+        let bytes = to_bytes(event).map_err(|error| Error::ToBytes(Box::new(error)))?;
 
         self.cnn()
             .await?
             .query_one(
-                "INSERT INTO evts (seq_no, type, id, evt) VALUES ($1, $2, $3, $4) RETURNING seq_no",
+                "INSERT INTO events (seq_no, type, id, event) VALUES ($1, $2, $3, $4) RETURNING seq_no",
                 &[&seq_no, &type_name, &id, &bytes.as_ref()],
             )
             .await
@@ -229,7 +229,7 @@ where
     ) -> Result<Option<NonZeroU64>, Self::Error> {
         self.cnn()
             .await?
-            .query_one("SELECT MAX(seq_no) FROM evts WHERE id = $1", &[&id])
+            .query_one("SELECT MAX(seq_no) FROM events WHERE id = $1", &[&id])
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .and_then(|row| {
@@ -246,7 +246,7 @@ where
     }
 
     #[instrument(skip(self, from_bytes))]
-    async fn evts_by_id<E, FromBytes, FromBytesError>(
+    async fn events_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         id: &Self::Id,
@@ -265,17 +265,17 @@ where
             .unwrap_or_default();
 
         let mut current_seq_no = seq_no.get() as i64;
-        let evts = stream! {
+        let events = stream! {
             'outer: loop {
-                let evts = self
-                    .next_evts_by_id(id, current_seq_no, from_bytes)
+                let events = self
+                    .next_events_by_id(id, current_seq_no, from_bytes)
                     .await?;
 
-                for await evt in evts {
-                    match evt {
-                        Ok(evt @ (seq_no, _)) => {
+                for await event in events {
+                    match event {
+                        Ok(event @ (seq_no, _)) => {
                             current_seq_no += seq_no.get() as i64 + 1;
-                            yield Ok(evt);
+                            yield Ok(event);
                         }
 
                         Err(error) => {
@@ -292,11 +292,11 @@ where
             }
         };
 
-        Ok(evts)
+        Ok(events)
     }
 
     #[instrument(skip(self, from_bytes))]
-    async fn evts_by_type<E, FromBytes, FromBytesError>(
+    async fn events_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         seq_no: NonZeroU64,
@@ -316,17 +316,17 @@ where
             .unwrap_or_default();
 
         let mut current_seq_no = seq_no.get() as i64;
-        let evts = stream! {
+        let events = stream! {
             'outer: loop {
-                let evts = self
-                    .next_evts_by_type(type_name, current_seq_no, from_bytes)
+                let events = self
+                    .next_events_by_type(type_name, current_seq_no, from_bytes)
                     .await?;
 
-                for await evt in evts {
-                    match evt {
-                        Ok(evt @ (seq_no, _)) => {
+                for await event in events {
+                    match event {
+                        Ok(event @ (seq_no, _)) => {
                             current_seq_no = seq_no.get() as i64 + 1;
-                            yield Ok(evt);
+                            yield Ok(event);
                         }
 
                         Err(error) => {
@@ -343,11 +343,11 @@ where
             }
         };
 
-        Ok(evts)
+        Ok(events)
     }
 }
 
-/// Configuration for the [PostgresEvtLog].
+/// Configuration for the [PostgresEventLog].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -363,8 +363,8 @@ pub struct Config {
 
     pub sslmode: String,
 
-    #[serde(default = "evts_table_default")]
-    pub evts_table: String,
+    #[serde(default = "events_table_default")]
+    pub events_table: String,
 
     #[serde(default = "poll_interval_default", with = "humantime_serde")]
     pub poll_interval: Duration,
@@ -395,7 +395,7 @@ impl Default for Config {
             password: "".to_string(),
             dbname: "postgres".to_string(),
             sslmode: "prefer".to_string(),
-            evts_table: evts_table_default(),
+            events_table: events_table_default(),
             poll_interval: poll_interval_default(),
             id_broadcast_capacity: id_broadcast_capacity_default(),
             setup: false,
@@ -403,8 +403,8 @@ impl Default for Config {
     }
 }
 
-fn evts_table_default() -> String {
-    "evts".to_string()
+fn events_table_default() -> String {
+    "events".to_string()
 }
 
 const fn poll_interval_default() -> Duration {
@@ -417,9 +417,9 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
 
 #[cfg(test)]
 mod tests {
-    use crate::{PostgresEvtLog, PostgresEvtLogConfig};
+    use crate::{PostgresEventLog, PostgresEventLogConfig};
     use error_ext::BoxError;
-    use eventsourced::{binarize, evt_log::EvtLog};
+    use eventsourced::{binarize, event_log::EventLog};
     use futures::{StreamExt, TryStreamExt};
     use std::{future, num::NonZeroU64};
     use testcontainers::clients::Cli;
@@ -427,31 +427,31 @@ mod tests {
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_evt_log() -> Result<(), BoxError> {
+    async fn test_event_log() -> Result<(), BoxError> {
         let client = Cli::default();
         let container = client.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = PostgresEvtLogConfig {
+        let config = PostgresEventLogConfig {
             port,
             setup: true,
             ..Default::default()
         };
-        let mut evt_log = PostgresEvtLog::<Uuid>::new(config).await?;
+        let mut event_log = PostgresEventLog::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no("counter", &id).await?;
+        let last_seq_no = event_log.last_seq_no("counter", &id).await?;
         assert_eq!(last_seq_no, None);
 
-        let last_seq_no = evt_log
+        let last_seq_no = event_log
             .persist("counter", &id, None, &1, &binarize::serde_json::to_bytes)
             .await?;
         assert!(last_seq_no.get() == 1);
 
-        evt_log
+        event_log
             .persist(
                 "counter",
                 &id,
@@ -461,7 +461,7 @@ mod tests {
             )
             .await?;
 
-        let result = evt_log
+        let result = event_log
             .persist(
                 "counter",
                 &id,
@@ -472,7 +472,7 @@ mod tests {
             .await;
         assert!(result.is_err());
 
-        evt_log
+        event_log
             .persist(
                 "counter",
                 &id,
@@ -482,28 +482,32 @@ mod tests {
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no("counter", &id).await?;
+        let last_seq_no = event_log.last_seq_no("counter", &id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
-        let evts = evt_log
-            .evts_by_id::<u32, _, _>(
+        let events = event_log
+            .events_by_id::<u32, _, _>(
                 "counter",
                 &id,
                 2.try_into()?,
                 binarize::serde_json::from_bytes,
             )
             .await?;
-        let sum = evts
+        let sum = events
             .take(2)
             .try_fold(0u32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 5);
 
-        let evts = evt_log
-            .evts_by_type::<u32, _, _>("counter", NonZeroU64::MIN, binarize::serde_json::from_bytes)
+        let events = event_log
+            .events_by_type::<u32, _, _>(
+                "counter",
+                NonZeroU64::MIN,
+                binarize::serde_json::from_bytes,
+            )
             .await?;
 
-        let last_seq_no = evt_log
+        let last_seq_no = event_log
             .clone()
             .persist(
                 "counter",
@@ -513,7 +517,7 @@ mod tests {
                 &binarize::serde_json::to_bytes,
             )
             .await?;
-        evt_log
+        event_log
             .clone()
             .persist(
                 "counter",
@@ -523,10 +527,10 @@ mod tests {
                 &binarize::serde_json::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no("counter", &id).await?;
+        let last_seq_no = event_log.last_seq_no("counter", &id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
-        let sum = evts
+        let sum = events
             .take(5)
             .try_fold(0u32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
