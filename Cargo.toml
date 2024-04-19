@@ -24,6 +24,7 @@ async-nats             = { version = "0.34" }
 async-stream           = { version = "0.3" }
 bb8-postgres           = { version = "0.8" }
 bytes                  = { version = "1.6" }
+config                 = { version = "0.14" }
 configured             = { version = "0.7" }
 error-ext              = { version = "0.2" }
 futures                = { version = "0.3" }

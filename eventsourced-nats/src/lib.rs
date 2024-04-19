@@ -17,6 +17,7 @@ use thiserror::Error;
 
 /// Authentication configuration.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
 pub enum AuthConfig {
     UserPassword {
         user: String,
@@ -89,5 +90,25 @@ pub async fn make_client(auth: Option<&AuthConfig>, server_addr: &str) -> Result
 
 #[cfg(test)]
 pub mod tests {
+    use crate::AuthConfig;
+    use assert_matches::assert_matches;
+    use config::{Config, File, FileFormat};
+    use secrecy::ExposeSecret;
+
     pub const NATS_VERSION: &str = "2.10-alpine";
+
+    #[test]
+    fn test_deserialize_auth_config() {
+        let auth = "user: test\npassword: test";
+        let config = Config::builder()
+            .add_source(File::from_str(&auth, FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let result = config.try_deserialize::<AuthConfig>();
+        assert_matches!(
+            result,
+            Ok(AuthConfig::UserPassword { user, password })
+                if user =="test" && password.expose_secret() == "test"
+        );
+    }
 }
