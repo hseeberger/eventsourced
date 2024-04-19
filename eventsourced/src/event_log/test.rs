@@ -1,4 +1,4 @@
-use crate::EvtLog;
+use crate::EventLog;
 use bytes::Bytes;
 use error_ext::BoxError;
 use futures::{stream, Stream};
@@ -9,25 +9,25 @@ use std::{
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-type Evts<I> = HashMap<&'static str, HashMap<I, Vec<(NonZeroU64, Bytes)>>>;
+type Events<I> = HashMap<&'static str, HashMap<I, Vec<(NonZeroU64, Bytes)>>>;
 
-/// An in-memory implementation of [EvtLog] for testing purposes.
+/// An in-memory implementation of [EventLog] for testing purposes.
 #[derive(Debug, Clone)]
-pub struct TestEvtLog<I> {
+pub struct TestEventLog<I> {
     seq_no: Arc<RwLock<NonZeroU64>>,
-    evts: Arc<RwLock<Evts<I>>>,
+    events: Arc<RwLock<Events<I>>>,
 }
 
-impl<I> Default for TestEvtLog<I> {
+impl<I> Default for TestEventLog<I> {
     fn default() -> Self {
         Self {
             seq_no: Arc::new(RwLock::new(NonZeroU64::MIN)),
-            evts: Default::default(),
+            events: Default::default(),
         }
     }
 }
 
-impl<I> EvtLog for TestEvtLog<I>
+impl<I> EventLog for TestEventLog<I>
 where
     I: Debug + Clone + Eq + Hash + Send + Sync + 'static,
 {
@@ -39,7 +39,7 @@ where
         type_name: &'static str,
         id: &Self::Id,
         _last_seq_no: Option<NonZeroU64>,
-        evt: &E,
+        event: &E,
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
@@ -47,17 +47,18 @@ where
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        let bytes = to_bytes(evt).map_err(|error| Error(error.into()))?;
+        let bytes = to_bytes(event).map_err(|error| Error(error.into()))?;
 
         let mut seq_no = self.seq_no.write().await;
-        self.evts
+        self.events
             .write()
             .await
             .entry(type_name)
-            .and_modify(|evts| {
-                evts.entry(id.to_owned())
-                    .and_modify(|evts| {
-                        evts.push((*seq_no, bytes.clone()));
+            .and_modify(|events| {
+                events
+                    .entry(id.to_owned())
+                    .and_modify(|events| {
+                        events.push((*seq_no, bytes.clone()));
                     })
                     .or_insert(vec![(*seq_no, bytes.clone())]);
             })
@@ -78,19 +79,19 @@ where
         id: &Self::Id,
     ) -> Result<Option<NonZeroU64>, Self::Error> {
         let seq_no = self
-            .evts
+            .events
             .read()
             .await
             .get(type_name)
-            .and_then(|evts| evts.get(id))
-            .and_then(|evts| evts.last())
+            .and_then(|events| events.get(id))
+            .and_then(|events| events.last())
             .map(|(seq_no, _)| seq_no)
             .copied();
 
         Ok(seq_no)
     }
 
-    async fn evts_by_id<E, FromBytes, FromBytesError>(
+    async fn events_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         id: &Self::Id,
@@ -102,25 +103,25 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        let evts = self
-            .evts
+        let events = self
+            .events
             .read()
             .await
             .get(type_name)
-            .and_then(|evts| evts.get(id).cloned())
+            .and_then(|events| events.get(id).cloned())
             .unwrap_or_default()
             .into_iter()
             .skip_while(move |(this_seq_no, _)| *this_seq_no < seq_no)
             .map(move |(seq_no, bytes)| {
                 from_bytes(bytes.to_owned())
                     .map_err(|error| Error(error.into()))
-                    .map(|evt| (seq_no, evt))
+                    .map(|event| (seq_no, event))
             });
 
-        Ok(stream::iter(evts))
+        Ok(stream::iter(events))
     }
 
-    async fn evts_by_type<E, FromBytes, FromBytesError>(
+    async fn events_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         seq_no: NonZeroU64,
@@ -131,8 +132,8 @@ where
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Copy + Send + Sync,
         FromBytesError: StdError + Send + Sync + 'static,
     {
-        let evts = self
-            .evts
+        let events = self
+            .events
             .read()
             .await
             .get(type_name)
@@ -144,11 +145,11 @@ where
             .map(move |(seq_no, bytes)| {
                 from_bytes(bytes.to_owned())
                     .map_err(|error| Error(error.into()))
-                    .map(|evt| (seq_no, evt))
+                    .map(|event| (seq_no, event))
             })
             .collect::<Vec<_>>();
 
-        Ok(stream::iter(evts))
+        Ok(stream::iter(events))
     }
 }
 
@@ -160,7 +161,7 @@ pub struct Error(BoxError);
 mod tests {
     use crate::{
         binarize::serde_json::*,
-        evt_log::{test::TestEvtLog, EvtLog},
+        event_log::{test::TestEventLog, EventLog},
     };
     use assert_matches::assert_matches;
     use futures::TryStreamExt;
@@ -168,66 +169,66 @@ mod tests {
 
     #[tokio::test]
     async fn test() {
-        let mut evt_log = TestEvtLog::<u64>::default();
+        let mut event_log = TestEventLog::<u64>::default();
 
-        let evts = evt_log
-            .evts_by_id::<String, _, _>("type-1", &0, NonZeroU64::MIN, from_bytes)
+        let events = event_log
+            .events_by_id::<String, _, _>("type-1", &0, NonZeroU64::MIN, from_bytes)
             .await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap().try_collect::<Vec<_>>().await;
-        assert_matches!(evts, Ok(evts) if evts.is_empty());
+        assert!(events.is_ok());
+        let events = events.unwrap().try_collect::<Vec<_>>().await;
+        assert_matches!(events, Ok(events) if events.is_empty());
 
-        let result = evt_log
+        let result = event_log
             .persist("type-0", &0, None, &"type-0-0-A".to_string(), &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 1);
-        let result = evt_log
+        let result = event_log
             .persist("type-0", &0, None, &"type-0-0-B".to_string(), &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 2);
-        let result = evt_log
+        let result = event_log
             .persist("type-0", &1, None, &"type-0-1-A".to_string(), &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 3);
-        let result = evt_log
+        let result = event_log
             .persist("type-1", &0, None, &"type-1-0-A".to_string(), &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 4);
-        let result = evt_log
+        let result = event_log
             .persist("type-0", &0, None, &"type-0-0-C".to_string(), &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 5);
 
-        let evts = evt_log
-            .evts_by_id::<String, _, _>("type-0", &0, NonZeroU64::MIN, from_bytes)
+        let events = event_log
+            .events_by_id::<String, _, _>("type-0", &0, NonZeroU64::MIN, from_bytes)
             .await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap().try_collect::<Vec<_>>().await;
-        assert_matches!(evts, Ok(evts) if evts == vec![
+        assert!(events.is_ok());
+        let events = events.unwrap().try_collect::<Vec<_>>().await;
+        assert_matches!(events, Ok(events) if events == vec![
             (1.try_into().unwrap(), "type-0-0-A".to_string()),
             (2.try_into().unwrap(), "type-0-0-B".to_string()),
             (5.try_into().unwrap(), "type-0-0-C".to_string()),
         ]);
 
-        let evts = evt_log
-            .evts_by_id::<String, _, _>("type-0", &0, 3.try_into().unwrap(), from_bytes)
+        let events = event_log
+            .events_by_id::<String, _, _>("type-0", &0, 3.try_into().unwrap(), from_bytes)
             .await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap().try_collect::<Vec<_>>().await;
-        assert_matches!(evts, Ok(evts) if evts == vec![
+        assert!(events.is_ok());
+        let events = events.unwrap().try_collect::<Vec<_>>().await;
+        assert_matches!(events, Ok(events) if events == vec![
             (5.try_into().unwrap(), "type-0-0-C".to_string())
         ]);
 
-        let evts = evt_log
-            .evts_by_type::<String, _, _>("type-0", 2.try_into().unwrap(), from_bytes)
+        let events = event_log
+            .events_by_type::<String, _, _>("type-0", 2.try_into().unwrap(), from_bytes)
             .await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap().try_collect::<Vec<_>>().await;
-        assert!(evts.is_ok());
-        let evts = evts.unwrap();
-        assert_eq!(evts.len(), 3);
-        assert!(evts.contains(&(2.try_into().unwrap(), "type-0-0-B".to_string())));
-        assert!(evts.contains(&(3.try_into().unwrap(), "type-0-1-A".to_string())));
-        assert!(evts.contains(&(5.try_into().unwrap(), "type-0-0-C".to_string())));
+        assert!(events.is_ok());
+        let events = events.unwrap().try_collect::<Vec<_>>().await;
+        assert!(events.is_ok());
+        let events = events.unwrap();
+        assert_eq!(events.len(), 3);
+        assert!(events.contains(&(2.try_into().unwrap(), "type-0-0-B".to_string())));
+        assert!(events.contains(&(3.try_into().unwrap(), "type-0-1-A".to_string())));
+        assert!(events.contains(&(5.try_into().unwrap(), "type-0-0-C".to_string())));
     }
 }

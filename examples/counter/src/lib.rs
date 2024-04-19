@@ -2,7 +2,7 @@ pub mod counter;
 
 use crate::counter::{Counter, DecreaseCounter, IncreaseCounter};
 use anyhow::{Context, Result};
-use eventsourced::{binarize, evt_log::EvtLog, snapshot_store::SnapshotStore, EventSourcedExt};
+use eventsourced::{binarize, event_log::EventLog, snapshot_store::SnapshotStore, EventSourcedExt};
 use serde::Deserialize;
 use std::{iter, num::NonZeroUsize, time::Instant};
 use tokio::task::JoinSet;
@@ -12,12 +12,12 @@ use uuid::Uuid;
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     entity_count: usize,
-    evt_count: usize,
+    event_count: usize,
 }
 
-pub async fn run<L, S>(config: Config, evt_log: L, snapshot_store: S) -> Result<()>
+pub async fn run<L, S>(config: Config, event_log: L, snapshot_store: S) -> Result<()>
 where
-    L: EvtLog<Id = Uuid>,
+    L: EventLog<Id = Uuid>,
     S: SnapshotStore<Id = Uuid>,
 {
     let ids = iter::repeat_with(Uuid::now_v7)
@@ -28,7 +28,7 @@ where
     let mut tasks = JoinSet::new();
     let start_time = Instant::now();
     for id in ids.clone() {
-        let evt_log = evt_log.clone();
+        let event_log = event_log.clone();
         let snapshot_store = snapshot_store.clone();
         let counter = Counter::default()
             .entity()
@@ -36,7 +36,7 @@ where
                 id,
                 None,
                 NonZeroUsize::new(2).expect("2 is not zero"),
-                evt_log,
+                event_log,
                 snapshot_store,
                 binarize::serde_json::SerdeJsonBinarize,
             )
@@ -44,17 +44,17 @@ where
             .context("spawn counter entity")?;
 
         tasks.spawn(async move {
-            for n in 0..config.evt_count / 2 {
+            for n in 0..config.event_count / 2 {
                 if n > 0 && n % 2_500 == 0 {
                     println!("{id}: {} events persisted", n * 2);
                 }
                 counter
-                    .handle_cmd(IncreaseCounter(n as u64))
+                    .handle_command(IncreaseCounter(n as u64))
                     .await
                     .expect("send/receive Inc command")
                     .expect("handle Inc command");
                 counter
-                    .handle_cmd(DecreaseCounter(n as u64))
+                    .handle_command(DecreaseCounter(n as u64))
                     .await
                     .expect("send/receive Dec command")
                     .expect("handle Dec command");
@@ -67,7 +67,7 @@ where
     println!(
         "Duration for spawning {} entities and sending {} commands to each: {:?}",
         config.entity_count,
-        config.evt_count,
+        config.event_count,
         end_time - start_time
     );
 
@@ -75,7 +75,7 @@ where
     let mut tasks = JoinSet::new();
     let start_time = Instant::now();
     for id in ids {
-        let evt_log = evt_log.clone();
+        let event_log = event_log.clone();
         let snapshot_store = snapshot_store.clone();
         tasks.spawn(async move {
             let _ = Counter::default()
@@ -84,7 +84,7 @@ where
                     id,
                     None,
                     NonZeroUsize::new(2).expect("2 is not zero"),
-                    evt_log,
+                    event_log,
                     snapshot_store,
                     binarize::serde_json::SerdeJsonBinarize,
                 )
@@ -98,7 +98,7 @@ where
     println!(
         "Duration for spawning {} entities with {} events each: {:?}",
         config.entity_count,
-        config.evt_count,
+        config.event_count,
         end_time - start_time
     );
 

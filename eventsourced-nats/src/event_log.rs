@@ -1,4 +1,4 @@
-//! An [EvtLog] implementation based on [NATS](https://nats.io/).
+//! An [EventLog] implementation based on [NATS](https://nats.io/).
 
 use crate::{make_client, AuthConfig, Error};
 use async_nats::jetstream::{
@@ -9,7 +9,7 @@ use async_nats::jetstream::{
     Context as Jetstream, Message,
 };
 use bytes::Bytes;
-use eventsourced::evt_log::EvtLog;
+use eventsourced::event_log::EventLog;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
 use serde::Deserialize;
 use std::{
@@ -21,18 +21,18 @@ use std::{
 };
 use tracing::{debug, instrument};
 
-/// An [EvtLog] implementation based on [NATS](https://nats.io/).
+/// An [EventLog] implementation based on [NATS](https://nats.io/).
 #[derive(Clone)]
-pub struct NatsEvtLog<I> {
-    evt_stream_name: String,
+pub struct NatsEventLog<I> {
+    event_stream_name: String,
     jetstream: Jetstream,
     _id: PhantomData<I>,
 }
 
-impl<I> NatsEvtLog<I> {
+impl<I> NatsEventLog<I> {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "creating NatsEvtLog");
+        debug!(?config, "creating NatsEventLog");
 
         let client = make_client(config.auth.as_ref(), &config.server_addr).await?;
         let jetstream = jetstream::new(client);
@@ -41,28 +41,28 @@ impl<I> NatsEvtLog<I> {
         if config.setup {
             jetstream
                 .create_stream(jetstream::stream::Config {
-                    name: config.evt_stream_name.clone(),
-                    subjects: vec![format!("{}.>", config.evt_stream_name)],
-                    max_bytes: config.evt_stream_max_bytes,
+                    name: config.event_stream_name.clone(),
+                    subjects: vec![format!("{}.>", config.event_stream_name)],
+                    max_bytes: config.event_stream_max_bytes,
                     ..Default::default()
                 })
                 .await
                 .map_err(|error| {
                     Error::Nats(
-                        format!("cannot create evt stream '{}'", config.evt_stream_name),
+                        format!("cannot create event stream '{}'", config.event_stream_name),
                         error.into(),
                     )
                 })?;
         }
 
         Ok(Self {
-            evt_stream_name: config.evt_stream_name,
+            event_stream_name: config.event_stream_name,
             jetstream,
             _id: PhantomData,
         })
     }
 
-    async fn evts<E, F, FromBytes, FromBytesError>(
+    async fn events<E, F, FromBytes, FromBytesError>(
         &self,
         subject: String,
         seq_no: NonZeroU64,
@@ -77,25 +77,25 @@ impl<I> NatsEvtLog<I> {
     {
         let msgs = msgs(
             &self.jetstream,
-            &self.evt_stream_name,
+            &self.event_stream_name,
             subject,
             start_at(seq_no),
         )
         .await?;
 
-        Ok(evts(msgs, filter, from_bytes).await)
+        Ok(events(msgs, filter, from_bytes).await)
     }
 }
 
-impl<I> Debug for NatsEvtLog<I> {
+impl<I> Debug for NatsEventLog<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("NatsEvtLog")
-            .field("stream_name", &self.evt_stream_name)
+        f.debug_struct("NatsEventLog")
+            .field("stream_name", &self.event_stream_name)
             .finish()
     }
 }
 
-impl<I> EvtLog for NatsEvtLog<I>
+impl<I> EventLog for NatsEventLog<I>
 where
     I: Debug + Display + Clone + Send + Sync + 'static,
 {
@@ -103,26 +103,26 @@ where
 
     type Error = Error;
 
-    #[instrument(skip(self, evt, to_bytes))]
+    #[instrument(skip(self, event, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         type_name: &'static str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
-        evt: &E,
+        event: &E,
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        let bytes = to_bytes(evt).map_err(|error| Error::ToBytes(error.into()))?;
+        let bytes = to_bytes(event).map_err(|error| Error::ToBytes(error.into()))?;
         let publish = Publish::build().payload(bytes);
         let publish = last_seq_no.into_iter().fold(publish, |p, last_seq_no| {
             p.expected_last_subject_sequence(last_seq_no.get())
         });
 
-        let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
+        let subject = format!("{}.{type_name}.{id}", self.event_stream_name);
         self.jetstream
             .send_publish(subject, publish)
             .await
@@ -142,8 +142,8 @@ where
         type_name: &'static str,
         id: &Self::Id,
     ) -> Result<Option<NonZeroU64>, Self::Error> {
-        let subject = format!("{}.{type_name}.{id}", self.evt_stream_name);
-        stream(&self.jetstream, &self.evt_stream_name)
+        let subject = format!("{}.{type_name}.{id}", self.event_stream_name);
+        stream(&self.jetstream, &self.event_stream_name)
             .await?
             .get_last_raw_message_by_subject(&subject)
             .await
@@ -156,7 +156,7 @@ where
                         Err(Error::Nats(
                             format!(
                                 "cannot get last message for NATS stream '{}'",
-                                self.evt_stream_name
+                                self.event_stream_name
                             ),
                             error.into(),
                         ))
@@ -174,7 +174,7 @@ where
     }
 
     #[instrument(skip(self, from_bytes))]
-    async fn evts_by_id<E, FromBytes, FromBytesError>(
+    async fn events_by_id<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         id: &Self::Id,
@@ -192,12 +192,12 @@ where
             seq_no,
             "building events by ID stream"
         );
-        let subject = format!("{}.{}.{id}", self.evt_stream_name, type_name);
-        self.evts(subject, seq_no, |_| true, from_bytes).await
+        let subject = format!("{}.{}.{id}", self.event_stream_name, type_name);
+        self.events(subject, seq_no, |_| true, from_bytes).await
     }
 
     #[instrument(skip(self, from_bytes))]
-    async fn evts_by_type<E, FromBytes, FromBytesError>(
+    async fn events_by_type<E, FromBytes, FromBytesError>(
         &self,
         type_name: &'static str,
         seq_no: NonZeroU64,
@@ -209,12 +209,12 @@ where
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(type_name, seq_no, "building events by type stream");
-        let subject = format!("{}.{}.*", self.evt_stream_name, type_name);
-        self.evts(subject, seq_no, |_| true, from_bytes).await
+        let subject = format!("{}.{}.*", self.event_stream_name, type_name);
+        self.events(subject, seq_no, |_| true, from_bytes).await
     }
 }
 
-/// Configuration for the [NatsEvtLog].
+/// Configuration for the [NatsEventLog].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -222,11 +222,11 @@ pub struct Config {
 
     pub auth: Option<AuthConfig>,
 
-    #[serde(default = "evt_stream_name_default")]
-    pub evt_stream_name: String,
+    #[serde(default = "event_stream_name_default")]
+    pub event_stream_name: String,
 
-    #[serde(default = "evt_stream_max_bytes_default")]
-    pub evt_stream_max_bytes: i64,
+    #[serde(default = "event_stream_max_bytes_default")]
+    pub event_stream_max_bytes: i64,
 
     #[serde(default)]
     pub setup: bool,
@@ -238,14 +238,14 @@ impl Default for Config {
         Self {
             server_addr: "localhost:4222".into(),
             auth: None,
-            evt_stream_name: evt_stream_name_default(),
-            evt_stream_max_bytes: evt_stream_max_bytes_default(),
+            event_stream_name: event_stream_name_default(),
+            event_stream_max_bytes: event_stream_max_bytes_default(),
             setup: false,
         }
     }
 }
 
-async fn evts<E, F, FromBytes, FromBytesError>(
+async fn events<E, F, FromBytes, FromBytesError>(
     msgs: impl Stream<Item = Result<Message, Error>> + Send,
     filter: F,
     from_bytes: FromBytes,
@@ -257,21 +257,21 @@ where
     FromBytesError: StdError + Send + Sync + 'static,
 {
     msgs.filter_map(move |msg| {
-        let evt = match msg {
+        let event = match msg {
             Ok(msg) if filter(&msg) => {
-                let evt = seq_no(&msg).and_then(|seq_no| {
+                let event = seq_no(&msg).and_then(|seq_no| {
                     from_bytes(msg.message.payload)
                         .map_err(|error| Error::FromBytes(error.into()))
-                        .map(|evt| (seq_no, evt))
+                        .map(|event| (seq_no, event))
                 });
-                Some(evt)
+                Some(event)
             }
 
             Ok(_) => None,
 
             Err(err) => Some(Err(err)),
         };
-        ready(evt)
+        ready(event)
     })
 }
 
@@ -336,19 +336,19 @@ fn seq_no(msg: &Message) -> Result<NonZeroU64, Error> {
         })
 }
 
-fn evt_stream_name_default() -> String {
-    "evts".to_string()
+fn event_stream_name_default() -> String {
+    "events".to_string()
 }
 
-fn evt_stream_max_bytes_default() -> i64 {
+fn event_stream_max_bytes_default() -> i64 {
     -1
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::{tests::NATS_VERSION, AuthConfig, NatsEvtLog, NatsEvtLogConfig};
+    use crate::{tests::NATS_VERSION, AuthConfig, NatsEventLog, NatsEventLogConfig};
     use error_ext::BoxError;
-    use eventsourced::{binarize, evt_log::EvtLog};
+    use eventsourced::{binarize, event_log::EventLog};
     use futures::{StreamExt, TryStreamExt};
     use std::{future, num::NonZeroU64};
     use testcontainers::{clients::Cli, core::WaitFor};
@@ -356,7 +356,7 @@ mod tests {
     use uuid::Uuid;
 
     #[tokio::test]
-    async fn test_evt_log() -> Result<(), BoxError> {
+    async fn test_event_log() -> Result<(), BoxError> {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
@@ -372,7 +372,7 @@ mod tests {
         ));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
-        let config = NatsEvtLogConfig {
+        let config = NatsEventLogConfig {
             server_addr,
             setup: true,
             auth: Some(AuthConfig::UserPassword {
@@ -381,21 +381,21 @@ mod tests {
             }),
             ..Default::default()
         };
-        let mut evt_log = NatsEvtLog::<Uuid>::new(config).await?;
+        let mut event_log = NatsEventLog::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 
         // Start testing.
 
-        let last_seq_no = evt_log.last_seq_no("counter", &id).await?;
+        let last_seq_no = event_log.last_seq_no("counter", &id).await?;
         assert_eq!(last_seq_no, None);
 
-        let last_seq_no = evt_log
+        let last_seq_no = event_log
             .persist("counter", &id, None, &1, &binarize::serde_json::to_bytes)
             .await?;
         assert!(last_seq_no.get() == 1);
 
-        evt_log
+        event_log
             .persist(
                 "counter",
                 &id,
@@ -405,7 +405,7 @@ mod tests {
             )
             .await?;
 
-        let result = evt_log
+        let result = event_log
             .persist(
                 "counter",
                 &id,
@@ -416,7 +416,7 @@ mod tests {
             .await;
         assert!(result.is_err());
 
-        evt_log
+        event_log
             .persist(
                 "counter",
                 &id,
@@ -426,28 +426,32 @@ mod tests {
             )
             .await?;
 
-        let last_seq_no = evt_log.last_seq_no("counter", &id).await?;
+        let last_seq_no = event_log.last_seq_no("counter", &id).await?;
         assert_eq!(last_seq_no, Some(3.try_into()?));
 
-        let evts = evt_log
-            .evts_by_id::<u32, _, _>(
+        let events = event_log
+            .events_by_id::<u32, _, _>(
                 "counter",
                 &id,
                 2.try_into()?,
                 binarize::serde_json::from_bytes,
             )
             .await?;
-        let sum = evts
+        let sum = events
             .take(2)
             .try_fold(0u32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
         assert_eq!(sum, 5);
 
-        let evts = evt_log
-            .evts_by_type::<u32, _, _>("counter", NonZeroU64::MIN, binarize::serde_json::from_bytes)
+        let events = event_log
+            .events_by_type::<u32, _, _>(
+                "counter",
+                NonZeroU64::MIN,
+                binarize::serde_json::from_bytes,
+            )
             .await?;
 
-        let last_seq_no = evt_log
+        let last_seq_no = event_log
             .clone()
             .persist(
                 "counter",
@@ -457,7 +461,7 @@ mod tests {
                 &binarize::serde_json::to_bytes,
             )
             .await?;
-        evt_log
+        event_log
             .clone()
             .persist(
                 "counter",
@@ -467,10 +471,10 @@ mod tests {
                 &binarize::serde_json::to_bytes,
             )
             .await?;
-        let last_seq_no = evt_log.last_seq_no("counter", &id).await?;
+        let last_seq_no = event_log.last_seq_no("counter", &id).await?;
         assert_eq!(last_seq_no, Some(5.try_into()?));
 
-        let sum = evts
+        let sum = events
             .take(5)
             .try_fold(0u32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;

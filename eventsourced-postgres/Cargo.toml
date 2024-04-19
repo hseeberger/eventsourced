@@ -1,6 +1,6 @@
 [package]
 name          = "eventsourced-postgres"
-description   = "Postgres implementation for EventSourced EvtLog and SnapshotStore."
+description   = "Postgres implementation for EventSourced EventLog and SnapshotStore."
 version       = "0.13.16"
 readme        = "README.md"
 edition       = { workspace = true }

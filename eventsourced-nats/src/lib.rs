@@ -1,10 +1,10 @@
-//! [EvtLog](eventsourced::evt_log::EvtLog) and
+//! [EventLog](eventsourced::event_log::EventLog) and
 //! [SnapshotStore](eventsourced::snapshot_store::SnapshotStore) implementations based upon [NATS](https://nats.io/).
 
-mod evt_log;
+mod event_log;
 mod snapshot_store;
 
-pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
+pub use event_log::{Config as NatsEventLogConfig, NatsEventLog};
 pub use snapshot_store::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore};
 
 use async_nats::{Client, ConnectOptions};
@@ -26,7 +26,7 @@ pub enum AuthConfig {
     CredentialsFile(PathBuf),
 }
 
-/// Errors from the [NatsEvtLog] or [NatsSnapshotStore].
+/// Errors from the [NatsEventLog] or [NatsSnapshotStore].
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("NATS error: {0}")]

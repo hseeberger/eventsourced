@@ -1,9 +1,9 @@
 [counter]
 entity-count   = 50
-evt-count      = 20_000
+event-count    = 20_000
 snapshot-after = 100_000_000
 
-[evt-log]
+[event-log]
 server-addr = "localhost:4222"
 setup       = true
 
