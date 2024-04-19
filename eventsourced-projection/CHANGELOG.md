@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.5.2...eventsourced-projection-v0.6.0) - 2024-04-19
+
+### Other
+- rename cmd command and evt event ([#232](https://github.com/hseeberger/eventsourced/pull/232))
+
 ## [0.5.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.5.1...eventsourced-projection-v0.5.2) - 2024-04-10
 
 ### Other
