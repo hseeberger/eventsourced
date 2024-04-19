@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.25.0...eventsourced-v0.25.1) - 2024-04-19
+
+### Other
+- add drawing to README
+- add drawing to eventsourced rustdoc ([#226](https://github.com/hseeberger/eventsourced/pull/226))
+
 ## [0.25.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.24.0...eventsourced-v0.25.0) - 2024-04-10
 
 ### Added
