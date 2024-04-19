@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.16...eventsourced-postgres-v0.14.0) - 2024-04-19
+
+### Other
+- rename cmd command and evt event ([#232](https://github.com/hseeberger/eventsourced/pull/232))
+
 ## [0.13.16](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.13.15...eventsourced-postgres-v0.13.16) - 2024-04-10
 
 ### Other
