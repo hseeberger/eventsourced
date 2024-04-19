@@ -7,9 +7,24 @@ mod snapshot_store;
 pub use evt_log::{Config as NatsEvtLogConfig, NatsEvtLog};
 pub use snapshot_store::{Config as NatsSnapshotStoreConfig, NatsSnapshotStore};
 
+use async_nats::{Client, ConnectOptions};
 use error_ext::BoxError;
 use prost::{DecodeError, EncodeError};
+use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
+use std::path::PathBuf;
 use thiserror::Error;
+
+/// Authentication configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum AuthConfig {
+    UserPassword {
+        user: String,
+        password: SecretString,
+    },
+    CredentialsFile(PathBuf),
+}
 
 /// Errors from the [NatsEvtLog] or [NatsSnapshotStore].
 #[derive(Debug, Error)]
@@ -38,7 +53,62 @@ pub enum Error {
     InvalidNonZeroU64,
 }
 
+/// Create a NATS client.
+pub async fn make_client(auth: Option<&AuthConfig>, server_addr: &str) -> Result<Client, Error> {
+    let mut options = ConnectOptions::new();
+    if let Some(auth) = auth {
+        match auth {
+            AuthConfig::UserPassword { user, password } => {
+                options =
+                    options.user_and_password(user.to_owned(), password.expose_secret().to_owned());
+            }
+
+            AuthConfig::CredentialsFile(credentials) => {
+                options = options
+                    .credentials_file(credentials)
+                    .await
+                    .map_err(|error| {
+                        Error::Nats(
+                            format!(
+                                "cannot read NATS credentials file at {})",
+                                credentials.display()
+                            ),
+                            error.into(),
+                        )
+                    })?;
+            }
+        }
+    }
+    let client = options.connect(server_addr).await.map_err(|error| {
+        Error::Nats(
+            format!("cannot connect to NATS server at {server_addr})"),
+            error.into(),
+        )
+    })?;
+    Ok(client)
+}
+
 #[cfg(test)]
 pub mod tests {
+    use crate::AuthConfig;
+    use assert_matches::assert_matches;
+    use config::{Config, File, FileFormat};
+    use secrecy::ExposeSecret;
+
     pub const NATS_VERSION: &str = "2.10-alpine";
+
+    #[test]
+    fn test_deserialize_auth_config() {
+        let auth = "user: test\npassword: test";
+        let config = Config::builder()
+            .add_source(File::from_str(&auth, FileFormat::Yaml))
+            .build()
+            .unwrap();
+        let result = config.try_deserialize::<AuthConfig>();
+        assert_matches!(
+            result,
+            Ok(AuthConfig::UserPassword { user, password })
+                if user =="test" && password.expose_secret() == "test"
+        );
+    }
 }

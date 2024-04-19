@@ -1,20 +1,16 @@
 //! A [SnapshotStore] implementation based on [NATS](https://nats.io/).
 
-use crate::Error;
-use async_nats::{
-    jetstream::{self, kv::Store, Context as Jetstream},
-    ConnectOptions,
-};
+use crate::{make_client, AuthConfig, Error};
+use async_nats::jetstream::{self, kv::Store, Context as Jetstream};
 use bytes::{Bytes, BytesMut};
 use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
 use prost::Message;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Display, Formatter},
     marker::PhantomData,
     num::NonZeroU64,
-    path::PathBuf,
 };
 use tracing::debug;
 
@@ -31,30 +27,7 @@ impl<I> NatsSnapshotStore<I> {
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating NatsSnapshotStore");
 
-        let mut options = ConnectOptions::new();
-        if let Some(credentials) = config.credentials {
-            options = options
-                .credentials_file(&credentials)
-                .await
-                .map_err(|error| {
-                    Error::Nats(
-                        format!(
-                            "cannot read NATS credentials file at {})",
-                            credentials.display()
-                        ),
-                        error.into(),
-                    )
-                })?;
-        };
-        let client = options
-            .connect(&config.server_addr)
-            .await
-            .map_err(|error| {
-                Error::Nats(
-                    format!("cannot connect to NATS server at {})", config.server_addr),
-                    error.into(),
-                )
-            })?;
+        let client = make_client(config.auth.as_ref(), &config.server_addr).await?;
         let jetstream = jetstream::new(client);
 
         // Setup bucket.
@@ -184,12 +157,12 @@ where
 }
 
 /// Configuration for the [SnapshotStore].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub server_addr: String,
 
-    pub credentials: Option<PathBuf>,
+    pub auth: Option<AuthConfig>,
 
     #[serde(default = "bucket_name_default")]
     pub bucket_name: String,
@@ -206,7 +179,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server_addr: "localhost:4222".to_string(),
-            credentials: None,
+            auth: None,
             bucket_name: bucket_name_default(),
             bucket_max_bytes: bucket_max_bytes_default(),
             setup: false,

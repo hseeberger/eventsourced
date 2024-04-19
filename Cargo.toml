@@ -24,6 +24,7 @@ async-nats             = { version = "0.34" }
 async-stream           = { version = "0.3" }
 bb8-postgres           = { version = "0.8" }
 bytes                  = { version = "1.6" }
+config                 = { version = "0.14" }
 configured             = { version = "0.7" }
 error-ext              = { version = "0.2" }
 futures                = { version = "0.3" }
@@ -31,6 +32,7 @@ humantime-serde        = { version = "1.1" }
 pin-project            = { version = "1.1" }
 prost                  = { version = "0.12" }
 prost-build            = { version = "0.12" }
+secrecy                = { version = "0.8", features = [ "serde" ] }
 serde                  = { version = "1.0", features = [ "derive" ] }
 serde_json             = { version = "1.0" }
 sqlx                   = { version = "0.7", features = [ "postgres", "runtime-tokio" ] }
