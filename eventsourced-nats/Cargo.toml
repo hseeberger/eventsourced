@@ -17,6 +17,7 @@ bytes        = { workspace = true }
 error-ext    = { workspace = true }
 futures      = { workspace = true }
 prost        = { workspace = true }
+secrecy      = { workspace = true }
 serde        = { workspace = true }
 thiserror    = { workspace = true }
 tokio        = { workspace = true }

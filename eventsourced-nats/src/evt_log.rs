@@ -1,26 +1,22 @@
 //! An [EvtLog] implementation based on [NATS](https://nats.io/).
 
-use crate::Error;
-use async_nats::{
-    jetstream::{
-        self,
-        consumer::{pull, AckPolicy, DeliverPolicy},
-        context::Publish,
-        stream::{LastRawMessageErrorKind, Stream as JetstreamStream},
-        Context as Jetstream, Message,
-    },
-    ConnectOptions,
+use crate::{make_client, AuthConfig, Error};
+use async_nats::jetstream::{
+    self,
+    consumer::{pull, AckPolicy, DeliverPolicy},
+    context::Publish,
+    stream::{LastRawMessageErrorKind, Stream as JetstreamStream},
+    Context as Jetstream, Message,
 };
 use bytes::Bytes;
 use eventsourced::evt_log::EvtLog;
 use futures::{future::ready, Stream, StreamExt, TryStreamExt};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Display, Formatter},
     marker::PhantomData,
     num::NonZeroU64,
-    path::PathBuf,
     time::Duration,
 };
 use tracing::{debug, instrument};
@@ -38,30 +34,7 @@ impl<I> NatsEvtLog<I> {
     pub async fn new(config: Config) -> Result<Self, Error> {
         debug!(?config, "creating NatsEvtLog");
 
-        let mut options = ConnectOptions::new();
-        if let Some(credentials) = config.credentials {
-            options = options
-                .credentials_file(&credentials)
-                .await
-                .map_err(|error| {
-                    Error::Nats(
-                        format!(
-                            "cannot read NATS credentials file at {})",
-                            credentials.display()
-                        ),
-                        error.into(),
-                    )
-                })?;
-        };
-        let client = options
-            .connect(&config.server_addr)
-            .await
-            .map_err(|error| {
-                Error::Nats(
-                    format!("cannot connect to NATS server at {})", config.server_addr),
-                    error.into(),
-                )
-            })?;
+        let client = make_client(config.auth.as_ref(), &config.server_addr).await?;
         let jetstream = jetstream::new(client);
 
         // Setup stream.
@@ -242,12 +215,12 @@ where
 }
 
 /// Configuration for the [NatsEvtLog].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub server_addr: String,
 
-    pub credentials: Option<PathBuf>,
+    pub auth: Option<AuthConfig>,
 
     #[serde(default = "evt_stream_name_default")]
     pub evt_stream_name: String,
@@ -264,7 +237,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             server_addr: "localhost:4222".into(),
-            credentials: None,
+            auth: None,
             evt_stream_name: evt_stream_name_default(),
             evt_stream_max_bytes: evt_stream_max_bytes_default(),
             setup: false,
@@ -373,7 +346,7 @@ fn evt_stream_max_bytes_default() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{tests::NATS_VERSION, NatsEvtLog, NatsEvtLogConfig};
+    use crate::{tests::NATS_VERSION, AuthConfig, NatsEvtLog, NatsEvtLogConfig};
     use error_ext::BoxError;
     use eventsourced::{binarize, evt_log::EvtLog};
     use futures::{StreamExt, TryStreamExt};
@@ -387,12 +360,25 @@ mod tests {
         let client = Cli::default();
         let nats_image = GenericImage::new("nats", NATS_VERSION)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
-        let container = client.run((nats_image, vec!["-js".to_string()]));
+        let container = client.run((
+            nats_image,
+            vec![
+                "-js".to_string(),
+                "--user".to_string(),
+                "test".to_string(),
+                "--pass".to_string(),
+                "test".to_string(),
+            ],
+        ));
         let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
 
         let config = NatsEvtLogConfig {
             server_addr,
             setup: true,
+            auth: Some(AuthConfig::UserPassword {
+                user: "test".to_string(),
+                password: "test".to_string().into(),
+            }),
             ..Default::default()
         };
         let mut evt_log = NatsEvtLog::<Uuid>::new(config).await?;
