@@ -85,7 +85,7 @@ use tracing::{debug, error, instrument};
 type BoxedCommand<E> = Box<dyn ErasedCommand<E> + Send>;
 type BoxedCommandEffect<E> = Result<
     (
-        <E as EventSourced>::Event,
+        Option<<E as EventSourced>::Event>,
         Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>,
     ),
     BoxedAny,
@@ -118,7 +118,7 @@ where
     E: EventSourced,
 {
     /// The type for replies.
-    type Reply: Send + 'static;
+    type Reply: Send + Sync + 'static;
 
     /// The type for rejecting this command.
     type Error: Send + 'static;
@@ -137,6 +137,7 @@ where
     E: EventSourced,
 {
     EmitAndReply(E::Event, Box<dyn FnOnce(&E) -> Reply + Send + Sync>),
+    Reply(Reply),
     Reject(Error),
 }
 
@@ -151,6 +152,11 @@ where
         make_reply: impl FnOnce(&E) -> Reply + Send + Sync + 'static,
     ) -> Self {
         Self::EmitAndReply(event, Box::new(make_reply))
+    }
+
+    /// Reply with the given value without emitting any event.
+    pub fn reply(reply: Reply) -> Self {
+        Self::Reply(reply)
     }
 
     /// Reject this command with the given error.
@@ -319,7 +325,7 @@ where
 
                     let result = command.handle_command(&id, &state);
                     match result {
-                        Ok((event, make_reply)) => {
+                        Ok((Some(event), make_reply)) => {
                             debug!(?id, ?event, "persisting event");
 
                             match event_log
@@ -370,6 +376,13 @@ where
                                     // This is fatal, we must terminate the entity!
                                     break;
                                 }
+                            }
+                        }
+
+                        Ok((None, make_reply)) => {
+                            let reply = make_reply(&state);
+                            if result_sender.send(Ok(reply)).is_err() {
+                                error!(?id, "cannot send command reply");
                             }
                         }
 
@@ -430,14 +443,15 @@ impl<C, E, Reply, Error> ErasedCommand<E> for C
 where
     C: Command<E, Reply = Reply, Error = Error>,
     E: EventSourced,
-    Reply: Send + 'static,
+    Reply: Send + Sync + 'static,
     Error: Send + 'static,
 {
     fn handle_command(self: Box<Self>, id: &E::Id, state: &E) -> BoxedCommandEffect<E> {
         match <C as Command<E>>::handle_command(*self, id, state) {
             CommandEffect::EmitAndReply(event, make_reply) => {
-                Ok((event, Box::new(|s| Box::new(make_reply(s)))))
+                Ok((Some(event), Box::new(|s| Box::new(make_reply(s)))))
             }
+            CommandEffect::Reply(reply) => Ok((None, Box::new(|_s| Box::new(reply)))),
             CommandEffect::Reject(error) => Err(Box::new(error) as BoxedAny),
         }
     }
@@ -535,6 +549,17 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     pub struct Underflow;
 
+    #[derive(Debug)]
+    pub struct GetCounter;
+    impl Command<Counter> for GetCounter {
+        type Error = ();
+        type Reply = u64;
+
+        fn handle_command(self, _id: &Uuid, state: &Counter) -> CommandEffect<Counter, u64, ()> {
+            CommandEffect::reply(state.0)
+        }
+    }
+
     #[tokio::test]
     #[traced_test]
     async fn test() -> Result<(), BoxError> {
@@ -575,6 +600,9 @@ mod tests {
         let reply = entity.handle_command(DecreaseCounter(100)).await?;
         assert_matches!(reply, Err(error) if error == Underflow);
         let reply = entity.handle_command(DecreaseCounter(1)).await?;
+        assert_matches!(reply, Ok(42));
+
+        let reply = entity.handle_command(GetCounter).await?;
         assert_matches!(reply, Ok(42));
 
         Ok(())
