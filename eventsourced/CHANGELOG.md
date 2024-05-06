@@ -6,6 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.26.0...eventsourced-v0.27.0) - 2024-05-06
+
+### Added
+- add CommandEffect::reply to allow commands that don't alter state ([#240](https://github.com/hseeberger/eventsourced/pull/240))
+
 ## [0.26.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.25.0...eventsourced-v0.26.0) - 2024-04-19
 
 ### Other
