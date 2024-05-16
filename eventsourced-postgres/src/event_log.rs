@@ -1,144 +1,125 @@
 //! An [EventLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 
-use crate::{Cnn, CnnPool, Error};
+use crate::pool::{self, Pool};
 use async_stream::stream;
-use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
-use eventsourced::event_log::EventLog;
+use error_ext::BoxError;
 use futures::{Stream, StreamExt, TryStreamExt};
-use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
+use sqlx::{postgres::PgRow, query::Query, Encode, Executor, IntoArguments, Postgres, Row, Type};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
-    num::{NonZeroU64, NonZeroUsize},
+    num::NonZeroU64,
     time::Duration,
 };
+use thiserror::Error;
 use tokio::time::sleep;
-use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{debug, instrument};
 
 /// An [EventLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
-pub struct PostgresEventLog<I> {
+pub struct EventLog<I> {
     poll_interval: Duration,
-    cnn_pool: CnnPool<NoTls>,
+    pool: Pool,
     _id: PhantomData<I>,
 }
 
-impl<I> PostgresEventLog<I>
+impl<I> EventLog<I>
 where
-    I: ToSql + Sync,
+    I: Debug + for<'q> Encode<'q, Postgres> + Type<Postgres> + Sync,
 {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "creating PostgresEventLog");
+        debug!(?config, "creating EventLog");
 
         // Create connection pool.
-        let tls = NoTls;
-        let cnn_manager = PostgresConnectionManager::new_from_stringlike(config.cnn_config(), tls)
-            .map_err(|error| {
-                Error::Postgres("cannot create connection manager".to_string(), error)
-            })?;
-        let cnn_pool = Pool::builder()
-            .build(cnn_manager)
+        let pool = Pool::new(config.pool)
             .await
-            .map_err(|error| Error::Postgres("cannot create connection pool".to_string(), error))?;
+            .map_err(|error| Error::Sqlx("cannot create connection pool".to_string(), error))?;
 
-        // Setup tables.
+        // Optionally create tables.
         if config.setup {
-            cnn_pool
-                .get()
-                .await
-                .map_err(Error::GetConnection)?
-                .batch_execute(
-                    &include_str!("create_event_log.sql").replace("events", &config.events_table),
-                )
-                .await
-                .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?;
+            let ddl = include_str!("create_event_log.sql").replace("events", &config.events_table);
+            let ddl = ddl.as_str();
+
+            (&*pool).execute(ddl).await.map_err(|error| {
+                Error::Sqlx("cannot create tables for event log".to_string(), error)
+            })?;
         }
 
         Ok(Self {
             poll_interval: config.poll_interval,
-            cnn_pool,
+            pool,
             _id: PhantomData,
         })
     }
 
-    async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
-        self.cnn_pool.get().await.map_err(Error::GetConnection)
-    }
-
-    async fn next_events_by_id<E, FromBytes, FromBytesError>(
+    #[instrument(skip(self, from_bytes))]
+    async fn next_events_by_id<'i, E, FromBytes, FromBytesError>(
         &self,
-        id: &I,
+        id: &'i I,
         seq_no: i64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send + 'i, Error>
     where
         E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send + 'i,
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(?id, ?seq_no, "querying events");
-        let params: [&(dyn ToSql + Sync); 2] = [&id, &seq_no];
-        let events = self
-            .cnn()
-            .await?
-            .query_raw(
-                "SELECT seq_no, event FROM events WHERE id = $1 AND seq_no >= $2",
-                params,
-            )
-            .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
-            .map_err(|error| Error::Postgres("cannot get next row".to_string(), error))
-            .map(move |row| {
-                row.and_then(|row| {
-                    let seq_no = (row.get::<_, i64>(0) as u64)
-                        .try_into()
-                        .map_err(|_| Error::ZeroSeqNo)?;
-                    let bytes = row.get::<_, &[u8]>(1);
-                    let bytes = Bytes::copy_from_slice(bytes);
-                    from_bytes(bytes)
-                        .map_err(|source| Error::FromBytes(Box::new(source)))
-                        .map(|event| (seq_no, event))
-                })
-            });
 
-        Ok(events)
+        let query = sqlx::query("SELECT seq_no, event FROM events WHERE id = $1 AND seq_no >= $2")
+            .bind(id)
+            .bind(seq_no);
+
+        self.next_events(query, from_bytes).await
     }
 
+    #[instrument(skip(self, from_bytes))]
     async fn next_events_by_type<E, FromBytes, FromBytesError>(
         &self,
-        type_name: &str,
+        type_name: &'static str,
         seq_no: i64,
         from_bytes: FromBytes,
     ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
     where
         E: Send,
-        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send + 'static,
         FromBytesError: StdError + Send + Sync + 'static,
     {
         debug!(%type_name, seq_no, "querying events");
 
-        let params: [&(dyn ToSql + Sync); 2] = [&type_name, &seq_no];
-        let events = self
-            .cnn()
-            .await?
-            .query_raw(
-                "SELECT seq_no, event FROM events WHERE type = $1 AND seq_no >= $2",
-                params,
-            )
-            .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
-            .map_err(|error| Error::Postgres("cannot get next row".to_string(), error))
+        let query =
+            sqlx::query("SELECT seq_no, event FROM events WHERE type = $1 AND seq_no >= $2")
+                .bind(type_name)
+                .bind(seq_no);
+
+        self.next_events(query, from_bytes).await
+    }
+
+    #[instrument(skip(self, query, from_bytes))]
+    async fn next_events<'q, A, E, FromBytes, FromBytesError>(
+        &self,
+        query: Query<'q, Postgres, A>,
+        from_bytes: FromBytes,
+    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send + 'q, Error>
+    where
+        A: Send + IntoArguments<'q, Postgres> + 'q,
+        E: Send,
+        FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send + 'q,
+        FromBytesError: StdError + Send + Sync + 'static,
+    {
+        let events = query
+            .fetch(&*self.pool)
+            .map_err(|error| Error::Sqlx("cannot get next row".to_string(), error))
             .map(move |row| {
                 row.and_then(|row| {
-                    let seq_no = (row.get::<_, i64>(0) as u64)
+                    let seq_no = (row.get::<i64, _>(0) as u64)
                         .try_into()
                         .map_err(|_| Error::ZeroSeqNo)?;
-                    let bytes = row.get::<_, &[u8]>(1);
+                    let bytes = row.get::<&[u8], _>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
                         .map_err(|source| Error::FromBytes(Box::new(source)))
@@ -149,37 +130,31 @@ where
         Ok(events)
     }
 
-    async fn last_seq_no_by_type(&self, type_name: &str) -> Result<Option<NonZeroU64>, Error> {
-        self.cnn()
-            .await?
-            .query_one(
-                "SELECT MAX(seq_no) FROM events WHERE type = $1",
-                &[&type_name],
-            )
+    #[instrument(skip(self))]
+    async fn last_seq_no_by_type(
+        &self,
+        type_name: &'static str,
+    ) -> Result<Option<NonZeroU64>, Error> {
+        sqlx::query("SELECT MAX(seq_no) FROM events WHERE type = $1")
+            .bind(type_name)
+            .fetch_one(&*self.pool)
             .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
-            .and_then(|row| {
-                // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
-                row.try_get::<_, i64>(0)
-                    .ok()
-                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
-                    .transpose()
-            })
+            .map_err(|error| Error::Sqlx("cannot select max seq_no".to_string(), error))
+            .and_then(into_seq_no)
     }
 }
 
-impl<I> Debug for PostgresEventLog<I> {
+impl<I> Debug for EventLog<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PostgresEventLog").finish()
+        f.debug_struct("EventLog").finish()
     }
 }
 
-impl<I> EventLog for PostgresEventLog<I>
+impl<I> eventsourced::event_log::EventLog for EventLog<I>
 where
-    I: Clone + ToSql + Send + Sync + 'static,
+    I: Debug + Clone + for<'q> Encode<'q, Postgres> + Type<Postgres> + Send + Sync + 'static,
 {
     type Id = I;
-
     type Error = Error;
 
     /// The maximum value for sequence numbers. As PostgreSQL does not support unsigned integers,
@@ -203,45 +178,40 @@ where
             return Err(Error::EmptyEvents);
         }
 
-        let mut cnn = self.cnn().await?;
-        let tx = cnn
-            .transaction()
+        let mut tx = self
+            .pool
+            .begin()
             .await
-            .map_err(|error| Error::Postgres("cannot start transaction".to_string(), error))?;
+            .map_err(|error| Error::Sqlx("cannot begin transaction".to_string(), error))?;
 
-        // TODO Reuse `last_seq_no` (once migrated to sqlx)!
-        let seq_no = tx
-            .query_one("SELECT MAX(seq_no) FROM events WHERE id = $1", &[&id])
+        let seq_no = sqlx::query("SELECT MAX(seq_no) FROM events WHERE id = $1")
+            .bind(id)
+            .fetch_one(&mut *tx)
             .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
-            .and_then(|row| {
-                // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
-                row.try_get::<_, i64>(0)
-                    .ok()
-                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
-                    .transpose()
-            })?;
+            .map_err(|error| Error::Sqlx("cannot select max seq_no".to_string(), error))
+            .and_then(into_seq_no)?;
+
         if seq_no != last_seq_no {
             return Err(Error::UnexpectedSeqNo(seq_no, last_seq_no));
         }
-
-        let stmt = tx
-            .prepare("INSERT INTO events VALUES ($1, $2, $3, $4)")
-            .await
-            .map_err(|error| Error::Postgres("cannot prepare statement".to_string(), error))?;
 
         let mut seq_no = last_seq_no.map(|n| n.get() as i64).unwrap_or_default();
         for event in events.iter() {
             seq_no += 1;
             let bytes = to_bytes(event).map_err(|error| Error::ToBytes(error.into()))?;
-            tx.execute(&stmt, &[&type_name, &id, &seq_no, &bytes.as_ref()])
+            sqlx::query("INSERT INTO events VALUES ($1, $2, $3, $4)")
+                .bind(type_name)
+                .bind(id)
+                .bind(seq_no)
+                .bind(bytes.as_ref())
+                .execute(&mut *tx)
                 .await
-                .map_err(|error| Error::Postgres("cannot execute statement".to_string(), error))?;
+                .map_err(|error| Error::Sqlx("cannot execute statement".to_string(), error))?;
         }
 
         tx.commit()
             .await
-            .map_err(|error| Error::Postgres("cannot commit transaction".to_string(), error))?;
+            .map_err(|error| Error::Sqlx("cannot commit transaction".to_string(), error))?;
 
         (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo)
     }
@@ -249,21 +219,15 @@ where
     #[instrument(skip(self))]
     async fn last_seq_no(
         &self,
-        type_name: &'static str,
+        _type_name: &'static str,
         id: &Self::Id,
     ) -> Result<Option<NonZeroU64>, Self::Error> {
-        self.cnn()
-            .await?
-            .query_one("SELECT MAX(seq_no) FROM events WHERE id = $1", &[&id])
+        sqlx::query("SELECT MAX(seq_no) FROM events WHERE id = $1")
+            .bind(id)
+            .fetch_one(&*self.pool)
             .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
-            .and_then(|row| {
-                // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
-                row.try_get::<_, i64>(0)
-                    .ok()
-                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
-                    .transpose()
-            })
+            .map_err(|error| Error::Sqlx("cannot select max seq_no".to_string(), error))
+            .and_then(into_seq_no)
     }
 
     #[instrument(skip(self, from_bytes))]
@@ -368,21 +332,19 @@ where
     }
 }
 
-/// Configuration for the [PostgresEventLog].
+fn into_seq_no(row: PgRow) -> Result<Option<NonZeroU64>, Error> {
+    // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
+    row.try_get::<i64, _>(0)
+        .ok()
+        .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
+        .transpose()
+}
+
+/// Configuration for the [EventLog].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub host: String,
-
-    pub port: u16,
-
-    pub user: String,
-
-    pub password: SecretString,
-
-    pub dbname: String,
-
-    pub sslmode: String,
+    pub pool: pool::Config,
 
     #[serde(default = "events_table_default")]
     pub events_table: String,
@@ -390,43 +352,30 @@ pub struct Config {
     #[serde(default = "poll_interval_default", with = "humantime_serde")]
     pub poll_interval: Duration,
 
-    #[serde(default = "id_broadcast_capacity_default")]
-    pub id_broadcast_capacity: NonZeroUsize,
-
     #[serde(default)]
     pub setup: bool,
 }
 
-impl Config {
-    fn cnn_config(&self) -> String {
-        format!(
-            "host={} port={} user={} password={} dbname={} sslmode={}",
-            self.host,
-            self.port,
-            self.user,
-            self.password.expose_secret(),
-            self.dbname,
-            self.sslmode
-        )
-    }
-}
+/// Error for the [EventLog].
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Sqlx(String, #[source] sqlx::Error),
 
-impl Default for Config {
-    /// Default values suitable for local testing only.
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 5432,
-            user: "postgres".to_string(),
-            password: "".to_string().into(),
-            dbname: "postgres".to_string(),
-            sslmode: "prefer".to_string(),
-            events_table: events_table_default(),
-            poll_interval: poll_interval_default(),
-            id_broadcast_capacity: id_broadcast_capacity_default(),
-            setup: false,
-        }
-    }
+    #[error("cannot convert event to bytes")]
+    ToBytes(#[source] BoxError),
+
+    #[error("cannot convert bytes to event")]
+    FromBytes(#[source] BoxError),
+
+    #[error("expected sequence number {0:?}, but was {1:?}")]
+    UnexpectedSeqNo(Option<NonZeroU64>, Option<NonZeroU64>),
+
+    #[error("sequence number must not be zero")]
+    ZeroSeqNo,
+
+    #[error("events to be persisted must not be empty")]
+    EmptyEvents,
 }
 
 fn events_table_default() -> String {
@@ -437,16 +386,13 @@ const fn poll_interval_default() -> Duration {
     Duration::from_secs(2)
 }
 
-const fn id_broadcast_capacity_default() -> NonZeroUsize {
-    NonZeroUsize::MIN
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::{PostgresEventLog, PostgresEventLogConfig};
+    use crate::event_log::{events_table_default, poll_interval_default, Config, EventLog};
     use error_ext::BoxError;
-    use eventsourced::{binarize, event_log::EventLog};
+    use eventsourced::{binarize, event_log::EventLog as _EventLog};
     use futures::{StreamExt, TryStreamExt};
+    use sqlx::postgres::PgSslMode;
     use std::{future, num::NonZeroU64};
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
@@ -458,12 +404,21 @@ mod tests {
         let container = client.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = PostgresEventLogConfig {
+        let pool = crate::pool::Config {
+            host: "localhost".to_string(),
             port,
-            setup: true,
-            ..Default::default()
+            user: "postgres".to_string(),
+            password: "".to_string().into(),
+            dbname: "postgres".to_string(),
+            sslmode: PgSslMode::Prefer,
         };
-        let mut event_log = PostgresEventLog::<Uuid>::new(config).await?;
+        let config = Config {
+            pool,
+            setup: true,
+            events_table: events_table_default(),
+            poll_interval: poll_interval_default(),
+        };
+        let mut event_log = EventLog::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 

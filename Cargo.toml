@@ -22,7 +22,6 @@ anyhow                 = { version = "1.0" }
 assert_matches         = { version = "1.5" }
 async-nats             = { version = "0.34" }
 async-stream           = { version = "0.3" }
-bb8-postgres           = { version = "0.8" }
 bytes                  = { version = "1.6" }
 config                 = { version = "0.14" }
 configured             = { version = "0.7" }
@@ -35,12 +34,12 @@ prost-build            = { version = "0.12" }
 secrecy                = { version = "0.8", features = [ "serde" ] }
 serde                  = { version = "1.0", features = [ "derive" ] }
 serde_json             = { version = "1.0" }
+serde_with             = { version = "3.8" }
 sqlx                   = { version = "0.7", features = [ "postgres", "runtime-tokio" ] }
 testcontainers         = { version = "0.15" }
 testcontainers-modules = { version = "0.3" }
 thiserror              = { version = "1.0" }
 tokio                  = { version = "1", features = [ "sync" ] }
-tokio-postgres         = { version = "0.7", features = [ "with-uuid-1" ] }
 tower                  = { version = "0.4", features = [ "util" ] }
 tracing                = { version = "0.1" }
 tracing-subscriber     = { version = "0.3", features = [ "env-filter" ] }

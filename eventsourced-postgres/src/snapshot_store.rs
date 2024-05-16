@@ -1,78 +1,64 @@
 //! A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
 
-use crate::{Cnn, CnnPool, Error};
-use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
+use crate::pool::{self, Pool};
 use bytes::Bytes;
-use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
-use secrecy::{ExposeSecret, SecretString};
+use error_ext::BoxError;
+use eventsourced::snapshot_store::Snapshot;
 use serde::Deserialize;
+use sqlx::{Encode, Executor, Postgres, Row, Type};
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
     marker::PhantomData,
     num::NonZeroU64,
 };
-use tokio_postgres::{types::ToSql, NoTls};
+use thiserror::Error;
 use tracing::debug;
 
 /// A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
-pub struct PostgresSnapshotStore<I> {
-    cnn_pool: CnnPool<NoTls>,
+pub struct SnapshotStore<I> {
+    pool: Pool,
     _id: PhantomData<I>,
 }
 
-impl<I> PostgresSnapshotStore<I> {
+impl<I> SnapshotStore<I> {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "creating PostgresSnapshotStore");
+        debug!(?config, "creating SnapshotStore");
 
         // Create connection pool.
-        let tls = NoTls;
-        let cnn_manager = PostgresConnectionManager::new_from_stringlike(config.cnn_config(), tls)
-            .map_err(|error| {
-                Error::Postgres("cannot create connection manager".to_string(), error)
-            })?;
-        let cnn_pool = Pool::builder()
-            .build(cnn_manager)
+        let pool = Pool::new(config.pool)
             .await
-            .map_err(|error| Error::Postgres("cannot create connection pool".to_string(), error))?;
+            .map_err(|error| Error::Sqlx("cannot create connection pool".to_string(), error))?;
 
-        // Setup tables.
+        // Optionally create tables.
         if config.setup {
-            cnn_pool
-                .get()
-                .await
-                .map_err(Error::GetConnection)?
-                .execute(
-                    &include_str!("create_snapshot_store.sql")
-                        .replace("snapshots", &config.snapshots_table),
-                    &[],
-                )
-                .await
-                .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?;
+            let ddl = include_str!("create_snapshot_store.sql")
+                .replace("snapshots", &config.snapshots_table);
+            let ddl = ddl.as_str();
+
+            (&*pool).execute(ddl).await.map_err(|error| {
+                Error::Sqlx("cannot create tables for event log".to_string(), error)
+            })?;
         }
 
         Ok(Self {
-            cnn_pool,
+            pool,
             _id: PhantomData,
         })
     }
-
-    async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
-        self.cnn_pool.get().await.map_err(Error::GetConnection)
-    }
 }
 
-impl<I> Debug for PostgresSnapshotStore<I> {
+impl<I> Debug for SnapshotStore<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PostgresSnapshotStore").finish()
+        f.debug_struct("SnapshotStore").finish()
     }
 }
 
-impl<I> SnapshotStore for PostgresSnapshotStore<I>
+impl<I> eventsourced::snapshot_store::SnapshotStore for SnapshotStore<I>
 where
-    I: Debug + Clone + ToSql + Send + Sync + 'static,
+    I: Debug + Clone + for<'q> Encode<'q, Postgres> + Type<Postgres> + Send + Sync + 'static,
 {
     type Id = I;
 
@@ -93,14 +79,13 @@ where
         debug!(?id, %seq_no, "saving snapshot");
 
         let bytes = to_bytes(state).map_err(|source| Error::ToBytes(Box::new(source)))?;
-        self.cnn()
-            .await?
-            .execute(
-                "INSERT INTO snapshots VALUES ($1, $2, $3)",
-                &[&id, &(seq_no.get() as i64), &bytes.as_ref()],
-            )
+        sqlx::query("INSERT INTO snapshots VALUES ($1, $2, $3)")
+            .bind(id)
+            .bind(seq_no.get() as i64)
+            .bind(bytes.as_ref())
+            .execute(&*self.pool)
             .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
+            .map_err(|error| Error::Sqlx("cannot insert snapshot".to_string(), error))
             .map(|_| ())
     }
 
@@ -115,45 +100,34 @@ where
     {
         debug!(?id, "loading snapshot");
 
-        self.cnn()
-            .await?
-            .query_opt(
-                "SELECT seq_no, state FROM snapshots
-                 WHERE id = $1
-                 AND seq_no = (select max(seq_no) from snapshots where id = $1)",
-                &[&id],
-            )
-            .await
-            .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))?
-            .map(move |row| {
-                let seq_no = (row.get::<_, i64>(0) as u64)
-                    .try_into()
-                    .map_err(|_| Error::ZeroSeqNo)?;
-                let bytes = row.get::<_, &[u8]>(1);
-                let bytes = Bytes::copy_from_slice(bytes);
-                from_bytes(bytes)
-                    .map_err(|source| Error::FromBytes(Box::new(source)))
-                    .map(|state| Snapshot::new(seq_no, state))
-            })
-            .transpose()
+        sqlx::query(
+            "SELECT seq_no, state FROM snapshots
+             WHERE id = $1
+             AND seq_no = (select max(seq_no) from snapshots where id = $1)",
+        )
+        .bind(id)
+        .fetch_optional(&*self.pool)
+        .await
+        .map_err(|error| Error::Sqlx("cannot query snapshot".to_string(), error))?
+        .map(move |row| {
+            let seq_no = (row.get::<i64, _>(0) as u64)
+                .try_into()
+                .map_err(|_| Error::ZeroSeqNo)?;
+            let bytes = row.get::<&[u8], _>(1);
+            let bytes = Bytes::copy_from_slice(bytes);
+            from_bytes(bytes)
+                .map_err(|source| Error::FromBytes(Box::new(source)))
+                .map(|state| Snapshot::new(seq_no, state))
+        })
+        .transpose()
     }
 }
 
-/// Configuration for the [PostgresSnapshotStore].
+/// Configuration for the [SnapshotStore].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    pub host: String,
-
-    pub port: u16,
-
-    pub user: String,
-
-    pub password: SecretString,
-
-    pub dbname: String,
-
-    pub sslmode: String,
+    pub pool: pool::Config,
 
     #[serde(default = "snapshots_table_default")]
     pub snapshots_table: String,
@@ -162,34 +136,20 @@ pub struct Config {
     pub setup: bool,
 }
 
-impl Config {
-    fn cnn_config(&self) -> String {
-        format!(
-            "host={} port={} user={} password={} dbname={} sslmode={}",
-            self.host,
-            self.port,
-            self.user,
-            self.password.expose_secret(),
-            self.dbname,
-            self.sslmode
-        )
-    }
-}
+/// Errors for the [SnapshotStore].
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Sqlx(String, #[source] sqlx::Error),
 
-impl Default for Config {
-    /// Default values suitable for local testing only.
-    fn default() -> Self {
-        Self {
-            host: "localhost".to_string(),
-            port: 5432,
-            user: "postgres".to_string(),
-            password: "".to_string().into(),
-            dbname: "postgres".to_string(),
-            sslmode: "prefer".to_string(),
-            snapshots_table: snapshots_table_default(),
-            setup: false,
-        }
-    }
+    #[error("cannot convert snapshot to bytes")]
+    ToBytes(#[source] BoxError),
+
+    #[error("cannot convert bytes to snapshot")]
+    FromBytes(#[source] BoxError),
+
+    #[error("sequence number must not be zero")]
+    ZeroSeqNo,
 }
 
 fn snapshots_table_default() -> String {
@@ -198,9 +158,10 @@ fn snapshots_table_default() -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{PostgresSnapshotStore, PostgresSnapshotStoreConfig};
+    use crate::snapshot_store::{snapshots_table_default, Config, SnapshotStore};
     use error_ext::BoxError;
-    use eventsourced::{binarize, snapshot_store::SnapshotStore};
+    use eventsourced::{binarize, snapshot_store::SnapshotStore as _SnapshotStore};
+    use sqlx::postgres::PgSslMode;
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
@@ -211,12 +172,20 @@ mod tests {
         let container = client.run(Postgres::default().with_host_auth());
         let port = container.get_host_port_ipv4(5432);
 
-        let config = PostgresSnapshotStoreConfig {
+        let pool = crate::pool::Config {
+            host: "localhost".to_string(),
             port,
-            setup: true,
-            ..Default::default()
+            user: "postgres".to_string(),
+            password: "".to_string().into(),
+            dbname: "postgres".to_string(),
+            sslmode: PgSslMode::Prefer,
         };
-        let mut snapshot_store = PostgresSnapshotStore::<Uuid>::new(config).await?;
+        let config = Config {
+            pool,
+            setup: true,
+            snapshots_table: snapshots_table_default(),
+        };
+        let mut snapshot_store = SnapshotStore::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 

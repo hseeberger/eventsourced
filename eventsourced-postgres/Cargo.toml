@@ -13,21 +13,22 @@ documentation = "https://docs.rs/eventsourced-postgres/latest/eventsourced-postg
 [dependencies]
 eventsourced    = { path = "../eventsourced", version = "0.27.0" }
 async-stream    = { workspace = true }
-bb8-postgres    = { workspace = true }
 bytes           = { workspace = true }
 error-ext       = { workspace = true }
 futures         = { workspace = true }
 humantime-serde = { workspace = true }
 secrecy         = { workspace = true }
 serde           = { workspace = true }
+serde_with      = { workspace = true }
+sqlx            = { workspace = true }
 thiserror       = { workspace = true }
 tokio           = { workspace = true }
-tokio-postgres  = { workspace = true }
 tracing         = { workspace = true }
 
 [dev-dependencies]
-error-ext              = { workspace = true }
 eventsourced           = { path = "../eventsourced", version = "0.27.0", features = [ "serde_json" ] }
+error-ext              = { workspace = true }
+sqlx                   = { workspace = true, features = [ "uuid" ] }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true, features = [ "postgres" ] }
 tokio                  = { workspace = true, features = [ "macros" ] }
