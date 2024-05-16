@@ -402,7 +402,7 @@ mod tests {
 
         let mut event_log = TestEventLog::<u64>::default();
         for n in 1..=100 {
-            event_log.persist("test", &0, None, &n, &to_bytes).await?;
+            event_log.persist("test", &0, None, &[n], &to_bytes).await?;
         }
 
         sqlx::query("CREATE TABLE test (n bigint);")

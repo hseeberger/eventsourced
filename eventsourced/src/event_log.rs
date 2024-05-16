@@ -21,15 +21,17 @@ where
     /// implementation.
     const MAX_SEQ_NO: NonZeroU64 = NonZeroU64::MAX;
 
-    /// Persist the given event and optional tag for the given entity ID and return the
-    /// sequence number for the persisted event. The given last sequence number is used for
-    /// optimistic locking, i.e. it must match the current last sequence number of the event log.
+    /// Persist the given events for the given entity ID and return the sequence number for the last
+    /// persisted event. The given last sequence number is used for optimistic locking, i.e. it must
+    /// match the current last sequence number of the event log.
+    ///
+    /// Must not be called with emtpy events! Implementations must return an error in this case.
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         type_name: &'static str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
-        event: &E,
+        events: &[E],
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where

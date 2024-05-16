@@ -39,7 +39,7 @@ where
         type_name: &'static str,
         id: &Self::Id,
         _last_seq_no: Option<NonZeroU64>,
-        event: &E,
+        events: &[E],
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
@@ -47,28 +47,32 @@ where
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        let bytes = to_bytes(event).map_err(|error| Error(error.into()))?;
-
         let mut seq_no = self.seq_no.write().await;
-        self.events
-            .write()
-            .await
-            .entry(type_name)
-            .and_modify(|events| {
-                events
-                    .entry(id.to_owned())
-                    .and_modify(|events| {
-                        events.push((*seq_no, bytes.clone()));
-                    })
-                    .or_insert(vec![(*seq_no, bytes.clone())]);
-            })
-            .or_insert(HashMap::from_iter(iter::once((
-                id.to_owned(),
-                vec![(*seq_no, bytes)],
-            ))));
+        let mut this_seq_no = *seq_no;
 
-        let this_seq_no = *seq_no;
-        *seq_no = seq_no.saturating_add(1);
+        for event in events {
+            let bytes = to_bytes(event).map_err(|error| Error(error.into()))?;
+
+            self.events
+                .write()
+                .await
+                .entry(type_name)
+                .and_modify(|events| {
+                    events
+                        .entry(id.to_owned())
+                        .and_modify(|events| {
+                            events.push((*seq_no, bytes.clone()));
+                        })
+                        .or_insert(vec![(*seq_no, bytes.clone())]);
+                })
+                .or_insert(HashMap::from_iter(iter::once((
+                    id.to_owned(),
+                    vec![(*seq_no, bytes)],
+                ))));
+
+            this_seq_no = *seq_no;
+            *seq_no = seq_no.saturating_add(1);
+        }
 
         Ok(this_seq_no)
     }
@@ -179,25 +183,31 @@ mod tests {
         assert_matches!(events, Ok(events) if events.is_empty());
 
         let result = event_log
-            .persist("type-0", &0, None, &"type-0-0-A".to_string(), &to_bytes)
+            .persist("type-0", &0, None, &["type-0-0-A".to_string()], &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 1);
         let result = event_log
-            .persist("type-0", &0, None, &"type-0-0-B".to_string(), &to_bytes)
+            .persist("type-0", &0, None, &["type-0-0-B".to_string()], &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 2);
         let result = event_log
-            .persist("type-0", &1, None, &"type-0-1-A".to_string(), &to_bytes)
+            .persist("type-0", &1, None, &["type-0-1-A".to_string()], &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 3);
         let result = event_log
-            .persist("type-1", &0, None, &"type-1-0-A".to_string(), &to_bytes)
+            .persist("type-1", &0, None, &["type-1-0-A".to_string()], &to_bytes)
             .await;
         assert_matches!(result, Ok(seq_no) if seq_no.get() == 4);
         let result = event_log
-            .persist("type-0", &0, None, &"type-0-0-C".to_string(), &to_bytes)
+            .persist(
+                "type-0",
+                &0,
+                None,
+                &["type-0-0-C".to_string(), "type-0-0-D".to_string()],
+                &to_bytes,
+            )
             .await;
-        assert_matches!(result, Ok(seq_no) if seq_no.get() == 5);
+        assert_matches!(result, Ok(seq_no) if seq_no.get() == 6);
 
         let events = event_log
             .events_by_id::<String, _, _>("type-0", &0, NonZeroU64::MIN, from_bytes)
@@ -208,6 +218,7 @@ mod tests {
             (1.try_into().unwrap(), "type-0-0-A".to_string()),
             (2.try_into().unwrap(), "type-0-0-B".to_string()),
             (5.try_into().unwrap(), "type-0-0-C".to_string()),
+            (6.try_into().unwrap(), "type-0-0-D".to_string()),
         ]);
 
         let events = event_log
@@ -216,7 +227,8 @@ mod tests {
         assert!(events.is_ok());
         let events = events.unwrap().try_collect::<Vec<_>>().await;
         assert_matches!(events, Ok(events) if events == vec![
-            (5.try_into().unwrap(), "type-0-0-C".to_string())
+            (5.try_into().unwrap(), "type-0-0-C".to_string()),
+            (6.try_into().unwrap(), "type-0-0-D".to_string()),
         ]);
 
         let events = event_log
@@ -226,9 +238,10 @@ mod tests {
         let events = events.unwrap().try_collect::<Vec<_>>().await;
         assert!(events.is_ok());
         let events = events.unwrap();
-        assert_eq!(events.len(), 3);
+        assert_eq!(events.len(), 4);
         assert!(events.contains(&(2.try_into().unwrap(), "type-0-0-B".to_string())));
         assert!(events.contains(&(3.try_into().unwrap(), "type-0-1-A".to_string())));
         assert!(events.contains(&(5.try_into().unwrap(), "type-0-0-C".to_string())));
+        assert!(events.contains(&(6.try_into().unwrap(), "type-0-0-D".to_string())));
     }
 }

@@ -1,8 +1,8 @@
 CREATE TABLE
   IF NOT EXISTS events (
-    seq_no bigint,
     type text,
     id uuid,
+    seq_no bigint,
     event bytea,
-    PRIMARY KEY (seq_no, id)
+    PRIMARY KEY (type, seq_no, id)
   );

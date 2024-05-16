@@ -6,7 +6,8 @@ use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
 use eventsourced::event_log::EventLog;
 use futures::{Stream, StreamExt, TryStreamExt};
-use serde::{Deserialize, Serialize};
+use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
@@ -96,7 +97,7 @@ where
                 row.and_then(|row| {
                     let seq_no = (row.get::<_, i64>(0) as u64)
                         .try_into()
-                        .map_err(|_| Error::ZeroNonZeroU64)?;
+                        .map_err(|_| Error::ZeroSeqNo)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
@@ -136,7 +137,7 @@ where
                 row.and_then(|row| {
                     let seq_no = (row.get::<_, i64>(0) as u64)
                         .try_into()
-                        .map_err(|_| Error::ZeroNonZeroU64)?;
+                        .map_err(|_| Error::ZeroSeqNo)?;
                     let bytes = row.get::<_, &[u8]>(1);
                     let bytes = Bytes::copy_from_slice(bytes);
                     from_bytes(bytes)
@@ -161,11 +162,7 @@ where
                 // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
                 row.try_get::<_, i64>(0)
                     .ok()
-                    .map(|seq_no| {
-                        (seq_no as u64)
-                            .try_into()
-                            .map_err(|_| Error::ZeroNonZeroU64)
-                    })
+                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
                     .transpose()
             })
     }
@@ -189,36 +186,64 @@ where
     /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
     const MAX_SEQ_NO: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) };
 
-    #[instrument(skip(self, event, to_bytes))]
+    #[instrument(skip(self, events, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
         &mut self,
         type_name: &'static str,
         id: &Self::Id,
         last_seq_no: Option<NonZeroU64>,
-        event: &E,
+        events: &[E],
         to_bytes: &ToBytes,
     ) -> Result<NonZeroU64, Self::Error>
     where
         ToBytes: Fn(&E) -> Result<Bytes, ToBytesError> + Sync,
         ToBytesError: StdError + Send + Sync + 'static,
     {
-        let seq_no = last_seq_no.map(|n| n.get() as i64).unwrap_or_default() + 1;
+        if events.is_empty() {
+            return Err(Error::EmptyEvents);
+        }
 
-        let bytes = to_bytes(event).map_err(|error| Error::ToBytes(Box::new(error)))?;
+        let mut cnn = self.cnn().await?;
+        let tx = cnn
+            .transaction()
+            .await
+            .map_err(|error| Error::Postgres("cannot start transaction".to_string(), error))?;
 
-        self.cnn()
-            .await?
-            .query_one(
-                "INSERT INTO events (seq_no, type, id, event) VALUES ($1, $2, $3, $4) RETURNING seq_no",
-                &[&seq_no, &type_name, &id, &bytes.as_ref()],
-            )
+        // TODO Reuse `last_seq_no` (once migrated to sqlx)!
+        let seq_no = tx
+            .query_one("SELECT MAX(seq_no) FROM events WHERE id = $1", &[&id])
             .await
             .map_err(|error| Error::Postgres("cannot execute query".to_string(), error))
             .and_then(|row| {
-                (row.get::<_, i64>(0) as u64)
-                    .try_into()
-                    .map_err(|_| Error::ZeroNonZeroU64)
-            })
+                // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
+                row.try_get::<_, i64>(0)
+                    .ok()
+                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
+                    .transpose()
+            })?;
+        if seq_no != last_seq_no {
+            return Err(Error::UnexpectedSeqNo(seq_no, last_seq_no));
+        }
+
+        let stmt = tx
+            .prepare("INSERT INTO events VALUES ($1, $2, $3, $4)")
+            .await
+            .map_err(|error| Error::Postgres("cannot prepare statement".to_string(), error))?;
+
+        let mut seq_no = last_seq_no.map(|n| n.get() as i64).unwrap_or_default();
+        for event in events.iter() {
+            seq_no += 1;
+            let bytes = to_bytes(event).map_err(|error| Error::ToBytes(error.into()))?;
+            tx.execute(&stmt, &[&type_name, &id, &seq_no, &bytes.as_ref()])
+                .await
+                .map_err(|error| Error::Postgres("cannot execute statement".to_string(), error))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|error| Error::Postgres("cannot commit transaction".to_string(), error))?;
+
+        (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo)
     }
 
     #[instrument(skip(self))]
@@ -236,11 +261,7 @@ where
                 // If there is no seq_no there is one row with a NULL column, hence use `try_get`.
                 row.try_get::<_, i64>(0)
                     .ok()
-                    .map(|seq_no| {
-                        (seq_no as u64)
-                            .try_into()
-                            .map_err(|_| Error::ZeroNonZeroU64)
-                    })
+                    .map(|seq_no| (seq_no as u64).try_into().map_err(|_| Error::ZeroSeqNo))
                     .transpose()
             })
     }
@@ -348,7 +369,7 @@ where
 }
 
 /// Configuration for the [PostgresEventLog].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub host: String,
@@ -357,7 +378,7 @@ pub struct Config {
 
     pub user: String,
 
-    pub password: String,
+    pub password: SecretString,
 
     pub dbname: String,
 
@@ -380,7 +401,12 @@ impl Config {
     fn cnn_config(&self) -> String {
         format!(
             "host={} port={} user={} password={} dbname={} sslmode={}",
-            self.host, self.port, self.user, self.password, self.dbname, self.sslmode
+            self.host,
+            self.port,
+            self.user,
+            self.password.expose_secret(),
+            self.dbname,
+            self.sslmode
         )
     }
 }
@@ -392,7 +418,7 @@ impl Default for Config {
             host: "localhost".to_string(),
             port: 5432,
             user: "postgres".to_string(),
-            password: "".to_string(),
+            password: "".to_string().into(),
             dbname: "postgres".to_string(),
             sslmode: "prefer".to_string(),
             events_table: events_table_default(),
@@ -447,7 +473,7 @@ mod tests {
         assert_eq!(last_seq_no, None);
 
         let last_seq_no = event_log
-            .persist("counter", &id, None, &1, &binarize::serde_json::to_bytes)
+            .persist("counter", &id, None, &[1], &binarize::serde_json::to_bytes)
             .await?;
         assert!(last_seq_no.get() == 1);
 
@@ -456,7 +482,7 @@ mod tests {
                 "counter",
                 &id,
                 Some(last_seq_no),
-                &2,
+                &[2],
                 &binarize::serde_json::to_bytes,
             )
             .await?;
@@ -466,7 +492,7 @@ mod tests {
                 "counter",
                 &id,
                 Some(last_seq_no),
-                &3,
+                &[3],
                 &binarize::serde_json::to_bytes,
             )
             .await;
@@ -477,7 +503,7 @@ mod tests {
                 "counter",
                 &id,
                 Some(last_seq_no.checked_add(1).expect("overflow")),
-                &3,
+                &[3],
                 &binarize::serde_json::to_bytes,
             )
             .await?;
@@ -513,7 +539,7 @@ mod tests {
                 "counter",
                 &id,
                 last_seq_no,
-                &4,
+                &[4, 5],
                 &binarize::serde_json::to_bytes,
             )
             .await?;
@@ -523,18 +549,18 @@ mod tests {
                 "counter",
                 &id,
                 Some(last_seq_no),
-                &5,
+                &[6, 7],
                 &binarize::serde_json::to_bytes,
             )
             .await?;
         let last_seq_no = event_log.last_seq_no("counter", &id).await?;
-        assert_eq!(last_seq_no, Some(5.try_into()?));
+        assert_eq!(last_seq_no, Some(7.try_into()?));
 
         let sum = events
-            .take(5)
+            .take(7)
             .try_fold(0u32, |acc, (_, n)| future::ready(Ok(acc + n)))
             .await?;
-        assert_eq!(sum, 15);
+        assert_eq!(sum, 28);
 
         Ok(())
     }

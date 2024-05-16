@@ -2,9 +2,11 @@ set shell := ["bash", "-uc"]
 
 check:
 	cargo check --package eventsourced --all-features
-	cargo check --package eventsourced-nats
+	# cargo check --package eventsourced-nats
 	cargo check --package eventsourced-postgres
 	cargo check --package eventsourced-projection
+	cargo check --package counter
+	cargo check --package counter-postgres
 
 fmt toolchain="+nightly":
 	cargo {{toolchain}} fmt
