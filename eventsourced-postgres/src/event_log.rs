@@ -4,7 +4,6 @@ use crate::pool::{self, Pool};
 use async_stream::stream;
 use bytes::Bytes;
 use error_ext::BoxError;
-use eventsourced::event_log::EventLog;
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Deserialize;
 use sqlx::{postgres::PgRow, query::Query, Encode, Executor, IntoArguments, Postgres, Row, Type};
@@ -21,19 +20,19 @@ use tracing::{debug, instrument};
 
 /// An [EventLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
-pub struct PostgresEventLog<I> {
+pub struct EventLog<I> {
     poll_interval: Duration,
     pool: Pool,
     _id: PhantomData<I>,
 }
 
-impl<I> PostgresEventLog<I>
+impl<I> EventLog<I>
 where
     I: Debug + for<'q> Encode<'q, Postgres> + Type<Postgres> + Sync,
 {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "creating PostgresEventLog");
+        debug!(?config, "creating EventLog");
 
         // Create connection pool.
         let pool = Pool::new(config.pool)
@@ -145,13 +144,13 @@ where
     }
 }
 
-impl<I> Debug for PostgresEventLog<I> {
+impl<I> Debug for EventLog<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PostgresEventLog").finish()
+        f.debug_struct("EventLog").finish()
     }
 }
 
-impl<I> EventLog for PostgresEventLog<I>
+impl<I> eventsourced::event_log::EventLog for EventLog<I>
 where
     I: Debug + Clone + for<'q> Encode<'q, Postgres> + Type<Postgres> + Send + Sync + 'static,
 {
@@ -341,7 +340,7 @@ fn into_seq_no(row: PgRow) -> Result<Option<NonZeroU64>, Error> {
         .transpose()
 }
 
-/// Configuration for the [PostgresEventLog].
+/// Configuration for the [EventLog].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -357,7 +356,7 @@ pub struct Config {
     pub setup: bool,
 }
 
-/// Error for the [PostgresEventLog].
+/// Error for the [EventLog].
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
@@ -389,12 +388,9 @@ const fn poll_interval_default() -> Duration {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        event_log::{events_table_default, poll_interval_default},
-        PostgresEventLog, PostgresEventLogConfig,
-    };
+    use crate::event_log::{events_table_default, poll_interval_default, Config, EventLog};
     use error_ext::BoxError;
-    use eventsourced::{binarize, event_log::EventLog};
+    use eventsourced::{binarize, event_log::EventLog as _EventLog};
     use futures::{StreamExt, TryStreamExt};
     use sqlx::postgres::PgSslMode;
     use std::{future, num::NonZeroU64};
@@ -416,13 +412,13 @@ mod tests {
             dbname: "postgres".to_string(),
             sslmode: PgSslMode::Prefer,
         };
-        let config = PostgresEventLogConfig {
+        let config = Config {
             pool,
             setup: true,
             events_table: events_table_default(),
             poll_interval: poll_interval_default(),
         };
-        let mut event_log = PostgresEventLog::<Uuid>::new(config).await?;
+        let mut event_log = EventLog::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 

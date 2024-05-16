@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use configured::Configured;
-use eventsourced_postgres::{
-    PostgresEventLog, PostgresEventLogConfig, PostgresSnapshotStore, PostgresSnapshotStoreConfig,
-};
+use eventsourced_postgres::{event_log::EventLog, snapshot_store::SnapshotStore};
 use serde::Deserialize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -17,11 +15,11 @@ async fn main() -> Result<()> {
     let config = Config::load().context("load configuration")?;
     println!("Starting with configuration: {config:?}");
 
-    let event_log = PostgresEventLog::new(config.event_log)
+    let event_log = EventLog::new(config.event_log)
         .await
         .context("create event log")?;
 
-    let snapshot_store = PostgresSnapshotStore::new(config.snapshot_store)
+    let snapshot_store = SnapshotStore::new(config.snapshot_store)
         .await
         .context("create snapshot store")?;
 
@@ -32,6 +30,6 @@ async fn main() -> Result<()> {
 #[serde(rename_all = "kebab-case")]
 struct Config {
     counter: counter::Config,
-    event_log: PostgresEventLogConfig,
-    snapshot_store: PostgresSnapshotStoreConfig,
+    event_log: eventsourced_postgres::event_log::Config,
+    snapshot_store: eventsourced_postgres::snapshot_store::Config,
 }

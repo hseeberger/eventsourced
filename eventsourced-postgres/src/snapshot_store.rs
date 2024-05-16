@@ -3,7 +3,7 @@
 use crate::pool::{self, Pool};
 use bytes::Bytes;
 use error_ext::BoxError;
-use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
+use eventsourced::snapshot_store::Snapshot;
 use serde::Deserialize;
 use sqlx::{Encode, Executor, Postgres, Row, Type};
 use std::{
@@ -17,15 +17,15 @@ use tracing::debug;
 
 /// A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
 #[derive(Clone)]
-pub struct PostgresSnapshotStore<I> {
+pub struct SnapshotStore<I> {
     pool: Pool,
     _id: PhantomData<I>,
 }
 
-impl<I> PostgresSnapshotStore<I> {
+impl<I> SnapshotStore<I> {
     #[allow(missing_docs)]
     pub async fn new(config: Config) -> Result<Self, Error> {
-        debug!(?config, "creating PostgresSnapshotStore");
+        debug!(?config, "creating SnapshotStore");
 
         // Create connection pool.
         let pool = Pool::new(config.pool)
@@ -50,13 +50,13 @@ impl<I> PostgresSnapshotStore<I> {
     }
 }
 
-impl<I> Debug for PostgresSnapshotStore<I> {
+impl<I> Debug for SnapshotStore<I> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PostgresSnapshotStore").finish()
+        f.debug_struct("SnapshotStore").finish()
     }
 }
 
-impl<I> SnapshotStore for PostgresSnapshotStore<I>
+impl<I> eventsourced::snapshot_store::SnapshotStore for SnapshotStore<I>
 where
     I: Debug + Clone + for<'q> Encode<'q, Postgres> + Type<Postgres> + Send + Sync + 'static,
 {
@@ -123,7 +123,7 @@ where
     }
 }
 
-/// Configuration for the [PostgresSnapshotStore].
+/// Configuration for the [SnapshotStore].
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
@@ -136,7 +136,7 @@ pub struct Config {
     pub setup: bool,
 }
 
-/// Errors from the [PostgresEventLog] or [PostgresSnapshotStore].
+/// Errors for the [SnapshotStore].
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("{0}")]
@@ -158,11 +158,9 @@ fn snapshots_table_default() -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        snapshot_store::snapshots_table_default, PostgresSnapshotStore, PostgresSnapshotStoreConfig,
-    };
+    use crate::snapshot_store::{snapshots_table_default, Config, SnapshotStore};
     use error_ext::BoxError;
-    use eventsourced::{binarize, snapshot_store::SnapshotStore};
+    use eventsourced::{binarize, snapshot_store::SnapshotStore as _SnapshotStore};
     use sqlx::postgres::PgSslMode;
     use testcontainers::clients::Cli;
     use testcontainers_modules::postgres::Postgres;
@@ -182,12 +180,12 @@ mod tests {
             dbname: "postgres".to_string(),
             sslmode: PgSslMode::Prefer,
         };
-        let config = PostgresSnapshotStoreConfig {
+        let config = Config {
             pool,
             setup: true,
             snapshots_table: snapshots_table_default(),
         };
-        let mut snapshot_store = PostgresSnapshotStore::<Uuid>::new(config).await?;
+        let mut snapshot_store = SnapshotStore::<Uuid>::new(config).await?;
 
         let id = Uuid::now_v7();
 
