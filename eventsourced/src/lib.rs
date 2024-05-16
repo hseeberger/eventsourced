@@ -85,7 +85,7 @@ use tracing::{debug, error, instrument};
 type BoxedCommand<E> = Box<dyn ErasedCommand<E> + Send>;
 type BoxedCommandEffect<E> = Result<
     (
-        Option<<E as EventSourced>::Event>,
+        Option<Vec<<E as EventSourced>::Event>>,
         Box<dyn FnOnce(&E) -> BoxedAny + Send + Sync>,
     ),
     BoxedAny,
@@ -136,7 +136,7 @@ pub enum CommandEffect<E, Reply, Error>
 where
     E: EventSourced,
 {
-    EmitAndReply(E::Event, Box<dyn FnOnce(&E) -> Reply + Send + Sync>),
+    EmitAndReply(Vec<E::Event>, Box<dyn FnOnce(&E) -> Reply + Send + Sync>),
     Reply(Reply),
     Reject(Error),
 }
@@ -151,7 +151,17 @@ where
         event: E::Event,
         make_reply: impl FnOnce(&E) -> Reply + Send + Sync + 'static,
     ) -> Self {
-        Self::EmitAndReply(event, Box::new(make_reply))
+        Self::emit_and_reply_all(vec![event], make_reply)
+    }
+
+    /// Emit the given events, persist these, and after applying these to the state, use the given
+    /// function to create a reply. The new state is passed to the function after applying the
+    /// events.
+    pub fn emit_and_reply_all(
+        events: Vec<E::Event>,
+        make_reply: impl FnOnce(&E) -> Reply + Send + Sync + 'static,
+    ) -> Self {
+        Self::EmitAndReply(events, Box::new(make_reply))
     }
 
     /// Reply with the given value without emitting any event.
@@ -325,26 +335,29 @@ where
 
                     let result = command.handle_command(&id, &state);
                     match result {
-                        Ok((Some(event), make_reply)) => {
-                            debug!(?id, ?event, "persisting event");
+                        Ok((Some(events), make_reply)) => {
+                            debug!(?id, ?events, "persisting event");
 
                             match event_log
                                 .persist::<E::Event, _, _>(
                                     E::TYPE_NAME,
                                     &id,
                                     last_seq_no,
-                                    &event,
+                                    &events,
                                     &|event| binarize.event_to_bytes(event),
                                 )
                                 .await
                             {
                                 Ok(seq_no) => {
-                                    debug!(?id, ?event, seq_no, "persited event");
+                                    debug!(?id, ?events, seq_no, "persited events");
 
                                     last_seq_no = Some(seq_no);
-                                    state = state.handle_event(event);
+                                    event_count += events.len() as u64;
 
-                                    event_count += 1;
+                                    for event in events {
+                                        state = state.handle_event(event);
+                                    }
+
                                     if snapshot_after
                                         .map(|a| event_count % a == 0)
                                         .unwrap_or_default()
@@ -448,8 +461,8 @@ where
 {
     fn handle_command(self: Box<Self>, id: &E::Id, state: &E) -> BoxedCommandEffect<E> {
         match <C as Command<E>>::handle_command(*self, id, state) {
-            CommandEffect::EmitAndReply(event, make_reply) => {
-                Ok((Some(event), Box::new(|s| Box::new(make_reply(s)))))
+            CommandEffect::EmitAndReply(events, make_reply) => {
+                Ok((Some(events), Box::new(|s| Box::new(make_reply(s)))))
             }
             CommandEffect::Reply(reply) => Ok((None, Box::new(|_s| Box::new(reply)))),
             CommandEffect::Reject(error) => Err(Box::new(error) as BoxedAny),
@@ -572,7 +585,7 @@ mod tests {
                     "counter",
                     &id,
                     None,
-                    &CounterEvent::Increased(id, 1),
+                    &[CounterEvent::Increased(id, 1)],
                     &to_bytes,
                 )
                 .await?;

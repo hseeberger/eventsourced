@@ -4,7 +4,8 @@ use crate::{Cnn, CnnPool, Error};
 use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
 use bytes::Bytes;
 use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
-use serde::{Deserialize, Serialize};
+use secrecy::{ExposeSecret, SecretString};
+use serde::Deserialize;
 use std::{
     error::Error as StdError,
     fmt::{self, Debug, Formatter},
@@ -127,7 +128,7 @@ where
             .map(move |row| {
                 let seq_no = (row.get::<_, i64>(0) as u64)
                     .try_into()
-                    .map_err(|_| Error::ZeroNonZeroU64)?;
+                    .map_err(|_| Error::ZeroSeqNo)?;
                 let bytes = row.get::<_, &[u8]>(1);
                 let bytes = Bytes::copy_from_slice(bytes);
                 from_bytes(bytes)
@@ -139,7 +140,7 @@ where
 }
 
 /// Configuration for the [PostgresSnapshotStore].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
     pub host: String,
@@ -148,7 +149,7 @@ pub struct Config {
 
     pub user: String,
 
-    pub password: String,
+    pub password: SecretString,
 
     pub dbname: String,
 
@@ -165,7 +166,12 @@ impl Config {
     fn cnn_config(&self) -> String {
         format!(
             "host={} port={} user={} password={} dbname={} sslmode={}",
-            self.host, self.port, self.user, self.password, self.dbname, self.sslmode
+            self.host,
+            self.port,
+            self.user,
+            self.password.expose_secret(),
+            self.dbname,
+            self.sslmode
         )
     }
 }
@@ -177,7 +183,7 @@ impl Default for Config {
             host: "localhost".to_string(),
             port: 5432,
             user: "postgres".to_string(),
-            password: "".to_string(),
+            password: "".to_string().into(),
             dbname: "postgres".to_string(),
             sslmode: "prefer".to_string(),
             snapshots_table: snapshots_table_default(),

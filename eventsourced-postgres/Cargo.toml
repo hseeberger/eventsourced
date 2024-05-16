@@ -15,8 +15,10 @@ eventsourced    = { path = "../eventsourced", version = "0.27.0" }
 async-stream    = { workspace = true }
 bb8-postgres    = { workspace = true }
 bytes           = { workspace = true }
+error-ext       = { workspace = true }
 futures         = { workspace = true }
 humantime-serde = { workspace = true }
+secrecy         = { workspace = true }
 serde           = { workspace = true }
 thiserror       = { workspace = true }
 tokio           = { workspace = true }

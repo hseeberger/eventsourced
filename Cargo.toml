@@ -1,11 +1,11 @@
 [workspace]
 members = [
   "eventsourced",
-  "eventsourced-nats",
+  # "eventsourced-nats",
   "eventsourced-postgres",
   "eventsourced-projection",
   "examples/counter",
-  "examples/counter-nats",
+  # "examples/counter-nats",
   "examples/counter-postgres",
 ]
 resolver = "2"
