@@ -10,7 +10,8 @@ eventsourced = { path = "../../eventsourced", features = [ "serde_json" ] }
 anyhow       = { workspace = true }
 bytes        = { workspace = true }
 serde        = { workspace = true }
-tokio        = { workspace = true, features = [ "rt-multi-thread" ] }
+sqlx         = { workspace = true, features = [ "uuid" ] }
 thiserror    = { workspace = true }
+tokio        = { workspace = true, features = [ "rt-multi-thread" ] }
 tracing      = { workspace = true }
 uuid         = { workspace = true }
