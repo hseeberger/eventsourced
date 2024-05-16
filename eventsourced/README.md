@@ -47,8 +47,7 @@ and then applied to the event handler to return the new state of the entity.
 ```
 
 The [EventLog] and [SnapshotStore] traits define a pluggable event log and a pluggable snapshot
-store respectively. For [NATS](https://nats.io/) and [Postgres](https://www.postgresql.org/)
-these are implemented in the respective crates.
+store respectively. For [Postgres](https://www.postgresql.org/) these are implemented in the respective crates.
 
 [EventSourcedEntity::spawn] puts the event sourced entity on the given event log and snapshot
 store, returning an [EntityRef] which can be cheaply cloned and used to pass commands to the
@@ -66,7 +65,7 @@ build read side projections. There is early support for projections in the
 
 ## Requirements for building the project and examples
 
-Before building the project and examples, please make sure you have installed the [protobuf](https://github.com/protocolbuffers/protobuf) dependency that is not only needed for the optional byte conversion with prost, but also for eventsourced-nats. The only way to get away without `protobuf` is to not use prost and not build eventsourced-nats.
+Before building the project and examples, please make sure you have installed the [protobuf](https://github.com/protocolbuffers/protobuf) dependency, if using the optional byte conversion with prost.
 
 On macOS `protobuf` can be installed via Homebrew:
 
@@ -146,7 +145,7 @@ impl Counter {
 }
 ```
 
-There are also the two `counter-nats` and `counter-postgres` packages, with a binary crate each, using `eventsourced-nats` and `eventsourced-postgres` respectively for the event log.
+There is also the `counter-postgres` packages, with a binary crate, using `eventsourced-postgres` as event log.
 
 ```rust
 ...
@@ -181,41 +180,6 @@ tasks.spawn(async move {
 ```
 
 Take a look at the [examples](../examples) directory for more details.
-
-### Running the counter-nats example
-
-For the `counter-nats` example, nats-server needs to be installed. On macOS just use Homebrew:
-
-```
-brew install nats-server
-```
-
-Before running the example, start the nats-server with the `jetstream` feature enabled:
-
-```
-nats-server --jetstream
-```
-
-Then use the following command to run the example:
-
-```
-RUST_LOG=info \
-    CONFIG_DIR=examples/counter-nats/config \
-    cargo run \
-    --release \
-    --package counter-nats
-```
-
-Notice that you can change the configuration either by changing the `defaul.toml` file at `examples/counter-nats/config` or by overriding the configuration settings with environment variables, e.g. `APP__COUNTER__EVT_COUNT=42`:
-
-```
-RUST_LOG=info \
-    APP__COUNTER__EVT_COUNT=42 \
-    CONFIG_DIR=examples/counter-nats/config \
-    cargo run \
-    --release \
-    --package counter-nats
-```
 
 ### Running the counter-postgres example
 
