@@ -1,11 +1,9 @@
 //! An [EventLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
 
-use crate::{
-    pool::{self, Pool},
-    Error,
-};
+use crate::pool::{self, Pool};
 use async_stream::stream;
 use bytes::Bytes;
+use error_ext::BoxError;
 use eventsourced::event_log::EventLog;
 use futures::{Stream, StreamExt, TryStreamExt};
 use serde::Deserialize;
@@ -17,6 +15,7 @@ use std::{
     num::NonZeroU64,
     time::Duration,
 };
+use thiserror::Error;
 use tokio::time::sleep;
 use tracing::{debug, instrument};
 
@@ -356,6 +355,28 @@ pub struct Config {
 
     #[serde(default)]
     pub setup: bool,
+}
+
+/// Error for the [PostgresEventLog].
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Sqlx(String, #[source] sqlx::Error),
+
+    #[error("cannot convert event to bytes")]
+    ToBytes(#[source] BoxError),
+
+    #[error("cannot convert bytes to event")]
+    FromBytes(#[source] BoxError),
+
+    #[error("expected sequence number {0:?}, but was {1:?}")]
+    UnexpectedSeqNo(Option<NonZeroU64>, Option<NonZeroU64>),
+
+    #[error("sequence number must not be zero")]
+    ZeroSeqNo,
+
+    #[error("events to be persisted must not be empty")]
+    EmptyEvents,
 }
 
 fn events_table_default() -> String {

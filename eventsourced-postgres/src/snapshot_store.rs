@@ -1,10 +1,8 @@
 //! A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
 
-use crate::{
-    pool::{self, Pool},
-    Error,
-};
+use crate::pool::{self, Pool};
 use bytes::Bytes;
+use error_ext::BoxError;
 use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
 use serde::Deserialize;
 use sqlx::{Encode, Executor, Postgres, Row, Type};
@@ -14,6 +12,7 @@ use std::{
     marker::PhantomData,
     num::NonZeroU64,
 };
+use thiserror::Error;
 use tracing::debug;
 
 /// A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
@@ -135,6 +134,22 @@ pub struct Config {
 
     #[serde(default)]
     pub setup: bool,
+}
+
+/// Errors from the [PostgresEventLog] or [PostgresSnapshotStore].
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("{0}")]
+    Sqlx(String, #[source] sqlx::Error),
+
+    #[error("cannot convert snapshot to bytes")]
+    ToBytes(#[source] BoxError),
+
+    #[error("cannot convert bytes to snapshot")]
+    FromBytes(#[source] BoxError),
+
+    #[error("sequence number must not be zero")]
+    ZeroSeqNo,
 }
 
 fn snapshots_table_default() -> String {
