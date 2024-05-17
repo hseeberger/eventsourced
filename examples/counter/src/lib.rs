@@ -45,7 +45,7 @@ where
 
         tasks.spawn(async move {
             for n in 0..config.event_count / 2 {
-                if n > 0 && n % 2_500 == 0 {
+                if n > 0 && n % 500 == 0 {
                     println!("{id}: {} events persisted", n * 2);
                 }
                 counter

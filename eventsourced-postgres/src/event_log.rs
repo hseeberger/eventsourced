@@ -200,9 +200,9 @@ where
             seq_no += 1;
             let bytes = to_bytes(event).map_err(|error| Error::ToBytes(error.into()))?;
             sqlx::query("INSERT INTO events VALUES ($1, $2, $3, $4)")
-                .bind(type_name)
                 .bind(id)
                 .bind(seq_no)
+                .bind(type_name)
                 .bind(bytes.as_ref())
                 .execute(&mut *tx)
                 .await

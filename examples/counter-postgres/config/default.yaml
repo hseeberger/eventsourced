@@ -1,0 +1,24 @@
+counter:
+  entity-count: 20
+  event-count: 5000
+  snapshot-after: 100000000
+
+event-log:
+  pool:
+    host: "localhost"
+    port: 5432
+    user: "test"
+    password: "test"
+    dbname: "test"
+    sslmode: "prefer"
+  setup: true
+
+snapshot-store:
+  pool:
+    host: "localhost"
+    port: 5432
+    user: "test"
+    password: "test"
+    dbname: "test"
+    sslmode: "prefer"
+  setup: true
