@@ -23,7 +23,7 @@ assert_matches         = { version = "1.5" }
 async-nats             = { version = "0.34" }
 async-stream           = { version = "0.3" }
 bb8-postgres           = { version = "0.8" }
-bytes                  = { version = "1.7" }
+bytes                  = { version = "1.8" }
 config                 = { version = "0.14" }
 configured             = { version = "0.7" }
 error-ext              = { version = "0.2" }
