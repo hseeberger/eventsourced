@@ -101,7 +101,7 @@ pub mod tests {
     fn test_deserialize_auth_config() {
         let auth = "user: test\npassword: test";
         let config = Config::builder()
-            .add_source(File::from_str(&auth, FileFormat::Yaml))
+            .add_source(File::from_str(auth, FileFormat::Yaml))
             .build()
             .unwrap();
         let result = config.try_deserialize::<AuthConfig>();

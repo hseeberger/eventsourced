@@ -4,7 +4,7 @@
 use crate::binarize::Binarize;
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use serde_json::{from_slice, to_value, Error};
+use serde_json::{Error, from_slice, to_value};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SerdeJsonBinarize;

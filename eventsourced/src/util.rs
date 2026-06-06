@@ -64,7 +64,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::util::StreamExt;
-    use futures::{stream, StreamExt as FuturesStreamExt};
+    use futures::{StreamExt as FuturesStreamExt, stream};
 
     #[tokio::test]
     async fn test_take_until_predicate() {

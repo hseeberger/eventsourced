@@ -1,7 +1,7 @@
 //! A [SnapshotStore] implementation based on [NATS](https://nats.io/).
 
-use crate::{make_client, AuthConfig, Error};
-use async_nats::jetstream::{self, kv::Store, Context as Jetstream};
+use crate::{AuthConfig, Error, make_client};
+use async_nats::jetstream::{self, Context as Jetstream, kv::Store};
 use bytes::{Bytes, BytesMut};
 use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
 use prost::Message;
@@ -201,20 +201,20 @@ mod proto {
 
 #[cfg(test)]
 mod tests {
-    use crate::{tests::NATS_VERSION, NatsSnapshotStore, NatsSnapshotStoreConfig};
+    use crate::{NatsSnapshotStore, NatsSnapshotStoreConfig, tests::NATS_VERSION};
     use error_ext::BoxError;
     use eventsourced::{binarize, snapshot_store::SnapshotStore};
-    use testcontainers::{clients::Cli, core::WaitFor};
-    use testcontainers_modules::testcontainers::GenericImage;
+    use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::AsyncRunner};
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), BoxError> {
-        let client = Cli::default();
-        let nats_image = GenericImage::new("nats", NATS_VERSION)
-            .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
-        let container = client.run((nats_image, vec!["-js".to_string()]));
-        let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
+        let container = GenericImage::new("nats", NATS_VERSION)
+            .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+            .with_cmd(["-js"])
+            .start()
+            .await?;
+        let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222).await?);
 
         let config = NatsSnapshotStoreConfig {
             server_addr,

@@ -7,7 +7,6 @@ publish     = false
 
 [dependencies]
 counter               = { path = "../counter" }
-eventsourced          = { path = "../../eventsourced" }
 eventsourced-postgres = { path = "../../eventsourced-postgres" }
 anyhow                = { workspace = true }
 configured            = { workspace = true }

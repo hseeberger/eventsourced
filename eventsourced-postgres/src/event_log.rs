@@ -2,7 +2,7 @@
 
 use crate::{Cnn, CnnPool, Error};
 use async_stream::stream;
-use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
+use bb8_postgres::{PostgresConnectionManager, bb8::Pool};
 use bytes::Bytes;
 use eventsourced::event_log::EventLog;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 use tokio::time::sleep;
-use tokio_postgres::{types::ToSql, NoTls};
+use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{debug, instrument};
 
 /// An [EventLog] implementation based on [PostgreSQL](https://www.postgresql.org/).
@@ -65,7 +65,7 @@ where
         })
     }
 
-    async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
+    async fn cnn(&self) -> Result<Cnn<'_, NoTls>, Error> {
         self.cnn_pool.get().await.map_err(Error::GetConnection)
     }
 
@@ -74,7 +74,10 @@ where
         id: &I,
         seq_no: i64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
+    ) -> Result<
+        impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send + use<E, FromBytes, FromBytesError, I>,
+        Error,
+    >
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
@@ -113,7 +116,10 @@ where
         type_name: &str,
         seq_no: i64,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
+    ) -> Result<
+        impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send + use<E, FromBytes, FromBytesError, I>,
+        Error,
+    >
     where
         E: Send,
         FromBytes: Fn(Bytes) -> Result<E, FromBytesError> + Send,
@@ -187,7 +193,7 @@ where
 
     /// The maximum value for sequence numbers. As PostgreSQL does not support unsigned integers,
     /// this is `i64::MAX` or `9_223_372_036_854_775_807`.
-    const MAX_SEQ_NO: NonZeroU64 = unsafe { NonZeroU64::new_unchecked(i64::MAX as u64) };
+    const MAX_SEQ_NO: NonZeroU64 = NonZeroU64::new(i64::MAX as u64).unwrap();
 
     #[instrument(skip(self, event, to_bytes))]
     async fn persist<E, ToBytes, ToBytesError>(
@@ -422,15 +428,14 @@ mod tests {
     use eventsourced::{binarize, event_log::EventLog};
     use futures::{StreamExt, TryStreamExt};
     use std::{future, num::NonZeroU64};
-    use testcontainers::clients::Cli;
+    use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_event_log() -> Result<(), BoxError> {
-        let client = Cli::default();
-        let container = client.run(Postgres::default().with_host_auth());
-        let port = container.get_host_port_ipv4(5432);
+        let container = Postgres::default().with_host_auth().start().await?;
+        let port = container.get_host_port_ipv4(5432).await?;
 
         let config = PostgresEventLogConfig {
             port,

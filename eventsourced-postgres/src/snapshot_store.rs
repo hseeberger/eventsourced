@@ -1,7 +1,7 @@
 //! A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
 
 use crate::{Cnn, CnnPool, Error};
-use bb8_postgres::{bb8::Pool, PostgresConnectionManager};
+use bb8_postgres::{PostgresConnectionManager, bb8::Pool};
 use bytes::Bytes;
 use eventsourced::snapshot_store::{Snapshot, SnapshotStore};
 use serde::{Deserialize, Serialize};
@@ -11,7 +11,7 @@ use std::{
     marker::PhantomData,
     num::NonZeroU64,
 };
-use tokio_postgres::{types::ToSql, NoTls};
+use tokio_postgres::{NoTls, types::ToSql};
 use tracing::debug;
 
 /// A [SnapshotStore] implementation based on [PostgreSQL](https://www.postgresql.org/).
@@ -58,7 +58,7 @@ impl<I> PostgresSnapshotStore<I> {
         })
     }
 
-    async fn cnn(&self) -> Result<Cnn<NoTls>, Error> {
+    async fn cnn(&self) -> Result<Cnn<'_, NoTls>, Error> {
         self.cnn_pool.get().await.map_err(Error::GetConnection)
     }
 }
@@ -195,15 +195,14 @@ mod tests {
     use crate::{PostgresSnapshotStore, PostgresSnapshotStoreConfig};
     use error_ext::BoxError;
     use eventsourced::{binarize, snapshot_store::SnapshotStore};
-    use testcontainers::clients::Cli;
+    use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), BoxError> {
-        let client = Cli::default();
-        let container = client.run(Postgres::default().with_host_auth());
-        let port = container.get_host_port_ipv4(5432);
+        let container = Postgres::default().with_host_auth().start().await?;
+        let port = container.get_host_port_ipv4(5432).await?;
 
         let config = PostgresSnapshotStoreConfig {
             port,

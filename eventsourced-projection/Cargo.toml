@@ -12,11 +12,9 @@ documentation = "https://docs.rs/eventsourced-nats/latest/eventsourced-projectio
 
 [dependencies]
 eventsourced  = { path = "../eventsourced", version = "0.27.0", features = [ "serde_json" ] }
-bytes         = { workspace = true }
 error-ext     = { workspace = true }
 futures       = { workspace = true }
 serde         = { workspace = true }
-serde_json    = { workspace = true }
 sqlx          = { workspace = true }
 thiserror     = { workspace = true }
 tokio         = { workspace = true }
@@ -27,4 +25,3 @@ trait-variant = { workspace = true }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true, features = [ "postgres" ] }
 tokio                  = { workspace = true, features = [ "macros" ] }
-uuid                   = { workspace = true }
