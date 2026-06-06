@@ -8,8 +8,8 @@ pub use event_log::{Config as PostgresEventLogConfig, PostgresEventLog};
 pub use snapshot_store::{Config as PostgresSnapshotStoreConfig, PostgresSnapshotStore};
 
 use bb8_postgres::{
-    bb8::{Pool, PooledConnection},
     PostgresConnectionManager,
+    bb8::{Pool, PooledConnection},
 };
 use std::num::NonZeroU64;
 use thiserror::Error;

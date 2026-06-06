@@ -72,7 +72,7 @@ pub struct Error(BoxError);
 mod tests {
     use crate::{
         binarize::serde_json::*,
-        snapshot_store::{test::TestSnapshotStore, Snapshot, SnapshotStore},
+        snapshot_store::{Snapshot, SnapshotStore, test::TestSnapshotStore},
     };
     use assert_matches::assert_matches;
 

@@ -1,8 +1,8 @@
-name: release-plz
+name: Release-plz
 
 permissions:
-  pull-requests: write
   contents: write
+  pull-requests: write
 
 on:
   push:
@@ -10,17 +10,37 @@ on:
       - main
 
 jobs:
-  release-plz:
-    name: release-plz
+  toolchain:
+    name: Setup Rust toolchain
     runs-on: ubuntu-latest
+    outputs:
+      toolchain: ${{ steps.set_toolchain.outputs.toolchain }}
     steps:
-      - name: Check out
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Output toolchain
+        id: set_toolchain
+        env:
+          toolchain_toml: "rust-toolchain.toml"
+        run: |
+          toolchain=$(grep channel rust-toolchain.toml | sed -r 's/channel = "(.*)"/\1/')
+          echo "toolchain=$toolchain" | tee -a "$GITHUB_OUTPUT"
+
+  release-plz:
+    name: Run release-plz
+    runs-on: ubuntu-latest
+    needs: toolchain
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
-      - name: Install Rust toolchain
-        run: rustup update
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+        with:
+          toolchain: ${{ needs.toolchain.outputs.toolchain }}
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -28,7 +48,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run release-plz
-        uses: MarcoIeni/release-plz-action@v0.5
+        uses: MarcoIeni/release-plz-action@064f4d1e36c843611ddf013be726beaa4ad804db # v0.5.129
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

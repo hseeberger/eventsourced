@@ -1,7 +1,7 @@
 use crate::EventLog;
 use bytes::Bytes;
 use error_ext::BoxError;
-use futures::{stream, Stream};
+use futures::{Stream, stream};
 use std::{
     collections::HashMap, error::Error as StdError, fmt::Debug, hash::Hash, iter, num::NonZeroU64,
     sync::Arc,
@@ -161,7 +161,7 @@ pub struct Error(BoxError);
 mod tests {
     use crate::{
         binarize::serde_json::*,
-        event_log::{test::TestEventLog, EventLog},
+        event_log::{EventLog, test::TestEventLog},
     };
     use assert_matches::assert_matches;
     use futures::TryStreamExt;

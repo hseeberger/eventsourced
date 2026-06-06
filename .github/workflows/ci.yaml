@@ -1,214 +1,186 @@
-name: ci
+name: CI
+
+permissions:
+  contents: read
 
 on:
-  push:
-    branches:
-      - main
-    tags-ignore:
-      - v*
   pull_request:
     branches:
       - main
-  schedule:
-    - cron: 0 4/12 * * *
   workflow_dispatch:
-    inputs:
-      nightly:
-        description: use latest nightly
-        required: true
-        type: boolean
 
 concurrency:
-  group: ${{github.workflow}}-${{github.head_ref || github.run_id}}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 jobs:
   toolchain:
+    name: Setup Rust toolchain
     runs-on: ubuntu-latest
-    env:
-      nightly: ${{(github.event.inputs.nightly == 'true' || github.event_name == 'schedule') && 'true' || ''}}
     outputs:
-      toolchain: ${{steps.set_toolchain.outputs.toolchain}}
-      nightly_toolchain: ${{steps.set_toolchain.outputs.nightly_toolchain}}
+      stable: ${{ steps.set_toolchain.outputs.stable }}
+      nightly: ${{ steps.set_toolchain.outputs.nightly }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Set toolchain
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Output toolchain
         id: set_toolchain
         env:
           toolchain_toml: "rust-toolchain.toml"
         run: |
-          if [[ -z $nightly ]] && [[ -f $toolchain_toml ]]; then
-            toolchain=$(grep channel $toolchain_toml | sed -r 's/channel = "(.*)"/\1/')
-            echo "using toolchain $toolchain from rust-toolchain.toml"
-            echo "toolchain=$toolchain" >> "$GITHUB_OUTPUT"
-            if [[ $toolchain =~ ^nightly.* ]]; then
-              echo "using nightly_toolchain $toolchain"
-              echo "nightly_toolchain=$toolchain" >> "$GITHUB_OUTPUT"
-            else
-              echo "using nightly_toolchain nightly"
-              echo "nightly_toolchain=nightly" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            toolchain='nightly'
-            echo "using toolchain nightly"
-            echo "toolchain=nightly" >> "$GITHUB_OUTPUT"
-            echo "using nightly_toolchain nightly"
-            echo "nightly_toolchain=nightly" >> "$GITHUB_OUTPUT"
-          fi
+          stable=$(grep channel rust-toolchain.toml | sed -r 's/channel = "(.*)"/\1/')
+          echo "stable=$stable" | tee -a "$GITHUB_OUTPUT"
+          nightly=$(rustc --version | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | sed 's/^/nightly-/')
+          echo "nightly=$nightly" | tee -a "$GITHUB_OUTPUT"
 
   check:
+    name: Check Code
     runs-on: ubuntu-latest
     needs: toolchain
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
-          toolchain: ${{needs.toolchain.outputs.toolchain}}
+          toolchain: ${{ needs.toolchain.outputs.stable }}
 
       - name: Install just
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
         with:
           tool: just
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          repo-token: ${{secrets.GITHUB_TOKEN}}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: just check
         run: |
-          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          rustup override set ${{ needs.toolchain.outputs.stable }}
           just check
 
   fmt-check:
+    name: Check Code Format
     runs-on: ubuntu-latest
     needs: toolchain
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
-          toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
+          toolchain: ${{ needs.toolchain.outputs.nightly }}
           components: rustfmt
 
       - name: Install just
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
         with:
           tool: just
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: just fmt-check
         run: |
-          rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
-          just fmt-check ''
+          just fmt-check
 
   lint:
+    name: Lint Code
     runs-on: ubuntu-latest
-    needs: [toolchain, check, fmt-check]
+    needs: toolchain
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
+          toolchain: ${{ needs.toolchain.outputs.stable }}
           components: clippy
-          toolchain: ${{needs.toolchain.outputs.toolchain}}
 
       - name: Install just
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
         with:
           tool: just
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          repo-token: ${{secrets.GITHUB_TOKEN}}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: just lint
         run: |
-          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          rustup override set ${{ needs.toolchain.outputs.stable }}
           just lint
 
   test:
+    name: Run Tests
     runs-on: ubuntu-latest
-    needs: [toolchain, check, fmt-check]
+    needs: toolchain
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
-          toolchain: ${{needs.toolchain.outputs.toolchain}}
+          toolchain: ${{ needs.toolchain.outputs.stable }}
 
       - name: Install just
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
         with:
           tool: just
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          repo-token: ${{secrets.GITHUB_TOKEN}}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: just test
         run: |
-          rustup override set ${{needs.toolchain.outputs.toolchain}}
+          rustup override set ${{ needs.toolchain.outputs.stable }}
           just test
 
   doc:
+    name: Create Documentation
     runs-on: ubuntu-latest
-    needs: [toolchain, check, fmt-check]
+    needs: toolchain
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
         with:
-          toolchain: ${{needs.toolchain.outputs.nightly_toolchain}}
+          toolchain: ${{ needs.toolchain.outputs.nightly }}
+          components: rust-docs
 
       - name: Install just
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@65851e10cd6c377f11a60e600abc07cb08643468 # v2.79.3
         with:
           tool: just
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          repo-token: ${{secrets.GITHUB_TOKEN}}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
       - name: just doc
         run: |
-          rustup override set ${{needs.toolchain.outputs.nightly_toolchain}}
-          just doc ''
-
-  dependabot:
-    runs-on: ubuntu-latest
-    needs: [doc, lint, test]
-    if: github.event_name == 'pull_request' && github.actor == 'dependabot[bot]'
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - name: approve
-        run: gh pr review --approve "$PR_URL"
-        env:
-          PR_URL: ${{github.event.pull_request.html_url}}
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
-
-      - name: merge
-        run: gh pr merge --auto --squash "$PR_URL"
-        env:
-          PR_URL: ${{github.event.pull_request.html_url}}
-          GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+          just doc

@@ -1,16 +1,15 @@
 //! An [EventLog] implementation based on [NATS](https://nats.io/).
 
-use crate::{make_client, AuthConfig, Error};
+use crate::{AuthConfig, Error, make_client};
 use async_nats::jetstream::{
-    self,
-    consumer::{pull, AckPolicy, DeliverPolicy},
-    context::Publish,
+    self, Context as Jetstream, Message,
+    consumer::{AckPolicy, DeliverPolicy, pull},
+    message::PublishMessage,
     stream::{LastRawMessageErrorKind, Stream as JetstreamStream},
-    Context as Jetstream, Message,
 };
 use bytes::Bytes;
 use eventsourced::event_log::EventLog;
-use futures::{future::ready, Stream, StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt, TryStreamExt, future::ready};
 use serde::Deserialize;
 use std::{
     error::Error as StdError,
@@ -68,7 +67,12 @@ impl<I> NatsEventLog<I> {
         seq_no: NonZeroU64,
         filter: F,
         from_bytes: FromBytes,
-    ) -> Result<impl Stream<Item = Result<(NonZeroU64, E), Error>> + Send, Error>
+    ) -> Result<
+        impl Stream<Item = Result<(NonZeroU64, E), Error>>
+        + Send
+        + use<E, F, FromBytes, FromBytesError, I>,
+        Error,
+    >
     where
         E: Send,
         F: Fn(&Message) -> bool + Send,
@@ -117,7 +121,7 @@ where
         ToBytesError: StdError + Send + Sync + 'static,
     {
         let bytes = to_bytes(event).map_err(|error| Error::ToBytes(error.into()))?;
-        let publish = Publish::build().payload(bytes);
+        let publish = PublishMessage::build().payload(bytes);
         let publish = last_seq_no.into_iter().fold(publish, |p, last_seq_no| {
             p.expected_last_subject_sequence(last_seq_no.get())
         });
@@ -280,7 +284,7 @@ async fn msgs(
     stream_name: &str,
     subject: String,
     deliver_policy: DeliverPolicy,
-) -> Result<impl Stream<Item = Result<Message, Error>> + Send, Error> {
+) -> Result<impl Stream<Item = Result<Message, Error>> + Send + use<>, Error> {
     stream(jetstream, stream_name)
         .await?
         .create_consumer(pull::Config {
@@ -346,31 +350,22 @@ fn event_stream_max_bytes_default() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{tests::NATS_VERSION, AuthConfig, NatsEventLog, NatsEventLogConfig};
+    use crate::{AuthConfig, NatsEventLog, NatsEventLogConfig, tests::NATS_VERSION};
     use error_ext::BoxError;
     use eventsourced::{binarize, event_log::EventLog};
     use futures::{StreamExt, TryStreamExt};
     use std::{future, num::NonZeroU64};
-    use testcontainers::{clients::Cli, core::WaitFor};
-    use testcontainers_modules::testcontainers::GenericImage;
+    use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::AsyncRunner};
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_event_log() -> Result<(), BoxError> {
-        let client = Cli::default();
-        let nats_image = GenericImage::new("nats", NATS_VERSION)
-            .with_wait_for(WaitFor::message_on_stderr("Server is ready"));
-        let container = client.run((
-            nats_image,
-            vec![
-                "-js".to_string(),
-                "--user".to_string(),
-                "test".to_string(),
-                "--pass".to_string(),
-                "test".to_string(),
-            ],
-        ));
-        let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222));
+        let container = GenericImage::new("nats", NATS_VERSION)
+            .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
+            .with_cmd(["-js", "--user", "test", "--pass", "test"])
+            .start()
+            .await?;
+        let server_addr = format!("localhost:{}", container.get_host_port_ipv4(4222).await?);
 
         let config = NatsEventLogConfig {
             server_addr,

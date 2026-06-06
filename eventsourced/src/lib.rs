@@ -67,7 +67,7 @@ use crate::{
     util::StreamExt as ThisStreamExt,
 };
 use error_ext::{BoxError, StdErrorExt};
-use futures::{future::ok, TryStreamExt};
+use futures::{TryStreamExt, future::ok};
 use serde::{Deserialize, Serialize};
 use std::{
     any::Any,
@@ -460,10 +460,10 @@ where
 #[cfg(all(test, feature = "serde_json"))]
 mod tests {
     use crate::{
-        binarize::serde_json::*,
-        event_log::{test::TestEventLog, EventLog},
-        snapshot_store::{test::TestSnapshotStore, SnapshotStore},
         Command, CommandEffect, EntityRef, EventSourced, EventSourcedExt,
+        binarize::serde_json::*,
+        event_log::{EventLog, test::TestEventLog},
+        snapshot_store::{SnapshotStore, test::TestSnapshotStore},
     };
     use assert_matches::assert_matches;
     use error_ext::BoxError;

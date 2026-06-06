@@ -13,7 +13,7 @@ use std::{
 };
 use thiserror::Error;
 use tokio::{
-    sync::{mpsc, oneshot, RwLock},
+    sync::{RwLock, mpsc, oneshot},
     task,
     time::sleep,
 };
@@ -355,14 +355,14 @@ mod tests {
     use error_ext::BoxError;
     use eventsourced::{
         binarize::serde_json::to_bytes,
-        event_log::{test::TestEventLog, EventLog},
+        event_log::{EventLog, test::TestEventLog},
     };
     use sqlx::{
-        postgres::{PgConnectOptions, PgPoolOptions},
         Postgres, QueryBuilder, Row, Transaction,
+        postgres::{PgConnectOptions, PgPoolOptions},
     };
     use std::{iter::once, time::Duration};
-    use testcontainers::{clients::Cli, RunnableImage};
+    use testcontainers::{ImageExt, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres as TCPostgres;
     use tokio::time::sleep;
 
@@ -390,11 +390,8 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<(), BoxError> {
-        let containers = Cli::default();
-
-        let container =
-            containers.run(RunnableImage::from(TCPostgres::default()).with_tag("16-alpine"));
-        let port = container.get_host_port_ipv4(5432);
+        let container = TCPostgres::default().with_tag("16-alpine").start().await?;
+        let port = container.get_host_port_ipv4(5432).await?;
 
         let cnn_url = format!("postgresql://postgres:postgres@localhost:{port}");
         let cnn_options = cnn_url.parse::<PgConnectOptions>()?;
