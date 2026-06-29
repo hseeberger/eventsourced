@@ -2,8 +2,8 @@ name: Security Audit
 
 permissions:
   contents: read
-  issues: write
   checks: write
+  issues: write
 
 on:
   pull_request:
