@@ -2,13 +2,13 @@
 name          = "eventsourced-postgres"
 description   = "Postgres implementation for EventSourced EventLog and SnapshotStore."
 version       = "0.14.1"
-readme        = "README.md"
 edition       = { workspace = true }
-authors       = { workspace = true }
 license       = { workspace = true }
+readme        = "README.md"
 homepage      = { workspace = true }
 repository    = { workspace = true }
-documentation = "https://docs.rs/eventsourced-postgres/latest/eventsourced-postgres"
+documentation = "https://docs.rs/eventsourced-postgres/latest/eventsourced_postgres/"
+publish       = true
 
 [dependencies]
 eventsourced    = { path = "../eventsourced", version = "0.27.0" }
