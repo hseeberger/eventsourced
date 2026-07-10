@@ -390,7 +390,7 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<(), BoxError> {
-        let container = TCPostgres::default().with_tag("16-alpine").start().await?;
+        let container = TCPostgres::default().with_tag("18-alpine").start().await?;
         let port = container.get_host_port_ipv4(5432).await?;
 
         let cnn_url = format!("postgresql://postgres:postgres@localhost:{port}");

@@ -428,17 +428,26 @@ mod tests {
     use eventsourced::{binarize, event_log::EventLog};
     use futures::{StreamExt, TryStreamExt};
     use std::{future, num::NonZeroU64};
-    use testcontainers::runners::AsyncRunner;
+    use testcontainers::{ImageExt, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres;
     use uuid::Uuid;
 
     #[tokio::test]
     async fn test_event_log() -> Result<(), BoxError> {
-        let container = Postgres::default().with_host_auth().start().await?;
+        let container = Postgres::default()
+            .with_db_name("eventsourced")
+            .with_user("eventsourced")
+            .with_password("eventsourced")
+            .with_tag("18-alpine")
+            .start()
+            .await?;
         let port = container.get_host_port_ipv4(5432).await?;
 
         let config = PostgresEventLogConfig {
             port,
+            user: "eventsourced".to_string(),
+            password: "eventsourced".to_string(),
+            dbname: "eventsourced".to_string(),
             setup: true,
             ..Default::default()
         };
