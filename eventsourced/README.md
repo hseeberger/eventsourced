@@ -206,11 +206,11 @@ RUST_LOG=info \
     --package counter-nats
 ```
 
-Notice that you can change the configuration either by changing the `defaul.toml` file at `examples/counter-nats/config` or by overriding the configuration settings with environment variables, e.g. `APP__COUNTER__EVT_COUNT=42`:
+Notice that you can change the configuration either by changing the `default.yaml` file at `examples/counter-nats/config` or by overriding the configuration settings with environment variables, e.g. `CFG__COUNTER__EVENT_COUNT=42`:
 
 ```
 RUST_LOG=info \
-    APP__COUNTER__EVT_COUNT=42 \
+    CFG__COUNTER__EVENT_COUNT=42 \
     CONFIG_DIR=examples/counter-nats/config \
     cargo run \
     --release \
@@ -238,14 +238,14 @@ Make sure you know the following connection parameters:
 - password
 - dbname
 
-Change the configuration either by changing the `default.toml` file at `examples/counter-postgres/config` or by overriding the configuration settings with environment variables, e.g. `APP__EVT_LOG__DBNAME=test` or `APP__COUNTER__EVT_COUNT=42`:
+Change the configuration either by changing the `default.yaml` file at `examples/counter-postgres/config` or by overriding the configuration settings with environment variables, e.g. `CFG__EVENT_LOG__DBNAME=test` or `CFG__COUNTER__EVENT_COUNT=42`:
 
 Then use the following command to run the example:
 
 ```
 RUST_LOG=info \
-    APP__EVT_LOG__DBNAME=test \
-    APP__COUNTER__EVT_COUNT=42 \
+    CFG__EVENT_LOG__DBNAME=test \
+    CFG__COUNTER__EVENT_COUNT=42 \
     CONFIG_DIR=examples/counter-postgres/config \
     cargo run \
     --release \

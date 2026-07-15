@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use configured::Configured;
+use configured::{Case, Configured};
 use eventsourced_postgres::{
     PostgresEventLog, PostgresEventLogConfig, PostgresSnapshotStore, PostgresSnapshotStoreConfig,
 };
@@ -14,7 +14,7 @@ async fn main() -> Result<()> {
         .try_init()
         .context("initialize tracing")?;
 
-    let config = Config::load().context("load configuration")?;
+    let config = Config::load(Case::Kebab).context("load configuration")?;
     println!("Starting with configuration: {config:?}");
 
     let event_log = PostgresEventLog::new(config.event_log)
