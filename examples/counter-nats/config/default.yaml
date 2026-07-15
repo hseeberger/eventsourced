@@ -1,0 +1,11 @@
+counter:
+  entity-count: 50
+  event-count: 20000
+
+event-log:
+  server-addr: "localhost:4222"
+  setup: true
+
+snapshot-store:
+  server-addr: "localhost:4222"
+  setup: true

@@ -7,6 +7,9 @@ check:
     cargo check --package eventsourced-nats
     cargo check --package eventsourced-postgres
     cargo check --package eventsourced-projection
+    cargo check --package counter
+    cargo check --package counter-nats
+    cargo check --package counter-postgres
 
 fix:
     cargo fix --allow-dirty --allow-staged --all-features
