@@ -1,3 +1,5 @@
+//! A [TestEventLog], useful for testing.
+
 use crate::EventLog;
 use bytes::Bytes;
 use error_ext::BoxError;
@@ -153,6 +155,7 @@ where
     }
 }
 
+/// Error of the [TestEventLog].
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(BoxError);

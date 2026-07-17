@@ -13,8 +13,10 @@ pub trait SnapshotStore
 where
     Self: Clone + 'static,
 {
+    /// The type of entity IDs.
     type Id: Debug;
 
+    /// The error type.
     type Error: StdError + Send + Sync + 'static;
 
     /// Save the given snapshot state for the given entity ID and sequence number.
@@ -44,7 +46,9 @@ where
 /// Snapshot state along with its sequence number.
 #[derive(Debug)]
 pub struct Snapshot<S> {
+    /// The sequence number of the snapshotted state.
     pub seq_no: NonZeroU64,
+    /// The snapshotted state.
     pub state: S,
 }
 

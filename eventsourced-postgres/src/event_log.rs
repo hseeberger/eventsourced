@@ -357,27 +357,37 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// The host name of the Postgres server.
     pub host: String,
 
+    /// The port of the Postgres server.
     pub port: u16,
 
+    /// The user name used to connect.
     pub user: String,
 
+    /// The password used to connect.
     pub password: String,
 
+    /// The name of the database.
     pub dbname: String,
 
+    /// The SSL mode used to connect.
     pub sslmode: String,
 
+    /// The name of the events table.
     #[serde(default = "events_table_default")]
     pub events_table: String,
 
+    /// The interval at which the event log is polled for new events.
     #[serde(default = "poll_interval_default", with = "humantime_serde")]
     pub poll_interval: Duration,
 
+    /// The capacity of the broadcast channel for entity IDs.
     #[serde(default = "id_broadcast_capacity_default")]
     pub id_broadcast_capacity: NonZeroUsize,
 
+    /// Whether to create the database schema on startup.
     #[serde(default)]
     pub setup: bool,
 }

@@ -13,10 +13,14 @@ pub mod serde_json;
 
 /// Conversion to and from `Bytes`.
 pub trait Binarize<E, S>: Copy + Send + Sync + 'static {
+    /// Error converting an event to bytes.
     type EventToBytesError: StdError + Send + Sync + 'static;
+    /// Error converting bytes to an event.
     type EventFromBytesError: StdError + Send + Sync + 'static;
 
+    /// Error converting state to bytes.
     type StateToBytesError: StdError + Send + Sync + 'static;
+    /// Error converting bytes to state.
     type StateFromBytesError: StdError + Send + Sync + 'static;
 
     /// Convert an event to bytes.

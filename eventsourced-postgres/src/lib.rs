@@ -1,6 +1,8 @@
 //! [EventLog](eventsourced::event_log::EventLog) and
 //! [SnapshotStore](eventsourced::snapshot_store::SnapshotStore) implementations based upon [PostgreSQL](https://www.postgresql.org/).
 
+#![warn(missing_docs)]
+
 mod event_log;
 mod snapshot_store;
 

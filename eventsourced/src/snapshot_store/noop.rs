@@ -11,6 +11,7 @@ use std::{
 pub struct NoopSnapshotStore<I>(PhantomData<I>);
 
 impl<I> NoopSnapshotStore<I> {
+    /// Create a new [NoopSnapshotStore].
     pub fn new() -> Self {
         Default::default()
     }

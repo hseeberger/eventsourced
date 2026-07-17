@@ -1,3 +1,5 @@
+//! A [TestSnapshotStore], useful for testing.
+
 use crate::snapshot_store::{Snapshot, SnapshotStore};
 use bytes::Bytes;
 use error_ext::BoxError;
@@ -64,6 +66,7 @@ where
     }
 }
 
+/// Error of the [TestSnapshotStore].
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct Error(BoxError);

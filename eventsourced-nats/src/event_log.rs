@@ -222,16 +222,21 @@ where
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// The address of the NATS server.
     pub server_addr: String,
 
+    /// Optional authentication configuration.
     pub auth: Option<AuthConfig>,
 
+    /// The name of the event stream.
     #[serde(default = "event_stream_name_default")]
     pub event_stream_name: String,
 
+    /// The maximum size of the event stream in bytes.
     #[serde(default = "event_stream_max_bytes_default")]
     pub event_stream_max_bytes: i64,
 
+    /// Whether to create the event stream on startup.
     #[serde(default)]
     pub setup: bool,
 }
