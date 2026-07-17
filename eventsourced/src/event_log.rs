@@ -13,8 +13,10 @@ pub trait EventLog
 where
     Self: Clone + 'static,
 {
+    /// The type of entity IDs.
     type Id: Debug;
 
+    /// The error type.
     type Error: StdError + Send + Sync + 'static;
 
     /// The maximum value for sequence numbers. Defaults to `NonZeroU64::MAX` unless overriden by an

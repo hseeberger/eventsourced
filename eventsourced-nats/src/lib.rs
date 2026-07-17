@@ -1,6 +1,8 @@
 //! [EventLog](eventsourced::event_log::EventLog) and
 //! [SnapshotStore](eventsourced::snapshot_store::SnapshotStore) implementations based upon [NATS](https://nats.io/).
 
+#![warn(missing_docs)]
+
 mod event_log;
 mod snapshot_store;
 
@@ -19,16 +21,21 @@ use thiserror::Error;
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum AuthConfig {
+    /// Authenticate with a user name and password.
     UserPassword {
+        /// The user name.
         user: String,
+        /// The password.
         password: SecretString,
     },
+    /// Authenticate with a NATS credentials file at the given path.
     CredentialsFile(PathBuf),
 }
 
 /// Errors from the [NatsEventLog] or [NatsSnapshotStore].
 #[derive(Debug, Error)]
 pub enum Error {
+    /// A NATS error occurred.
     #[error("NATS error: {0}")]
     Nats(String, #[source] Box<dyn std::error::Error + Send + Sync>),
 

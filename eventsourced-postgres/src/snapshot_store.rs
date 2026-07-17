@@ -142,21 +142,29 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// The host name of the Postgres server.
     pub host: String,
 
+    /// The port of the Postgres server.
     pub port: u16,
 
+    /// The user name used to connect.
     pub user: String,
 
+    /// The password used to connect.
     pub password: String,
 
+    /// The name of the database.
     pub dbname: String,
 
+    /// The SSL mode used to connect.
     pub sslmode: String,
 
+    /// The name of the snapshots table.
     #[serde(default = "snapshots_table_default")]
     pub snapshots_table: String,
 
+    /// Whether to create the database schema on startup.
     #[serde(default)]
     pub setup: bool,
 }

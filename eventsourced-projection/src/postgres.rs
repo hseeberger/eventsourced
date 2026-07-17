@@ -1,3 +1,5 @@
+//! Projection of events to a Postgres database.
+
 use error_ext::StdErrorExt;
 use eventsourced::{binarize, event_log::EventLog};
 use futures::StreamExt;
@@ -27,6 +29,8 @@ pub struct Projection {
 }
 
 impl Projection {
+    /// Create and spawn a new [Projection] with the given name, event log, event handler and error
+    /// strategy, persisting its progress to the given Postgres pool.
     pub async fn new<E, L, H>(
         type_name: &'static str,
         name: String,
@@ -123,14 +127,17 @@ impl Projection {
         Ok(Projection { name, command_in })
     }
 
+    /// Run the projection and return its resulting [State].
     pub async fn run(&self) -> Result<State, CommandError> {
         self.dispatch_command(Command::Run).await
     }
 
+    /// Stop the projection and return its resulting [State].
     pub async fn stop(&self) -> Result<State, CommandError> {
         self.dispatch_command(Command::Stop).await
     }
 
+    /// Return the current [State] of the projection.
     pub async fn get_state(&self) -> Result<State, CommandError> {
         self.dispatch_command(Command::GetState).await
     }
@@ -148,10 +155,13 @@ impl Projection {
     }
 }
 
+/// Handler applying projected events to a Postgres database.
 #[trait_variant::make(Send)]
 pub trait EventHandler<E> {
+    /// The error type.
     type Error: StdError + Send + Sync + 'static;
 
+    /// Handle the given event within the given database transaction.
     async fn handle_event(
         &self,
         event: E,
@@ -159,15 +169,19 @@ pub trait EventHandler<E> {
     ) -> Result<(), Self::Error>;
 }
 
+/// Error creating a [Projection].
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Loading the state from the database failed.
     #[error("cannot create Projection, b/c cannot load state from database")]
     Sqlx(#[from] sqlx::Error),
 
+    /// Converting the loaded sequence number into a non-zero value failed.
     #[error("cannot create Projection, b/c cannot convert loaded seq_no into non zero value")]
     TryFromInt(#[from] TryFromIntError),
 }
 
+/// Error dispatching a command to a [Projection].
 #[derive(Debug, Error, Serialize, Deserialize)]
 pub enum CommandError {
     /// The command cannot be sent from this [Projection] to its projection.
@@ -179,23 +193,34 @@ pub enum CommandError {
     ReceiveResponse(Command, String),
 }
 
+/// Strategy for handling an error raised by the event handler.
 #[derive(Debug, Clone, Copy)]
 pub enum ErrorStrategy {
+    /// Retry after the given duration.
     Retry(Duration),
+    /// Stop the projection.
     Stop,
 }
 
+/// The state of a [Projection].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
+    /// The sequence number of the last handled event, if any.
     pub seq_no: Option<NonZeroU64>,
+    /// Whether the projection is currently running.
     pub running: bool,
+    /// The last error, if any.
     pub error: Option<String>,
 }
 
+/// A command for a [Projection].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum Command {
+    /// Run the projection.
     Run,
+    /// Stop the projection.
     Stop,
+    /// Get the current [State].
     GetState,
 }
 

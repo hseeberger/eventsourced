@@ -160,16 +160,21 @@ where
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
+    /// The address of the NATS server.
     pub server_addr: String,
 
+    /// Optional authentication configuration.
     pub auth: Option<AuthConfig>,
 
+    /// The name of the bucket.
     #[serde(default = "bucket_name_default")]
     pub bucket_name: String,
 
+    /// The maximum size of the bucket in bytes.
     #[serde(default = "bucket_max_bytes_default")]
     pub bucket_max_bytes: i64,
 
+    /// Whether to create the bucket on startup.
     #[serde(default)]
     pub setup: bool,
 }

@@ -6,6 +6,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use serde_json::{Error, from_slice, to_value};
 
+/// A [Binarize] implementation based upon serde_json, for any type that is [Serialize] and
+/// [Deserialize].
 #[derive(Debug, Clone, Copy)]
 pub struct SerdeJsonBinarize;
 
@@ -37,6 +39,7 @@ where
     }
 }
 
+/// Serialize the given value to JSON [Bytes].
 pub fn to_bytes<T>(value: &T) -> Result<Bytes, Error>
 where
     T: Serialize,
@@ -44,6 +47,7 @@ where
     to_value(value).map(|value| value.to_string().into())
 }
 
+/// Deserialize a value from the given JSON [Bytes].
 pub fn from_bytes<T>(bytes: Bytes) -> Result<T, Error>
 where
     for<'de> T: Deserialize<'de>,

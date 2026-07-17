@@ -54,6 +54,8 @@
 //! build read side projections. There is early support for projections in the
 //! `eventsourced-projection` crate.
 
+#![warn(missing_docs)]
+
 pub mod binarize;
 pub mod event_log;
 pub mod snapshot_store;
@@ -136,8 +138,11 @@ pub enum CommandEffect<E, Reply, Error>
 where
     E: EventSourced,
 {
+    /// Emit and persist an event, then build a reply from the resulting state.
     EmitAndReply(E::Event, Box<dyn FnOnce(&E) -> Reply + Send + Sync>),
+    /// Reply without emitting an event.
     Reply(Reply),
+    /// Reject the command with an error.
     Reject(Error),
 }
 
@@ -415,18 +420,23 @@ pub struct HandleCommandError(String);
 /// A technical error when spawning an [EventSourcedEntity].
 #[derive(Debug, Error)]
 pub enum SpawnError {
+    /// Loading the snapshot from the snapshot store failed.
     #[error("cannot load snapshot from snapshot store")]
     LoadSnapshot(#[source] BoxError),
 
+    /// The last sequence number is less than the snapshot sequence number.
     #[error("last sequence number {0:?} less than snapshot sequence number {0:?}")]
     InvalidLastSeqNo(Option<NonZeroU64>, Option<NonZeroU64>),
 
+    /// Getting the last sequence number from the event log failed.
     #[error("cannot get last seqence number from event log")]
     LastNonZeroU64(#[source] BoxError),
 
+    /// Getting the events-by-ID stream from the event log failed.
     #[error("cannot get events by ID stream from event log")]
     EventsById(#[source] BoxError),
 
+    /// Getting the next event from the events-by-ID stream failed.
     #[error("cannot get next event from events by ID stream")]
     NextEvent(#[source] BoxError),
 }

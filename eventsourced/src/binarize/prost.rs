@@ -5,6 +5,7 @@ use crate::binarize::Binarize;
 use bytes::{Bytes, BytesMut};
 use prost::{DecodeError, EncodeError, Message};
 
+/// A [Binarize] implementation for any [Message], based upon prost.
 #[derive(Debug, Clone, Copy)]
 pub struct ProstBinarize;
 
@@ -36,6 +37,7 @@ where
     }
 }
 
+/// Encode the given [Message] to [Bytes].
 pub fn to_bytes<T>(value: &T) -> Result<Bytes, EncodeError>
 where
     T: Message,
@@ -45,6 +47,7 @@ where
     Ok(bytes.into())
 }
 
+/// Decode the given [Bytes] into a [Message].
 pub fn from_bytes<T>(bytes: Bytes) -> Result<T, DecodeError>
 where
     T: Message + Default,
