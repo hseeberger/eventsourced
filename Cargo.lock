@@ -841,9 +841,9 @@ dependencies = [
 
 [[package]]
 name = "error-ext"
-version = "0.4.5"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70b0ee8e8666a3a3787564c90331093e29bd5c91fb9fbf37ea50ce0a85419cf2"
+checksum = "09babd1a531d724de175c0d9f8bad9ae4b65da107b6762056f88536f441c9a5a"
 
 [[package]]
 name = "etcetera"
