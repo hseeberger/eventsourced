@@ -3,31 +3,51 @@ updates:
   - package-ecosystem: cargo
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
       default-days: 7
     commit-message:
       prefix: build
       include: scope
     groups:
-      cargo-patches:
+      cargo-patch:
         update-types:
           - patch
+        patterns:
+          - "*"
+      cargo-minor:
+        update-types:
+          - minor
+        patterns:
+          - "*"
+      cargo-major:
+        update-types:
+          - major
         patterns:
           - "*"
 
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: daily
+      interval: weekly
     cooldown:
       default-days: 7
     commit-message:
       prefix: ci
       include: scope
     groups:
-      ci-patches:
+      ci-patch:
         update-types:
           - patch
+        patterns:
+          - "*"
+      ci-minor:
+        update-types:
+          - minor
+        patterns:
+          - "*"
+      ci-major:
+        update-types:
+          - major
         patterns:
           - "*"
