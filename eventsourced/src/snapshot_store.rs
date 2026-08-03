@@ -1,7 +1,8 @@
 //! Persistence for snapshots.
 
 pub mod noop;
-#[cfg(feature = "test")]
+#[cfg_attr(docsrs, doc(cfg(feature = "test")))]
+#[cfg(any(test, feature = "test"))]
 pub mod test;
 
 use bytes::Bytes;
