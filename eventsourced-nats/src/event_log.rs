@@ -355,7 +355,7 @@ fn event_stream_max_bytes_default() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{AuthConfig, NatsEventLog, NatsEventLogConfig, tests::NATS_VERSION};
+    use crate::{AuthConfig, NatsEventLog, NatsEventLogConfig, tests::compose_image};
     use error_ext::BoxError;
     use eventsourced::{binarize, event_log::EventLog};
     use futures::{StreamExt, TryStreamExt};
@@ -365,7 +365,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_event_log() -> Result<(), BoxError> {
-        let container = GenericImage::new("nats", NATS_VERSION)
+        let (name, tag) = compose_image("nats");
+
+        let container = GenericImage::new(name, tag)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
             .with_cmd(["-js", "--user", "test", "--pass", "test"])
             .start()
