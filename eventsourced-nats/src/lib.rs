@@ -96,7 +96,7 @@ pub async fn make_client(auth: Option<&AuthConfig>, server_addr: &str) -> Result
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     use crate::AuthConfig;
     use assert_matches::assert_matches;
     use config::{Config, File, FileFormat};

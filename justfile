@@ -3,13 +3,14 @@ set shell := ["bash", "-uc"]
 nightly := `rustc --version | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | sed 's/^/nightly-/'`
 
 check:
-    cargo check --package eventsourced --all-features
-    cargo check --package eventsourced-nats
-    cargo check --package eventsourced-postgres
-    cargo check --package eventsourced-projection
-    cargo check --package counter
-    cargo check --package counter-nats
-    cargo check --package counter-postgres
+    cargo check --package eventsourced --all-features --all-targets
+    cargo check --package eventsourced-nats --all-targets
+    cargo check --package eventsourced-postgres --all-targets
+    cargo check --package eventsourced-projection --all-targets
+    cargo check --package counter --all-targets
+    cargo check --package counter-nats --all-targets
+    cargo check --package counter-postgres --all-targets
+    cargo check --workspace --all-targets
 
 fix:
     cargo fix --allow-dirty --allow-staged --all-features
