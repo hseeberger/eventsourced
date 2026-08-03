@@ -200,7 +200,7 @@ fn snapshots_table_default() -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::{PostgresSnapshotStore, PostgresSnapshotStoreConfig};
+    use crate::{PostgresSnapshotStore, PostgresSnapshotStoreConfig, tests::compose_image};
     use error_ext::BoxError;
     use eventsourced::{binarize, snapshot_store::SnapshotStore};
     use testcontainers::{ImageExt, runners::AsyncRunner};
@@ -209,11 +209,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), BoxError> {
+        let (_, tag) = compose_image("postgres");
+
         let container = Postgres::default()
             .with_db_name("eventsourced")
             .with_user("eventsourced")
             .with_password("eventsourced")
-            .with_tag("18-alpine")
+            .with_tag(tag)
             .start()
             .await?;
         let port = container.get_host_port_ipv4(5432).await?;
