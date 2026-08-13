@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.15.1...eventsourced-nats-v0.16.0) - 2026-08-13
+
+### Fixed
+
+- *(test)* make test helper modules available to unit tests
+
+### Other
+
+- add docker-compose and derive container images from it
+- turn on warnings for missing docs
+- standardize project scaffolding and package metadata
+- *(deps)* bump all the things ([#365](https://github.com/hseeberger/eventsourced/pull/365))
+
 ## [0.15.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.15.0...eventsourced-nats-v0.15.1) - 2024-05-06
 
 ### Other
