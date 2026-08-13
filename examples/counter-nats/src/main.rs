@@ -10,9 +10,8 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer())
-        .try_init()
-        .context("initialize tracing")?;
+        .with(tracing_subscriber::fmt::layer().json().flatten_event(true))
+        .init();
 
     let config = Config::load(Case::Kebab).context("load configuration")?;
     println!("Starting with configuration: {config:?}");
