@@ -1,7 +1,7 @@
 [package]
 name          = "eventsourced-projection"
 description   = "Projections for EventSourced."
-version       = "0.6.1"
+version       = "0.6.2"
 edition       = { workspace = true }
 license       = { workspace = true }
 readme        = "README.md"
@@ -11,7 +11,7 @@ documentation = "https://docs.rs/eventsourced-projection/latest/eventsourced_pro
 publish       = true
 
 [dependencies]
-eventsourced  = { path = "../eventsourced", version = "0.27.0", features = [ "serde_json" ] }
+eventsourced  = { path = "../eventsourced", version = "0.27.1", features = [ "serde_json" ] }
 error-ext     = { workspace = true }
 futures       = { workspace = true }
 serde         = { workspace = true }
@@ -22,7 +22,7 @@ tracing       = { workspace = true }
 trait-variant = { workspace = true }
 
 [dev-dependencies]
-eventsourced           = { path = "../eventsourced", version = "0.27.0", features = [ "test" ] }
+eventsourced           = { path = "../eventsourced", version = "0.27.1", features = [ "test" ] }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true, features = [ "postgres" ] }
 tokio                  = { workspace = true, features = [ "macros" ] }

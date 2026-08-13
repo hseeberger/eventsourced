@@ -1,7 +1,7 @@
 [package]
 name          = "eventsourced-postgres"
 description   = "Postgres implementation for EventSourced EventLog and SnapshotStore."
-version       = "0.14.1"
+version       = "0.14.2"
 edition       = { workspace = true }
 license       = { workspace = true }
 readme        = "README.md"
@@ -11,7 +11,7 @@ documentation = "https://docs.rs/eventsourced-postgres/latest/eventsourced_postg
 publish       = true
 
 [dependencies]
-eventsourced    = { path = "../eventsourced", version = "0.27.0" }
+eventsourced    = { path = "../eventsourced", version = "0.27.1" }
 async-stream    = { workspace = true }
 bb8-postgres    = { workspace = true }
 bytes           = { workspace = true }
@@ -25,7 +25,7 @@ tracing         = { workspace = true }
 
 [dev-dependencies]
 error-ext              = { workspace = true }
-eventsourced           = { path = "../eventsourced", version = "0.27.0", features = [ "serde_json" ] }
+eventsourced           = { path = "../eventsourced", version = "0.27.1", features = [ "serde_json" ] }
 testcontainers         = { workspace = true }
 testcontainers-modules = { workspace = true, features = [ "postgres" ] }
 tokio                  = { workspace = true, features = [ "macros" ] }

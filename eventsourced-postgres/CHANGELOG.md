@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.14.1...eventsourced-postgres-v0.14.2) - 2026-08-13
+
+### Other
+
+- add docker-compose and derive container images from it
+- turn on warnings for missing docs
+- pin Postgres containers to 18-alpine with explicit credentials
+- standardize project scaffolding and package metadata
+- *(deps)* bump all the things ([#365](https://github.com/hseeberger/eventsourced/pull/365))
+
 ## [0.14.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.14.0...eventsourced-postgres-v0.14.1) - 2024-05-06
 
 ### Other
