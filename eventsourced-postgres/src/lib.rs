@@ -50,22 +50,8 @@ pub enum Error {
 
 #[cfg(test)]
 mod tests {
-    pub(crate) fn compose_image(service: &str) -> (&'static str, &'static str) {
-        const COMPOSE: &str = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../docker-compose.yaml"
-        ));
-
-        let header = format!("  {service}:");
-
-        COMPOSE
-            .lines()
-            .skip_while(|line| line.trim_end() != header)
-            .skip(1)
-            .take_while(|line| line.starts_with("    "))
-            .find_map(|line| line.trim().strip_prefix("image:"))
-            .map(|image| image.trim().trim_matches('"'))
-            .and_then(|image| image.rsplit_once(':'))
-            .unwrap_or_else(|| panic!("no image for service {service} in docker-compose.yaml"))
-    }
+    use composed::{Compose, compose};
+    use std::sync::LazyLock;
+    pub(crate) static COMPOSE: LazyLock<Compose> =
+        LazyLock::new(|| compose!("../docker-compose.yaml"));
 }

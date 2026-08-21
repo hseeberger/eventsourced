@@ -3,21 +3,37 @@ services:
     image: nats:2.14-alpine
     command:
       - -js
+      - -m
+      - "8222"
     ports:
-      - 4222:4222
+      - "4222:4222"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8222/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
 
   postgres:
     image: postgres:18-alpine
     environment:
-      POSTGRES_USER: test
-      POSTGRES_PASSWORD: test
-      POSTGRES_DB: test
+      POSTGRES_DB: eventsourced
+      POSTGRES_PASSWORD: eventsourced
+      POSTGRES_USER: eventsourced
     ports:
-      - 5432:5432
+      - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
     restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
 
 volumes:
   postgres-data:

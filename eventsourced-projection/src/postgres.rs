@@ -377,6 +377,7 @@ async fn save_seq_no(
 #[cfg(test)]
 mod tests {
     use crate::postgres::{ErrorStrategy, EventHandler, Projection};
+    use composed::{Compose, compose};
     use error_ext::BoxError;
     use eventsourced::{
         binarize::serde_json::to_bytes,
@@ -386,7 +387,7 @@ mod tests {
         Postgres, QueryBuilder, Row, Transaction,
         postgres::{PgConnectOptions, PgPoolOptions},
     };
-    use std::{iter::once, time::Duration};
+    use std::{iter::once, sync::LazyLock, time::Duration};
     use testcontainers::{ImageExt, runners::AsyncRunner};
     use testcontainers_modules::postgres::Postgres as TCPostgres;
     use tokio::time::sleep;
@@ -415,11 +416,23 @@ mod tests {
 
     #[tokio::test]
     async fn test() -> Result<(), BoxError> {
-        let (_, tag) = compose_image("postgres");
-        let container = TCPostgres::default().with_tag(tag).start().await?;
+        let postgres = COMPOSE.service("postgres");
+        let (user, password, dbname) = (
+            postgres.env("POSTGRES_USER"),
+            postgres.env("POSTGRES_PASSWORD"),
+            postgres.env("POSTGRES_DB"),
+        );
+
+        let container = TCPostgres::default()
+            .with_db_name(dbname)
+            .with_user(user)
+            .with_password(password)
+            .with_tag(postgres.image().tag())
+            .start()
+            .await?;
         let port = container.get_host_port_ipv4(5432).await?;
 
-        let cnn_url = format!("postgresql://postgres:postgres@localhost:{port}");
+        let cnn_url = format!("postgresql://{user}:{password}@localhost:{port}/{dbname}");
         let cnn_options = cnn_url.parse::<PgConnectOptions>()?;
         let pool = PgPoolOptions::new().connect_with(cnn_options).await?;
 
@@ -478,22 +491,6 @@ mod tests {
         Ok(())
     }
 
-    fn compose_image(service: &str) -> (&'static str, &'static str) {
-        const COMPOSE: &str = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../docker-compose.yaml"
-        ));
-
-        let header = format!("  {service}:");
-
-        COMPOSE
-            .lines()
-            .skip_while(|line| line.trim_end() != header)
-            .skip(1)
-            .take_while(|line| line.starts_with("    "))
-            .find_map(|line| line.trim().strip_prefix("image:"))
-            .map(|image| image.trim().trim_matches('"'))
-            .and_then(|image| image.rsplit_once(':'))
-            .unwrap_or_else(|| panic!("no image for service {service} in docker-compose.yaml"))
-    }
+    pub(crate) static COMPOSE: LazyLock<Compose> =
+        LazyLock::new(|| compose!("../docker-compose.yaml"));
 }
