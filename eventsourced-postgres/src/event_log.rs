@@ -433,7 +433,7 @@ const fn id_broadcast_capacity_default() -> NonZeroUsize {
 
 #[cfg(test)]
 mod tests {
-    use crate::{PostgresEventLog, PostgresEventLogConfig, tests::compose_image};
+    use crate::{PostgresEventLog, PostgresEventLogConfig, tests::COMPOSE};
     use error_ext::BoxError;
     use eventsourced::{binarize, event_log::EventLog};
     use futures::{StreamExt, TryStreamExt};
@@ -444,22 +444,27 @@ mod tests {
 
     #[tokio::test]
     async fn test_event_log() -> Result<(), BoxError> {
-        let (_, tag) = compose_image("postgres");
+        let postgres = COMPOSE.service("postgres");
+        let (user, password, dbname) = (
+            postgres.env("POSTGRES_USER"),
+            postgres.env("POSTGRES_PASSWORD"),
+            postgres.env("POSTGRES_DB"),
+        );
 
         let container = Postgres::default()
-            .with_db_name("eventsourced")
-            .with_user("eventsourced")
-            .with_password("eventsourced")
-            .with_tag(tag)
+            .with_db_name(dbname)
+            .with_user(user)
+            .with_password(password)
+            .with_tag(postgres.image().tag())
             .start()
             .await?;
         let port = container.get_host_port_ipv4(5432).await?;
 
         let config = PostgresEventLogConfig {
             port,
-            user: "eventsourced".to_string(),
-            password: "eventsourced".to_string(),
-            dbname: "eventsourced".to_string(),
+            user: user.to_string(),
+            password: password.to_string(),
+            dbname: dbname.to_string(),
             setup: true,
             ..Default::default()
         };

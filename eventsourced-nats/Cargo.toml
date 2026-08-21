@@ -25,6 +25,7 @@ tracing      = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
+composed       = { workspace = true }
 config         = { workspace = true }
 eventsourced   = { path = "../eventsourced", version = "0.27.1", features = [ "serde_json" ] }
 testcontainers = { workspace = true }

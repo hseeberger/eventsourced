@@ -206,7 +206,7 @@ mod proto {
 
 #[cfg(test)]
 mod tests {
-    use crate::{NatsSnapshotStore, NatsSnapshotStoreConfig, tests::compose_image};
+    use crate::{NatsSnapshotStore, NatsSnapshotStoreConfig, tests::COMPOSE};
     use error_ext::BoxError;
     use eventsourced::{binarize, snapshot_store::SnapshotStore};
     use testcontainers::{GenericImage, ImageExt, core::WaitFor, runners::AsyncRunner};
@@ -214,7 +214,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_snapshot_store() -> Result<(), BoxError> {
-        let (name, tag) = compose_image("nats");
+        let (name, tag) = COMPOSE.image("nats").name_and_tag();
 
         let container = GenericImage::new(name, tag)
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"))

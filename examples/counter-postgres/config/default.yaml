@@ -5,17 +5,17 @@ counter:
 event-log:
   host: localhost
   port: 5432
-  user: test
-  password: test
-  dbname: test
+  user: eventsourced
+  password: eventsourced
+  dbname: eventsourced
   sslmode: prefer
   setup: true
 
 snapshot-store:
   host: localhost
   port: 5432
-  user: test
-  password: test
-  dbname: test
+  user: eventsourced
+  password: eventsourced
+  dbname: eventsourced
   sslmode: prefer
   setup: true

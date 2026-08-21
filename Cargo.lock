@@ -405,6 +405,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "composed"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a1d3e7d4bd5890822cd4db8ecf1f2bf5a63d806464c19f5484df8bbca6f4bc4"
+dependencies = [
+ "serde",
+ "serde_norway",
+]
+
+[[package]]
 name = "config"
 version = "0.15.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -884,6 +894,7 @@ dependencies = [
  "assert_matches",
  "async-nats",
  "bytes",
+ "composed",
  "config",
  "error-ext",
  "eventsourced",
@@ -907,6 +918,7 @@ dependencies = [
  "async-stream",
  "bb8-postgres",
  "bytes",
+ "composed",
  "error-ext",
  "eventsourced",
  "futures",
@@ -925,6 +937,7 @@ dependencies = [
 name = "eventsourced-projection"
 version = "0.6.2"
 dependencies = [
+ "composed",
  "error-ext",
  "eventsourced",
  "futures",
@@ -2670,6 +2683,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_norway"
+version = "0.9.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e408f29489b5fd500fab51ff1484fc859bb655f32c671f307dcd733b72e8168c"
+dependencies = [
+ "indexmap 2.14.0",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml-norway",
+]
+
+[[package]]
 name = "serde_repr"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3661,6 +3687,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unsafe-libyaml-norway"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39abd59bf32521c7f2301b52d05a6a2c975b6003521cbd0c6dc1582f0a22104"
 
 [[package]]
 name = "untrusted"
