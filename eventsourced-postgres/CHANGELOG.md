@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.14.2...eventsourced-postgres-v0.14.3) - 2026-08-21
+
+### Other
+
+- unify docker-compose and read its facts via composed
+
 ## [0.14.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.14.1...eventsourced-postgres-v0.14.2) - 2026-08-13
 
 ### Other
