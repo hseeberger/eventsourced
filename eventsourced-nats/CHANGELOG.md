@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.16.0...eventsourced-nats-v0.16.1) - 2026-08-26
+
+### Other
+
+- unify docker-compose and read its facts via composed
+
 ## [0.16.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.15.1...eventsourced-nats-v0.16.0) - 2026-08-13
 
 ### Fixed

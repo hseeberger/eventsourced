@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.6.2...eventsourced-projection-v0.6.3) - 2026-08-26
+
+### Other
+
+- unify docker-compose and read its facts via composed
+
 ## [0.6.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.6.1...eventsourced-projection-v0.6.2) - 2026-08-13
 
 ### Fixed
