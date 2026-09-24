@@ -31,7 +31,7 @@ async fn main() -> Result<()> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct Config {
-    counter: counter::Config,
-    event_log: PostgresEventLogConfig,
-    snapshot_store: PostgresSnapshotStoreConfig,
+    pub counter: counter::Config,
+    pub event_log: PostgresEventLogConfig,
+    pub snapshot_store: PostgresSnapshotStoreConfig,
 }
