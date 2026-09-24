@@ -25,7 +25,7 @@ bb8-postgres           = { version = "0.9" }
 bytes                  = { version = "1.11" }
 composed               = { version = "0.1" }
 config                 = { version = "0.15" }
-configured             = { version = "0.9" }
+configured             = { version = "0.10" }
 error-ext              = { version = "0.4" }
 futures                = { version = "0.3" }
 humantime-serde        = { version = "1.1" }

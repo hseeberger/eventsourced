@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use configured::{Case, Configured};
+use configured::{Case, Configured, LoadOptions};
 use eventsourced_postgres::{
     PostgresEventLog, PostgresEventLogConfig, PostgresSnapshotStore, PostgresSnapshotStoreConfig,
 };
@@ -13,7 +13,8 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer().json().flatten_event(true))
         .init();
 
-    let config = Config::load(Case::Kebab).context("load configuration")?;
+    let config =
+        Config::load(LoadOptions::default().case(Case::Kebab)).context("load configuration")?;
     println!("Starting with configuration: {config:?}");
 
     let event_log = PostgresEventLog::new(config.event_log)
