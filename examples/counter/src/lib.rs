@@ -11,8 +11,8 @@ use uuid::Uuid;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct Config {
-    entity_count: usize,
-    event_count: usize,
+    pub entity_count: usize,
+    pub event_count: usize,
 }
 
 pub async fn run<L, S>(config: Config, event_log: L, snapshot_store: S) -> Result<()>
