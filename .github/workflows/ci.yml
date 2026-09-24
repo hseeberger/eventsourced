@@ -66,7 +66,7 @@ jobs:
           toolchain: ${{ needs.toolchain.outputs.stable }}
 
       - name: Install just and protoc
-        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           # protoc: eventsourced-nats' build script compiles .proto during the build.
           tool: just,protoc
@@ -94,7 +94,7 @@ jobs:
           components: rustfmt
 
       - name: Install just
-        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           tool: just
 
@@ -120,7 +120,7 @@ jobs:
           components: clippy
 
       - name: Install just and protoc
-        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           # protoc: eventsourced-nats' build script compiles .proto during clippy.
           tool: just,protoc
@@ -147,7 +147,7 @@ jobs:
           toolchain: ${{ needs.toolchain.outputs.stable }}
 
       - name: Install just and protoc
-        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           # protoc: eventsourced-nats' build script compiles .proto during the test build.
           tool: just,protoc
@@ -175,7 +175,7 @@ jobs:
           components: rust-docs
 
       - name: Install just and protoc
-        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
           # protoc: eventsourced-nats' build script compiles .proto during the doc build.
           tool: just,protoc
