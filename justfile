@@ -13,7 +13,7 @@ check:
     cargo check --workspace --all-targets
 
 fix:
-    cargo fix --allow-dirty --allow-staged --all-features
+    cargo fix --all-targets --allow-dirty --allow-staged --all-features
 
 fmt:
     cargo +{{ nightly }} fmt
@@ -23,10 +23,10 @@ fmt-check:
     cargo +{{ nightly }} fmt --check
 
 lint:
-    cargo clippy --no-deps --all-features -- -D warnings
+    cargo clippy --all-targets --no-deps --all-features -- -D warnings
 
 lint-fix:
-    cargo clippy --no-deps --all-features --fix --allow-dirty --allow-staged
+    cargo clippy --all-targets --no-deps --all-features --fix --allow-dirty --allow-staged
 
 test:
     cargo test --all-features
