@@ -47,3 +47,9 @@ tracing-test           = { version = "0.2" }
 trait-variant          = { version = "0.1" }
 uuid                   = { version = "1.23", features = [ "serde", "v7" ] }
 walkdir                = { version = "2.5" }
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
