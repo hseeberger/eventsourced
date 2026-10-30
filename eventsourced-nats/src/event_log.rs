@@ -365,9 +365,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_event_log() -> Result<(), BoxError> {
-        let (name, tag) = COMPOSE.image("nats").name_and_tag();
+        let image = COMPOSE.image("nats");
 
-        let container = GenericImage::new(name, tag)
+        let container = GenericImage::new(image.name(), image.tag_with_digest())
             .with_wait_for(WaitFor::message_on_stderr("Server is ready"))
             .with_cmd(["-js", "--user", "test", "--pass", "test"])
             .start()
