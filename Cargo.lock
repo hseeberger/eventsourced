@@ -406,9 +406,9 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
 name = "composed"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b9b1d3ceb5f0368327028a42805220b3f28e12716156c14d56edd9440975be5"
+checksum = "3261669c3a375a7b9685ae7586e4ca3e1a96837b5f2f968b69230c517d273f23"
 dependencies = [
  "serde",
  "serde_norway",

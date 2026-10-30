@@ -220,7 +220,7 @@ mod tests {
             .with_db_name(dbname)
             .with_user(user)
             .with_password(password)
-            .with_tag(postgres.image().tag())
+            .with_tag(postgres.image().tag_with_digest())
             .start()
             .await?;
         let port = container.get_host_port_ipv4(5432).await?;
