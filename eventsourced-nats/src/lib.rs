@@ -104,8 +104,7 @@ mod tests {
     use secrecy::ExposeSecret;
     use std::sync::LazyLock;
 
-    pub(crate) static COMPOSE: LazyLock<Compose> =
-        LazyLock::new(|| compose!("../docker-compose.yaml"));
+    pub(crate) static COMPOSE: LazyLock<Compose> = LazyLock::new(|| compose!("../compose.yaml"));
 
     #[test]
     fn test_deserialize_auth_config() {
