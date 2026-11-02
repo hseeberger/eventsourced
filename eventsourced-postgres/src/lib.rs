@@ -52,6 +52,5 @@ pub enum Error {
 mod tests {
     use composed::{Compose, compose};
     use std::sync::LazyLock;
-    pub(crate) static COMPOSE: LazyLock<Compose> =
-        LazyLock::new(|| compose!("../docker-compose.yaml"));
+    pub(crate) static COMPOSE: LazyLock<Compose> = LazyLock::new(|| compose!("../compose.yaml"));
 }

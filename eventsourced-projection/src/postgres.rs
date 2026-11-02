@@ -491,6 +491,5 @@ mod tests {
         Ok(())
     }
 
-    pub(crate) static COMPOSE: LazyLock<Compose> =
-        LazyLock::new(|| compose!("../docker-compose.yaml"));
+    pub(crate) static COMPOSE: LazyLock<Compose> = LazyLock::new(|| compose!("../compose.yaml"));
 }
