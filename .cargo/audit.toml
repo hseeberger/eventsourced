@@ -1,0 +1,11 @@
+# Advisories cargo-audit ignores, each with the reason it does not apply to this workspace.
+[advisories]
+ignore = [
+    # libsqlite3-sys is only in the lock through the sqlx-sqlite driver, which sqlx names in weak
+    # features (rust-lang/cargo#10801) and no crate enables, so it is never built; sqlx 0.9
+    # allows no version from 0.38 on.
+    "RUSTSEC-2026-0459",
+    # astral-tokio-tar is unmaintained and only reaches the tests through testcontainers, which
+    # still depends on it in every release.
+    "RUSTSEC-2026-0440",
+]
