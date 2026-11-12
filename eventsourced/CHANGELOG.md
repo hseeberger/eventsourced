@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.27.1...eventsourced-v0.27.2) - 2026-11-12
+
+### Other
+
+- *(deps)* bump Rust to 1.100.0
+
 ## [0.27.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.27.0...eventsourced-v0.27.1) - 2026-08-13
 
 ### Fixed
