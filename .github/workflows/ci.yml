@@ -187,3 +187,66 @@ jobs:
         run: |
           rustup override set ${{ needs.toolchain.outputs.stable }}
           just doc
+
+  public-deps:
+    name: Check Public Dependencies
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    needs: toolchain
+    permissions:
+      contents: read
+    outputs:
+      finding: ${{ steps.check.outputs.finding }}
+      head-sha: ${{ steps.check.outputs.head-sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: ${{ needs.toolchain.outputs.nightly }}
+
+      - name: Install protoc
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: protoc
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Check public dependencies
+        id: check
+        uses: hseeberger/public-deps-check@03a02fe83d24415ff369dbeac63520ef287c5b1b
+        with:
+          command: analyze
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          toolchain: ${{ needs.toolchain.outputs.nightly }}
+
+  public-deps-mark:
+    name: Mark Breaking Dependency Update
+    if: >-
+      ${{ !cancelled()
+      && needs.public-deps.outputs.finding == 'missing-marker'
+      && github.event.pull_request.user.login == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    needs: public-deps
+    permissions: {}
+    steps:
+      - name: Generate a token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Add ! to the commit subject
+        uses: hseeberger/public-deps-check@03a02fe83d24415ff369dbeac63520ef287c5b1b
+        with:
+          command: mark
+          head-sha: ${{ needs.public-deps.outputs.head-sha }}
+          pr-number: ${{ github.event.pull_request.number }}
+          token: ${{ steps.app-token.outputs.token }}
