@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.16.0...eventsourced-nats-v0.17.0) - 2026-11-14
+
+### Changed
+
+- *(deps)* [**breaking**] bump async-nats to 0.51, whose `Client` `make_client` returns
+
+### Other
+
+- *(deps)* bump Rust to 1.100.0
+- rename docker-compose.yaml to compose.yaml
+- pin images by digest
+- unify docker-compose and read its facts via composed
+
 ## [0.16.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.15.1...eventsourced-nats-v0.16.0) - 2026-08-13
 
 ### Fixed
