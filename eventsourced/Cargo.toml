@@ -14,13 +14,13 @@ all-features = true
 rustdoc-args = [ "--cfg", "docsrs" ]
 
 [dependencies]
-bytes         = { workspace = true }
-error-ext     = { workspace = true }
-futures       = { workspace = true }
+bytes         = { version = "1.11" }
+error-ext     = { version = "0.4" }
+futures       = { version = "0.3" }
 pin-project   = { workspace = true }
-prost         = { workspace = true, optional = true }
-serde         = { workspace = true }
-serde_json    = { workspace = true, optional = true }
+prost         = { version = "0.14", optional = true }
+serde         = { version = "1.0", features = [ "derive" ] }
+serde_json    = { version = "1.0", optional = true }
 thiserror     = { workspace = true }
 tokio         = { workspace = true, features = [ "rt-multi-thread" ] }
 tracing       = { workspace = true }
