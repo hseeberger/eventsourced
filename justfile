@@ -36,5 +36,5 @@ doc:
 
 all: check fmt lint test doc
 
-public-deps:
-    python3 {{ env("PUBLIC_DEPS_CHECK", "../public-deps-check/public_deps_check.py") }} analyze --base origin/main --head HEAD --toolchain {{ nightly }}
+breaking-bump:
+    cargo +{{ nightly }} breaking-bump check
