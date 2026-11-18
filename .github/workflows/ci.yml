@@ -219,7 +219,7 @@ jobs:
 
       - name: Check public dependencies
         id: check
-        uses: hseeberger/public-deps-check@03a02fe83d24415ff369dbeac63520ef287c5b1b
+        uses: hseeberger/public-deps-check@d21137be3f97b6c6d9ecc18f879f05ca3fbcc2f0 # v0.1.0
         with:
           command: analyze
           base-sha: ${{ github.event.pull_request.base.sha }}
@@ -244,7 +244,7 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Add ! to the commit subject
-        uses: hseeberger/public-deps-check@03a02fe83d24415ff369dbeac63520ef287c5b1b
+        uses: hseeberger/public-deps-check@d21137be3f97b6c6d9ecc18f879f05ca3fbcc2f0 # v0.1.0
         with:
           command: mark
           head-sha: ${{ needs.public-deps.outputs.head-sha }}
