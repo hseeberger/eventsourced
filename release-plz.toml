@@ -1,0 +1,34 @@
+[changelog]
+header = "# Changelog\n"
+body = """
+## [{{ version | trim_start_matches(pat="v") }}]\
+    {%- if release_link %}({{ release_link }}){% endif %} \
+    - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope and commit.scope != "deps" %}*({{ commit.scope }})* {% endif %}\
+    {% if commit.breaking %}[**breaking**] {% endif %}\
+    {{ commit.message | upper_first }} <!-- commit:{{ commit.id }} -->
+{%- endfor %}
+{% endfor %}
+"""
+trim = false
+postprocessors = [ { pattern = '(?s).*', replace_command = "scripts/pr-links.sh" } ]
+protect_breaking_commits = true
+commit_parsers = [
+    { message = "^Merge pull request ", skip = true },
+    { message = "^chore(\\(release\\))?: (?i:release|prepare for)", skip = true },
+    { message = "^release:", skip = true },
+    { message = "^build\\(deps\\)", field = "breaking", pattern = "true", group = "<!-- 7 -->Dependencies" },
+    { message = "^(build|ci|test)", field = "breaking", pattern = "true", group = "<!-- 8 -->Other" },
+    { message = "^(build|ci|test)", skip = true },
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+    { message = "^refactor", group = "<!-- 2 -->Refactor" },
+    { message = "^doc", group = "<!-- 3 -->Documentation" },
+    { message = "^perf", group = "<!-- 4 -->Performance" },
+    { message = "^style", group = "<!-- 5 -->Styling" },
+    { message = "^chore", group = "<!-- 6 -->Miscellaneous Tasks" },
+    { message = ".*", group = "<!-- 8 -->Other" },
+]
