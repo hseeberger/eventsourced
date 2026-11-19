@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.27.1...eventsourced-v0.27.2) - 2026-11-19
+
+### Documentation
+
+- Regenerate changelogs with the unified config ([#517](https://github.com/hseeberger/eventsourced/pull/517))
+
+
 ## [0.27.1](https://github.com/hseeberger/eventsourced/compare/eventsourced-v0.27.0...eventsourced-v0.27.1) - 2026-08-13
 
 ### Bug Fixes

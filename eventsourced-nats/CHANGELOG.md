@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.18.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.17.0...eventsourced-nats-v0.18.0) - 2026-11-19
+
+### Documentation
+
+- Regenerate changelogs with the unified config ([#517](https://github.com/hseeberger/eventsourced/pull/517))
+
+### Dependencies
+
+- [**breaking**] Bump async-nats ([#512](https://github.com/hseeberger/eventsourced/pull/512))
+
+
 ## [0.17.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.16.0...eventsourced-nats-v0.17.0) - 2026-11-14
 
 ### Changed

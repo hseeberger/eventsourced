@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.14.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.14.2...eventsourced-postgres-v0.14.3) - 2026-11-19
+
+### Documentation
+
+- Regenerate changelogs with the unified config ([#517](https://github.com/hseeberger/eventsourced/pull/517))
+
+### Miscellaneous Tasks
+
+- Rename docker-compose.yaml to compose.yaml ([#488](https://github.com/hseeberger/eventsourced/pull/488))
+- Unify docker-compose and read its facts via composed ([#426](https://github.com/hseeberger/eventsourced/pull/426))
+
+
 ## [0.14.2](https://github.com/hseeberger/eventsourced/compare/eventsourced-postgres-v0.14.1...eventsourced-postgres-v0.14.2) - 2026-08-13
 
 ### Documentation
