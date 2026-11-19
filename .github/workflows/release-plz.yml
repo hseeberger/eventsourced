@@ -8,6 +8,12 @@ on:
     branches:
       - main
 
+# No run may be dropped, since one can be the release, and the latest must run last!
+concurrency:
+  group: release-plz
+  cancel-in-progress: false
+  queue: max
+
 jobs:
   toolchain:
     name: Setup Rust toolchain
