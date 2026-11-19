@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.3](https://github.com/hseeberger/eventsourced/compare/eventsourced-projection-v0.6.2...eventsourced-projection-v0.6.3) - 2026-11-19
+
+### Documentation
+
+- Regenerate changelogs with the unified config ([#517](https://github.com/hseeberger/eventsourced/pull/517))
+
+### Miscellaneous Tasks
+
+- Rename docker-compose.yaml to compose.yaml ([#488](https://github.com/hseeberger/eventsourced/pull/488))
+- Unify docker-compose and read its facts via composed ([#426](https://github.com/hseeberger/eventsourced/pull/426))
+
+
 ## [0.10.0](https://github.com/hseeberger/eventsourced/compare/eventsourced-nats-v0.9.0...eventsourced-nats-v0.10.0) - 2023-12-20
 
 ### Added
